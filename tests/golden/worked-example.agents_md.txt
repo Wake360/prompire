@@ -1,0 +1,18 @@
+# AGENTS.md — durable rules for this repo
+
+## Never touch
+- tests/**
+- golden/**
+
+## Keep true
+- the report output stays byte-identical
+- no new third-party packages
+
+## Tests
+Do not create, edit, rename or delete any test file.
+
+## Verify
+- `python3 -m src.report` → exit 0, output identical to the baseline digest
+- `python3 -m unittest -q tests.test_cart` → exit 0
+
+<!-- The task-specific half of the brief is deliberately absent here: it expires, and a stale task in a durable file is worse than no file. -->

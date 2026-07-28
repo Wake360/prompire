@@ -1,0 +1,28 @@
+Extract report rendering from src/report.py into src/render/text.py.
+
+Files you may edit:
+- src/report.py
+- src/render/
+
+Never touch:
+- tests/**
+- golden/**
+
+Keep true:
+- the report output stays byte-identical
+- no new third-party packages
+
+Done when all of these hold:
+1. `python3 -m src.report` → exit 0, output identical to the baseline digest (green today; keep it green)
+2. `python3 -m unittest -q tests.test_cart` → exit 0 (green today; keep it green)
+3. `python3 -m unittest -q tests.test_legacy` → exit 1 — the one known failure, unchanged (must stay exactly as measured — do not 'fix' it)
+
+Do not create, edit, rename or delete any test file.
+
+Write the plan first and get it approved before editing anything.
+
+Ask before any step that is risky or hard to undo. The listed paths are the whole boundary: widening it needs a revised brief, not a yes in chat.
+
+After you stop, the diff is checked from outside with <SKILL>/check_scope.py examples/worked-example.yaml`. A file changed outside the list above fails it.
+
+golden/report.txt holds the current output of `python3 -m src.report`.

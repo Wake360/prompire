@@ -1,0 +1,14 @@
+# Checklist — 04-not-yet-runnable
+
+Run from the repo root. Every box is something you can see for yourself.
+
+- [ ] `python3 <SKILL>/check_scope.py examples/04-not-yet-runnable.yaml`
+      → `0 violation(s)`. Checks the scope, the forbidden paths and the tests policy
+        against the real diff. Independent of anything the agent reported.
+
+- [ ] `python3 -m unittest -q tests.test_cart` → exit 0
+      → was green; must still be green
+- [ ] `python3 -c "import text; print(text.render([]))"` (in src/render/) → exit 0
+      → could not run on HEAD (cwd `src/render` does not exist) — this is the one that must end green
+
+If any box is unchecked, the task is not done regardless of what the agent reported.

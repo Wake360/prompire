@@ -1,0 +1,211 @@
+# Changelog
+
+Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
+lints clean today can fail on the next minor, and this file is where that is recorded.
+
+## 0.4.0 — 2026-07-28
+
+**The project is renamed: `agent-brief` is now Prompire.** The state directory this tool
+writes to and reads its own record from moved with it, `.agent-brief/` →
+`.prompire/`. This is a breaking change, and the break is not cosmetic: it is a
+security hole, closed in this same release.
+
+### Breaking
+
+- **The state directory renamed, and an upgrade that skips the migration below silently
+  degrades a real disarm history into an invisible one.** `any_disarm(root)` — the
+  function that decides whether a guard was ever disarmed anywhere in a repo — now reads
+  `.agent-brief/ACTIVE.tombstones` (the old address) in addition to
+  `.prompire/ACTIVE.tombstones` (the new one). **What a user sees if they upgrade an
+  existing repo and do nothing:** the first `check_scope.py --activate` after the
+  upgrade reports `repin`, not `pin`, if that repo's old `.agent-brief/
+  ACTIVE.tombstones` is non-empty — because the tool now reads it, not because anything
+  broke. **That is the safe direction, and it is deliberate**: the alternative — a repo
+  with a real past disarm quietly reporting a clean `pin` the moment its state directory
+  changed name — is the exact class of bug this project has spent seven review rounds
+  closing, a favourable verdict obtained without anyone deciding to grant it, with `git
+  pull` standing in for an attacker this time. Nothing on the machine was armed at
+  rename time, so this degraded no currently-active guard; it would have degraded the
+  *next* arm in every repo carrying pre-rename disarm history, silently, the first time
+  each one upgraded.
+
+  **The migration, one command's worth:** append the legacy log's contents to the new
+  one, then delete the old file —
+  ```
+  cat .agent-brief/ACTIVE.tombstones >> .prompire/ACTIVE.tombstones
+  rm .agent-brief/ACTIVE.tombstones
+  ```
+  (create `.prompire/ACTIVE.tombstones` first, empty, if it does not exist yet). After
+  that, `any_disarm()` reads one combined log again and `check_scope.py --ack-disarms`
+  works exactly as before. **Until it is done, `--ack-disarms` refuses to bind at all**
+  — exit 2, on any digest, printing this same two-step fix — because a disarm history
+  split across two files is not a set one digest can speak for, and the old behaviour
+  (matching the current log alone) would let an acknowledgement quietly not cover the
+  legacy half.
+- **The PreToolUse hook protects the legacy state-directory pair too.** As soon as
+  `.agent-brief/ACTIVE.tombstones` is load-bearing for `any_disarm()`, it inherits the
+  `0.3.1` C2 hole — one `Write` empties it — unless the hook refuses that write exactly
+  as it refuses one to `.prompire/ACTIVE`/`.prompire/ACTIVE.tombstones`. It now does, at
+  any depth, under the same case-folded/NFD/lexical-`..` spellings the current pair
+  already withstood; `.agent-brief/active-notes.md` and ordinary files stay writable,
+  same narrowness as before.
+
+## 0.3.1 — 2026-07-28
+
+Security fix, no schema change. Both defects were pre-existing and both were found by
+the same review that shipped `0.3.0`'s `--ack-disarms` flag; they live in
+`hook_scope_guard.py`'s unarmed fail-open, not in that flag.
+
+### Fixed
+
+- **The PreToolUse hook's unarmed fail-open let a bare `Write` forge or erase the
+  guard's own state (2 Critical).** `.agent-brief/ACTIVE` and `.agent-brief/
+  ACTIVE.tombstones` are the two files that record whether a guard is armed and
+  whether it was ever disarmed, and their protection used to be conditional on a brief
+  already governing the write — backwards, since "nothing governs here" is exactly the
+  state each of them exists to describe. In a repo where no guard had ever been armed,
+  one allowed `Write` created a three-line `.agent-brief/ACTIVE` — a brief path, a
+  `base_rev` already naming a commit that contained the agent's own work, and a
+  matching `sha256` — and `check_scope.py` read it back as a clean `pin`, zero
+  findings, `--strict` exit 0, for work nothing had ever governed. The same hole, in
+  the unarmed window between two tasks (after an honest `--deactivate`, before the
+  next `--activate`), let one `Write` truncate `.agent-brief/ACTIVE.tombstones` to
+  empty — erasing the record that a disarm had ever happened and letting the next arm
+  read back as a full `pin` instead of a `repin`. Both are now refused unconditionally,
+  before any governing brief is even looked for — at any depth, under the same
+  case-folding, Unicode-normalisation and lexical `..`-traversal spellings the
+  armed-state check already withstood, and whether the write names the pointer/log
+  file itself or a path beneath it.
+- **`corroborate()` trusted the pointer's own `repin` marker over the tombstone log
+  sitting beside it.** A forged `.agent-brief/ACTIVE` naming this brief and its
+  current base, with a matching digest but no `repin` line, used to read as a clean
+  `pin` even in a repo whose tombstone log recorded a real disarm — the marker lives
+  in a file the same kind of `Write` can recreate from scratch. `corroborate()` now
+  reads a pin as a `repin` whenever `any_disarm(root)` says a disarm happened anywhere
+  in the repo, independent of what the pointer claims about itself.
+
+**Blast radius for a repo that has never armed a guard:** unchanged, with one narrow
+exception. A `Write`/`Edit`/`MultiEdit`/`NotebookEdit` targeting a path shaped like
+`.agent-brief/ACTIVE` or `.agent-brief/ACTIVE.tombstones` — at any depth, in any
+case-folded or Unicode-normalised spelling — is now refused even where no brief has
+ever been armed there. Every other write, in every repo the hook has never heard of,
+is judged exactly as before: the new check is a string match against the path alone,
+no filesystem access, that returns immediately for anything not shaped like the
+pointer or its log — no new probing, no new REVIEW, no added cost to the overwhelming
+majority of writes on the machine.
+
+## 0.3.0 — 2026-07-28
+
+Additive, no breaking change. `0.2.0` made one legitimate `--deactivate` turn `--strict`
+red forever — every later arm reports `repin`, by design, and nothing reversed that. The
+cost was that `--strict` stopped being believed on a repo with one honest disarm in its
+past, which is the same as it not being run.
+
+### Added
+
+- **`check_scope.py --ack-disarms DIGEST`.** A reviewer's way of saying "I have read
+  `.agent-brief/ACTIVE.tombstones` and accept the disarms recorded there" — for the log
+  exactly as it reads right now. `DIGEST` is a 12–64 hex-character prefix of the log's
+  sha256; the `repin` REVIEW note and the `--deactivate` output both print a ready-made
+  one to copy. A matching digest stops the `repin` finding alone from failing `--strict`
+  — the finding is still produced, still printed, and its text gains a clause saying it
+  was acknowledged; any other REVIEW and any VIOLATION still exit 1 exactly as before.
+  The base-source label is still `repin`, never promoted to `pin` — the base is exactly
+  as corroborated as it was; only what the tool exits with changes, never what it
+  claims. A digest that does not match refuses a verdict outright (exit 2) and prints
+  the current one to re-run with. **The one property that makes the flag worth having:**
+  one more `--deactivate` changes the log's bytes and therefore the digest, so an old
+  acknowledgement stops matching and `--strict` goes red again until a fresh one is
+  given for the new log.
+- `--json` gains one key, `ack_disarms_bound` (bool) — whether the given digest matched
+  the tombstone log on this run. `base`, `base_source`, `violations`, `reviews` and
+  `findings` are unchanged in shape and meaning.
+
+## 0.2.0 — 2026-07-28
+
+The release that makes the guard's verdict hard to buy. Before this, `base_rev` was a
+field in a file the agent could edit, so an agent that committed its own work and
+re-stamped the base handed the checker an empty diff and got a clean verdict for it.
+
+### Breaking
+
+- **`tests_policy` values `additive` and `external` are removed.** The accepted values
+  are now `immutable`, `named` and `authoring`. **A brief using either deleted value now
+  fails `lint_brief.py` with an unknown-value error.** They were dropped under a
+  pre-registered prune rule after none of the three real dogfood runs chose either, and
+  after checking the harder question — whether either *could* have expressed one of those
+  three tasks — and finding it could not. To migrate: `additive` becomes `named` with the
+  test files listed in `tests_editable`, or `authoring` if the task rewrites existing test
+  content; `external` becomes `immutable`.
+- **`base_rev` is mandatory and must name a fixed commit SHA** (lint rule `B16`, error).
+  A brief without one, or naming `HEAD` or a branch, no longer lints. **This bites real
+  briefs, not hypothetical ones**: both of the pre-existing briefs on the author's machine
+  at release time — written before the rule existed, neither of them a test fixture — now
+  fail with `1 error(s) — B16 missing-base-rev`. They are local files and are not in this
+  repository, so you cannot inspect them; the point is only that the two briefs that
+  existed before this rule both failed it, which is what a real breaking change looks
+  like. Expect any brief you wrote against 0.1.0 to need the same one-command fix.
+
+  The rule is right and is not being softened to accommodate them. A brief with no
+  `base_rev` names no starting point, so there is nothing to diff against that an agent's
+  own commits cannot move: the base would have to be `HEAD`, and an agent that commits its
+  work then hands the checker an empty diff, which reads as total compliance without the
+  boundary ever having been looked at. Both halves of that hole close in this release —
+  `check_scope.py` refuses to produce a verdict at all when there is no usable base (exit
+  2, it never falls back to `HEAD`), and `B16` moves the failure to lint time, where it
+  costs one command to fix. **The fix is `python3 baseline.py <brief> --write`**, which
+  measures the criteria and stamps the real SHA.
+
+  Neither of those two briefs was broken by the `tests_policy` removal above — checked,
+  and neither declares a `tests_policy` at all.
+
+### Added
+
+- **`--activate` / `--deactivate`.** `--activate` records the brief path, its declared
+  `base_rev` and a sha256 of the whole brief file in `.agent-brief/ACTIVE`, outside the
+  brief. While the pointer stands, editing any byte of the brief, or checking a different
+  brief, produces no verdict at all (exit 2) instead of a favourable one. An explicit
+  `--base` is the deliberate exception: a human choosing the comparison range still gets a
+  verdict, labelled `base given on the command line`, with a REVIEW naming both revisions.
+  `--deactivate` is the only way out and appends to `.agent-brief/ACTIVE.tombstones`, so a
+  pointer written over a disarm reports as `repin` rather than `pin`.
+- **A base-source label on every summary line** — `pin`, `repin`, `--base`, or
+  `base uncorroborated` — because a verdict is worth what its base is worth.
+- **`hook_scope_guard.py`**, a PreToolUse hook that refuses an out-of-scope write before
+  it lands. Watches `Write`, `Edit`, `MultiEdit`, `NotebookEdit`; deliberately does not
+  watch `Bash`. Fails open on its own trouble. ~75 ms per watched write. Install
+  instructions and the full limitation list are in `README.md`.
+- **`README.md`, `CHANGELOG.md`, `VERSION`** — first release documentation, including the
+  central guarantee and six reproduced limitations.
+- `tests/hook.py`, a sixth suite; the six now run from `tests/run_all.py`.
+
+### Fixed
+
+- `scope` and `forbidden` are matched fold-aware, so on a case-folding volume
+  `forbidden: [src/golden/**]` is no longer defeated by a diff entry spelled
+  `src/GOLDEN/x.txt`.
+- A rename out of the test tree is judged as a test-file change instead of escaping the
+  policy, under `immutable` and `named` alike.
+- The tombstone log is keyed on a disarm having happened rather than on which brief was
+  disarmed, so copying a brief to a new name and arming that no longer launders a
+  re-stamped base into a full `pin`.
+- An unreadable disarm log — a directory planted at its path, a symlink loop — now reads
+  as `unreadable` rather than as a clean slate. `Path.exists()` swallows the underlying
+  OSError and answers False, which used to hand out the strongest label precisely because
+  the record could not be read.
+- `baseline.py` writes a `baseline:` block that reads back as what it measured: a `cmd`
+  spelling a YAML keyword (`no`, `off`, `null`, `007`) is now quoted instead of re-reading
+  as a boolean, None or a number.
+- `baseline.py` skips the brief's own directory at any depth, not just at the git root.
+  Vendored one directory down, writing a brief used to make its own baseline refuse to
+  run as an unclean tree.
+- `--deactivate` no longer dies with a traceback when the pointer cannot be removed; it
+  reports that the guard is still armed and exits 2.
+- The `SKILL.md` workflow now includes `--activate`. Without it the documented path
+  produced the weakest state the tool has, and the strongest one was undiscoverable.
+
+## 0.1.0 — 2026-07-26
+
+First working version: the brief schema, `lint_brief.py` with rules `B1`–`B15`,
+`baseline.py`, `render_brief.py`, `check_scope.py`, five worked examples, and five test
+suites.
