@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Acceptance verifier integration tests. Run: python3 tests/verify.py."""
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import fixtures  # noqa: E402
 from verify_acceptance import main, verify  # noqa: E402
 
 
+ENV = os.environ.copy()
 CASES = (
     "green criterion remains green",
     "flip criterion passes after the fix",
@@ -31,7 +33,7 @@ def brief(repo, name, body):
 
 def run_cli(path, *args):
     return subprocess.run([sys.executable, str(SKILL / "verify_acceptance.py"),
-                           str(path), *args], capture_output=True, text=True)
+                           str(path), *args], capture_output=True, text=True, env=ENV)
 
 
 def green_brief():
@@ -39,10 +41,10 @@ def green_brief():
 goal: Keep the cart add behavior unchanged.
 scope: [src/cart.py]
 acceptance:
-  - cmd: python3 -m unittest -q tests.test_cart
+  - cmd: python -m unittest -q tests.test_cart
     expect: exit 0
 baseline:
-  - cmd: python3 -m unittest -q tests.test_cart
+  - cmd: python -m unittest -q tests.test_cart
     status: pass
     evidence: exit 0, 0 line(s) stdout, 0.0s
 """
@@ -72,11 +74,11 @@ def test_flip_criterion_passes_after_the_fix():
 goal: Fix the cart total arithmetic.
 scope: [src/cart.py]
 acceptance:
-  - cmd: python3 -m unittest -q tests.test_total
+  - cmd: python -m unittest -q tests.test_total
     expect: exit 0
     transition: flip
 baseline:
-  - cmd: python3 -m unittest -q tests.test_total
+  - cmd: python -m unittest -q tests.test_total
     status: fail
     evidence: exit 1, 0 line(s) stdout, 0.0s
 """)
@@ -99,11 +101,11 @@ def test_failed_criterion_returns_exit_1():
 goal: Fix the cart total arithmetic.
 scope: [src/cart.py]
 acceptance:
-  - cmd: python3 -m unittest -q tests.test_total
+  - cmd: python -m unittest -q tests.test_total
     expect: exit 0
     transition: flip
 baseline:
-  - cmd: python3 -m unittest -q tests.test_total
+  - cmd: python -m unittest -q tests.test_total
     status: fail
     evidence: exit 1, 0 line(s) stdout, 0.0s
 """)
@@ -164,11 +166,11 @@ def test_before_after_digest_mismatch_returns_exit_1():
 goal: Preserve the generated output.
 scope: [src/report.py]
 acceptance:
-  - cmd: python3 -c "print('changed')"
+  - cmd: python -c "print('changed')"
     expect: exit 0
     before_after: true
 baseline:
-  - cmd: python3 -c "print('changed')"
+  - cmd: python -c "print('changed')"
     status: pass
     evidence: exit 0, 1 line(s) stdout, 0.0s, sha256:2cf24dba5fb0
 """)
@@ -196,13 +198,25 @@ def main_test():
         test_before_after_digest_mismatch_returns_exit_1,
     )
     failures = []
-    for name, test in zip(CASES, tests):
+    with tempfile.TemporaryDirectory(prefix="prompire-verify-tools-") as directory:
+        tool_dir = pathlib.Path(directory)
+        if os.name == "nt":
+            (tool_dir / "python.cmd").write_text(f'"{sys.executable}" %*\n', encoding="utf-8")
+        else:
+            (tool_dir / "python").symlink_to(sys.executable)
+        ENV["PATH"] = str(tool_dir) + os.pathsep + ENV["PATH"]
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = ENV["PATH"]
         try:
-            test()
-            print(f"PASS  {name}")
-        except AssertionError as error:
-            failures.append((name, str(error)))
-            print(f"FAIL  {name}: {error}")
+            for name, test in zip(CASES, tests):
+                try:
+                    test()
+                    print(f"PASS  {name}")
+                except AssertionError as error:
+                    failures.append((name, str(error)))
+                    print(f"FAIL  {name}: {error}")
+        finally:
+            os.environ["PATH"] = old_path
     print(f"{len(tests) - len(failures)}/{len(tests)} verifier cases pass")
     return 1 if failures else 0
 
