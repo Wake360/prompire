@@ -7,9 +7,11 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -45,6 +47,19 @@ class Checks:
 def run(*args):
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
                           capture_output=True, text=True, env=ENV)
+
+
+def run_with_replaced_tools(args, replacements):
+    with tempfile.TemporaryDirectory(prefix="prompire-cli-tools-") as tmp:
+        tool_root = pathlib.Path(tmp)
+        for name in ("prompire.py", "check_scope.py", "brief_common.py"):
+            shutil.copy2(ROOT / name, tool_root / name)
+        for name, body in replacements.items():
+            (tool_root / name).write_text(body, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(tool_root / "prompire.py"), *map(str, args)],
+            capture_output=True, text=True, env=ENV,
+        )
 
 
 def brief(repo, name="task", extra=""):
@@ -176,6 +191,41 @@ def _(repo, checks):
               "artifact write failure must happen before activation")
 
 
+@case("prepare replaces a prompt symlink without writing its target")
+def _(repo, checks):
+    path = brief(repo)
+    target = fixtures.write(repo, ".prompire/symlink-target", "keep me\n")
+    prompt = path.with_name("task.generic.md")
+    try:
+        prompt.symlink_to(target)
+    except (NotImplementedError, OSError):
+        return
+
+    result = run("prepare", path)
+
+    checks.equal(result.returncode, 0, "prepare exit")
+    checks.equal(target.read_text(encoding="utf-8"), "keep me\n",
+                 "prompt generation must not follow a planted symlink")
+    checks.ok(prompt.is_file() and not prompt.is_symlink(),
+              "the artifact entry must replace the symlink")
+
+
+@case("prepare replaces a checklist hardlink without writing its target")
+def _(repo, checks):
+    path = brief(repo)
+    target = fixtures.write(repo, ".prompire/hardlink-target", "keep me\n")
+    checklist = path.with_name("task.checklist.md")
+    os.link(target, checklist)
+
+    result = run("prepare", path)
+
+    checks.equal(result.returncode, 0, "prepare exit")
+    checks.equal(target.read_text(encoding="utf-8"), "keep me\n",
+                 "checklist generation must not write through a planted hardlink")
+    checks.ok(checklist.is_file() and not os.path.samefile(target, checklist),
+              "the artifact entry must replace the hardlink")
+
+
 @case("prepare defaults to generic")
 def _(repo, checks):
     path = prepared(repo)
@@ -183,7 +233,23 @@ def _(repo, checks):
     checks.ok(not path.with_name("task.claude.md").exists(), "default must not select claude")
 
 
-@case("verify aggregates strict scope and acceptance findings")
+@case("prepare writes a host-portable scope command for paths with spaces")
+def _(repo, checks):
+    path = prepared(repo, "task with spaces")
+    checklist = path.with_name("task with spaces.checklist.md")
+    first_box = next(
+        line for line in checklist.read_text(encoding="utf-8").splitlines()
+        if line.startswith("- [ ] `")
+    )
+    if os.name == "nt":
+        command = f'prompire scope "{path}" --strict'
+    else:
+        command = f"prompire scope '{path}' --strict"
+    checks.equal(first_box, f"- [ ] `{command}`",
+                 "CLI checklist must use the installed command and quote the brief")
+
+
+@case("verify stops before acceptance on a strict scope finding")
 def _(repo, checks):
     path = prepared(repo)
     fixtures.write(repo, "src/outside.py", "value = 1\n")
@@ -193,7 +259,65 @@ def _(repo, checks):
     checks.ok("scope" in data and "acceptance" in data,
               "verification JSON must include both child verdicts")
     checks.equal(data["scope"]["violations"], 1, "scope violation count")
-    checks.equal(data["acceptance"]["failed"], 0, "acceptance still passes")
+    checks.equal(data["acceptance"]["status"], "not_run",
+                 "acceptance must not run after a strict scope finding")
+
+
+@case("verify includes acceptance-side writes in the final scope verdict")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/acceptance-write.yaml", """\
+goal: Keep generated files inside the declared boundary.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "import pathlib; flag=pathlib.Path('.prompire/run-acceptance'); flag.exists() and pathlib.Path('outside.py').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    prepared_result = run("prepare", path)
+    checks.equal(prepared_result.returncode, 0, "prepare exit")
+    fixtures.write(repo, ".prompire/run-acceptance", "run\n")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(result.returncode, 1, "acceptance-side scope violation exit")
+    checks.ok((pathlib.Path(repo) / "outside.py").is_file(),
+              "the fixture acceptance command must make the post-check observable")
+    checks.equal(data["acceptance"]["passed"], 1, "acceptance command result")
+    checks.equal(data["scope"]["violations"], 1,
+                 "final scope verdict must include the acceptance-side write")
+
+
+@case("verify does not run acceptance for an uncorroborated brief")
+def _(repo, checks):
+    head = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    path = fixtures.write(repo, ".prompire/uncorroborated.yaml", f"""\
+goal: Keep an uncorroborated brief from authorizing commands.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('acceptance-ran').write_text('x')"
+    expect: exit 0
+base_rev: {head}
+baseline:
+  - cmd: python -c "import pathlib; pathlib.Path('acceptance-ran').write_text('x')"
+    status: pass
+    evidence: exit 0, 0 line(s) stdout, 0.0s
+autonomy: ask
+""")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(result.returncode, 1, "uncorroborated strict-scope exit")
+    checks.ok(not (pathlib.Path(repo) / "acceptance-ran").exists(),
+              "acceptance must not run before the current brief is corroborated")
+    checks.equal(data["scope"]["reviews"], 1, "uncorroborated review count")
+    checks.equal(data["acceptance"]["status"], "not_run",
+                 "JSON must explain that acceptance did not run")
 
 
 @case("verify returns 2 when scope cannot decide")
@@ -203,6 +327,50 @@ def _(repo, checks):
     checks.equal(result.returncode, 2, "indeterminate scope exit")
     checks.ok("no base to check against" in result.stdout,
               "scope must explain why no verdict was produced")
+
+
+@case("verify maps invalid acceptance child results to structured exit 2")
+def _(repo, checks):
+    path = prepared(repo)
+    replacements = (
+        ("unexpected exit", "print('{}')\nraise SystemExit(7)\n"),
+        ("malformed JSON", "print('not-json')\n"),
+        ("non-object JSON", "print('[]')\n"),
+    )
+    if os.name != "nt":
+        replacements += (
+            ("signal", "import os\nimport signal\nos.kill(os.getpid(), signal.SIGTERM)\n"),
+        )
+
+    for label, child in replacements:
+        result = run_with_replaced_tools(
+            ("verify", path, "--json"),
+            {"verify_acceptance.py": child},
+        )
+        checks.equal(result.returncode, 2, f"{label} exit")
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            data = {}
+            checks.ok(False, f"{label} stdout must be one JSON object: {result.stdout!r}")
+        checks.equal(data.get("status"), "indeterminate", f"{label} JSON status")
+        checks.equal(data.get("stage"), "acceptance", f"{label} JSON stage")
+        checks.ok("Traceback" not in result.stderr, f"{label} must not traceback")
+
+
+@case("prepare maps an unexpected child exit to structured exit 2")
+def _(repo, checks):
+    path = brief(repo)
+    result = run_with_replaced_tools(
+        ("prepare", path, "--json"),
+        {"baseline.py": "raise SystemExit(7)\n"},
+    )
+
+    checks.equal(result.returncode, 2, "prepare unexpected-child exit")
+    data = json_out(result)
+    checks.equal(data.get("status"), "indeterminate", "prepare JSON status")
+    checks.equal(data.get("stage"), "baseline", "prepare JSON stage")
+    checks.equal(data.get("exit_code"), 7, "prepare must retain the child exit")
 
 
 @case("close deactivates and leaves a tombstone")
@@ -238,6 +406,60 @@ def _(repo, checks):
               "mismatched close must identify the active brief")
 
 
+@case("close checks identity inside the guarded deactivation")
+def _(repo, checks):
+    requested = prepared(repo, "requested")
+    replacement = brief(repo, "replacement")
+    state = pathlib.Path(repo) / ".prompire"
+    active = state / "ACTIVE"
+    lock = state / "ACTIVE.lock"
+    lock.mkdir()
+    process = subprocess.Popen(
+        [sys.executable, str(CLI), "close", str(requested)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=ENV,
+    )
+    time.sleep(1)
+    waiting = process.poll() is None
+    active.write_text(".prompire/replacement.yaml\n", encoding="utf-8")
+    lock.rmdir()
+    stdout, stderr = process.communicate(timeout=15)
+
+    checks.ok(waiting, "close must wait for the guard-state lock")
+    checks.equal(process.returncode, 2, "replaced-pointer close exit")
+    checks.ok(active.is_file(), "close must preserve the replacement pointer")
+    checks.ok(active.read_text(encoding="utf-8").startswith(
+        ".prompire/replacement.yaml\n"),
+        "close must not remove a brief that replaced the requested one")
+    checks.ok(not (state / "ACTIVE.tombstones").exists(),
+              "a refused close must not record a deactivation")
+    checks.ok(replacement.relative_to(repo).as_posix() in (stdout + stderr).replace("\\", "/"),
+              "the refusal must identify the replacement brief")
+
+
+@case("activation honors the guard-state lock")
+def _(repo, checks):
+    path = brief(repo)
+    state = pathlib.Path(repo) / ".prompire"
+    active = state / "ACTIVE"
+    lock = state / "ACTIVE.lock"
+    lock.mkdir()
+    process = subprocess.Popen(
+        [sys.executable, str(CLI), "scope", str(path), "--activate"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=ENV,
+    )
+    time.sleep(1)
+    waiting = process.poll() is None
+    armed_while_locked = active.exists()
+    lock.rmdir()
+    stdout, stderr = process.communicate(timeout=15)
+
+    checks.ok(waiting, "activation must wait for the guard-state lock")
+    checks.ok(not armed_while_locked, "activation must not write ACTIVE while locked")
+    checks.equal(process.returncode, 0, "activation exit")
+    checks.ok(active.read_text(encoding="utf-8").startswith(".prompire/task.yaml\n"),
+              f"activation must arm after release: {stdout}{stderr}")
+
+
 @case("status reports active, repin, and inactive states")
 def _(repo, checks):
     path = prepared(repo)
@@ -259,6 +481,43 @@ def _(repo, checks):
     checks.equal(repin["status"], "repin", "rearmed status")
 
 
+@case("invalid UTF-8 active briefs follow the unreadable-guard policy")
+def _(repo, checks):
+    invalid = pathlib.Path(repo) / ".prompire" / "invalid.yaml"
+    invalid.write_bytes(b"\xff")
+    active = pathlib.Path(repo) / ".prompire" / "ACTIVE"
+    active.write_text(".prompire/invalid.yaml\n", encoding="utf-8")
+
+    status_result = run("status", invalid, "--json")
+    close_result = run("close", invalid)
+    activation_result = run("scope", invalid, "--activate")
+    candidate = brief(repo, "candidate")
+    prepare_result = run("prepare", candidate)
+
+    checks.equal(status_result.returncode, 0, "status exit")
+    try:
+        status_data = json.loads(status_result.stdout)
+    except json.JSONDecodeError:
+        status_data = {}
+        checks.ok(False, f"status stdout must be JSON: {status_result.stdout!r}")
+    checks.equal(status_data.get("status"), "inactive",
+                 "an undecodable brief is not a live guard")
+    checks.equal(close_result.returncode, 2, "close refusal exit")
+    checks.equal(activation_result.returncode, 2, "invalid activation exit")
+    checks.equal(prepare_result.returncode, 0,
+                 "prepare may replace a pointer the hook cannot enforce")
+    for name, result in (
+            ("status", status_result),
+            ("close", close_result),
+            ("activation", activation_result),
+            ("prepare", prepare_result)):
+        checks.ok("Traceback" not in result.stderr,
+                  f"{name} must not leak a decode traceback")
+    checks.ok(active.read_text(encoding="utf-8").startswith(
+        ".prompire/candidate.yaml\n"),
+        "prepare must replace the dead pointer with the prepared brief")
+
+
 @case("low-level subcommands preserve their underlying exit codes")
 def _(repo, checks):
     for command, script in (("baseline", "baseline.py"), ("lint", "lint_brief.py"),
@@ -267,6 +526,17 @@ def _(repo, checks):
         forwarded = run(command)
         checks.equal(forwarded.returncode, direct.returncode,
                      f"{command} must preserve its underlying exit code")
+
+
+@case("Windows Python shim does not echo acceptance commands")
+def _(repo, checks):
+    if os.name != "nt":
+        return
+    result = subprocess.run(
+        ["python", "-c", "print('ok')"], capture_output=True, text=True, env=ENV)
+    checks.equal(result.returncode, 0, "Windows Python shim exit")
+    checks.equal(result.stdout, "ok\n",
+                 "Windows command echo must not alter acceptance stdout")
 
 
 @case("low-level subcommands forward help verbatim")
@@ -325,7 +595,8 @@ def main():
         tool_dir = root / "bin"
         tool_dir.mkdir()
         if os.name == "nt":
-            (tool_dir / "python.cmd").write_text(f'"{sys.executable}" %*\n', encoding="utf-8")
+            (tool_dir / "python.cmd").write_text(
+                f'@"{sys.executable}" %*\n', encoding="utf-8")
         else:
             (tool_dir / "python").symlink_to(sys.executable)
         ENV["PATH"] = str(tool_dir) + os.pathsep + ENV["PATH"]

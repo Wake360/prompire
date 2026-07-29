@@ -12,6 +12,7 @@ import json
 import pathlib
 import re
 import sys
+import tempfile
 import tomllib
 
 import yaml
@@ -181,6 +182,11 @@ def cli_problems():
         individual = markdown_section(diagnostic, DIAGNOSTIC_PHASES[1], level=3)
         if "prompire verify" not in combined:
             out.append(f"{rel}'s combined verdict phase does not name `prompire verify`")
+        if rel == "SKILL.md" and re.search(r"\bdeactivation\b", combined, re.I):
+            out.append(
+                "SKILL.md's combined verdict implies deactivation; only explicit "
+                "`prompire close` may deactivate"
+            )
         for tool in DIAGNOSTIC_TOOLS:
             if tool not in individual:
                 out.append(f"{rel}'s individual tools phase never names `{tool}`")
@@ -259,7 +265,7 @@ def release_problems():
     can be bumped in one file and left in the other indefinitely.
     """
     out = []
-    for f in ("README.md", "CHANGELOG.md", "VERSION"):
+    for f in ("README.md", "CHANGELOG.md", "VERSION", "pyproject.toml"):
         if not (SKILL / f).is_file():
             out.append(f"missing {f}")
     if out:
@@ -273,7 +279,38 @@ def release_problems():
     elif heads[0] != version:
         out.append(f"VERSION says {version}, but the newest CHANGELOG.md entry is "
                    f"{heads[0]} — one of them was not updated")
+    try:
+        pyproject = tomllib.loads(read("pyproject.toml"))
+    except tomllib.TOMLDecodeError as exc:
+        out.append(f"pyproject.toml is invalid TOML: {exc}")
+    else:
+        project_version = pyproject.get("project", {}).get("version")
+        if project_version != version:
+            out.append(
+                f"pyproject.toml project.version says {project_version}, but VERSION "
+                f"and the current CHANGELOG.md heading say {version}"
+            )
     return out
+
+
+def release_version_regression_problems():
+    global SKILL
+    original = SKILL
+    try:
+        with tempfile.TemporaryDirectory(prefix="prompire-release-check-") as tmp:
+            SKILL = pathlib.Path(tmp)
+            (SKILL / "README.md").write_text("fixture\n", encoding="utf-8")
+            (SKILL / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+            (SKILL / "CHANGELOG.md").write_text(
+                "## 1.2.3 — 2026-07-29\n", encoding="utf-8")
+            (SKILL / "pyproject.toml").write_text(
+                "[project]\nversion = \"9.9.9\"\n", encoding="utf-8")
+            findings = release_problems()
+    finally:
+        SKILL = original
+    if any("project.version" in finding for finding in findings):
+        return []
+    return ["release consistency does not detect a mismatched pyproject project.version"]
 
 
 def host_problems():
@@ -474,6 +511,7 @@ def main():
         problems.append("maintaining.md lost the mirror sync command")
 
     problems += release_problems()
+    problems += release_version_regression_problems()
     problems += cli_problems()
     problems += host_problems()
     problems += hook_config_problems()

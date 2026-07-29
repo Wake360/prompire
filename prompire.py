@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import argparse
-import contextlib
-import io
 import json
+import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 from check_scope import RepoError, active_brief, read_pointer, repo_root
 
@@ -19,6 +19,10 @@ TOOLS = {
 }
 PROMPT_TARGETS = ("generic", "claude", "codex", "copilot")
 LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
+CHILD_JSON_KEYS = {
+    "scope": {"violations", "reviews", "findings"},
+    "acceptance": {"passed", "failed", "not_run", "results"},
+}
 
 
 def run_tool(name, *args):
@@ -37,6 +41,21 @@ def emit_process(result):
     return result.returncode
 
 
+def replace_artifact(path, text):
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temp_path = pathlib.Path(handle.name)
+            handle.write(text)
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def report_refusal(message, json_mode=False):
     if json_mode:
         print(json.dumps({"status": "refused", "message": message}, ensure_ascii=False))
@@ -46,14 +65,17 @@ def report_refusal(message, json_mode=False):
 
 
 def report_stage(stage, result, json_mode):
+    code = result.returncode if result.returncode in (1, 2) else 2
+    status = "failed" if code == 1 else "indeterminate"
     if json_mode:
-        print(json.dumps({"status": "failed", "stage": stage,
+        print(json.dumps({"status": status, "stage": stage,
                           "exit_code": result.returncode,
                           "stdout": result.stdout, "stderr": result.stderr},
                          ensure_ascii=False))
-        return result.returncode
-    print(f"{stage} failed:", file=sys.stderr)
-    return emit_process(result)
+    else:
+        print(f"{stage} {status}:", file=sys.stderr)
+        emit_process(result)
+    return code
 
 
 def report_prepared(brief, prompt, checklist, target, json_mode):
@@ -70,13 +92,42 @@ def report_prepared(brief, prompt, checklist, target, json_mode):
     return 0
 
 
-def child_json(result):
-    return json.loads(result.stdout)
+def parse_child_json(stage, result):
+    if result.returncode not in (0, 1, 2):
+        if result.returncode < 0:
+            return None, f"child terminated by signal {-result.returncode}"
+        return None, f"unexpected child exit code {result.returncode}"
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return None, f"child did not emit valid JSON: {exc}"
+    if not isinstance(data, dict):
+        return None, "child JSON is not an object"
+    if result.returncode in (0, 1):
+        missing = CHILD_JSON_KEYS[stage] - data.keys()
+        if missing:
+            return None, "child JSON is missing: " + ", ".join(sorted(missing))
+    return data, None
 
 
-def report_verification(scope, acceptance, json_mode):
-    scope_data = child_json(scope)
-    acceptance_data = child_json(acceptance)
+def report_indeterminate(stage, result, message, json_mode):
+    data = {
+        "status": "indeterminate",
+        "stage": stage,
+        "message": message,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+    if json_mode:
+        print(json.dumps(data, ensure_ascii=False))
+    else:
+        print(f"{stage} indeterminate: {message}")
+        emit_process(result)
+    return 2
+
+
+def report_verification(scope, scope_data, acceptance, acceptance_data, json_mode):
     code = 1 if scope.returncode == 1 or acceptance.returncode == 1 else 0
     if json_mode:
         print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
@@ -91,6 +142,24 @@ def report_verification(scope, acceptance, json_mode):
         if acceptance.stderr:
             print(acceptance.stderr, end="", file=sys.stderr)
     return code
+
+
+def report_scope_preflight(scope, scope_data, json_mode):
+    acceptance_data = {
+        "status": "not_run",
+        "reason": "strict scope preflight did not pass",
+    }
+    if json_mode:
+        print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
+                         ensure_ascii=False))
+    else:
+        print("scope:")
+        print(scope.stdout, end="")
+        print("acceptance:")
+        print("NOT RUN strict scope preflight did not pass")
+        if scope.stderr:
+            print(scope.stderr, end="", file=sys.stderr)
+    return 1
 
 
 def prepare(args, extra):
@@ -120,15 +189,15 @@ def prepare(args, extra):
     if prompt.returncode:
         return report_stage("render", prompt, args.json)
 
-    checklist = run_tool("render", brief, "--target", "checklist")
+    checklist = run_tool("render", brief, "--target", "_cli-checklist")
     if checklist.returncode:
         return report_stage("render", checklist, args.json)
 
     prompt_path = brief.with_name(f"{brief.stem}.{args.target}.md")
     checklist_path = brief.with_name(f"{brief.stem}.checklist.md")
     try:
-        prompt_path.write_text(prompt.stdout, encoding="utf-8")
-        checklist_path.write_text(checklist.stdout, encoding="utf-8")
+        replace_artifact(prompt_path, prompt.stdout)
+        replace_artifact(checklist_path, checklist.stdout)
     except OSError as exc:
         return report_refusal(f"could not write artifacts: {exc}", args.json)
 
@@ -151,15 +220,34 @@ def verify(args, extra):
     scope_args = [args.brief, "--strict", "--json"]
     if args.ack_disarms:
         scope_args += ["--ack-disarms", args.ack_disarms]
-    scope = run_tool("scope", *scope_args)
-    if scope.returncode == 2:
-        return report_stage("scope", scope, args.json)
+    preflight = run_tool("scope", *scope_args)
+    preflight_data, issue = parse_child_json("scope", preflight)
+    if issue:
+        return report_indeterminate("scope", preflight, issue, args.json)
+    if preflight.returncode == 2:
+        return report_indeterminate(
+            "scope", preflight, "scope could not produce a trustworthy result", args.json)
+    if preflight.returncode == 1:
+        return report_scope_preflight(preflight, preflight_data, args.json)
 
     acceptance = run_tool("acceptance", args.brief, "--json")
+    acceptance_data, issue = parse_child_json("acceptance", acceptance)
+    if issue:
+        return report_indeterminate("acceptance", acceptance, issue, args.json)
     if acceptance.returncode == 2:
-        return report_stage("acceptance", acceptance, args.json)
+        return report_indeterminate(
+            "acceptance", acceptance,
+            "acceptance could not produce a trustworthy result", args.json)
 
-    return report_verification(scope, acceptance, args.json)
+    scope = run_tool("scope", *scope_args)
+    scope_data, issue = parse_child_json("scope", scope)
+    if issue:
+        return report_indeterminate("scope", scope, issue, args.json)
+    if scope.returncode == 2:
+        return report_indeterminate(
+            "scope", scope, "scope could not produce a trustworthy result", args.json)
+    return report_verification(
+        scope, scope_data, acceptance, acceptance_data, args.json)
 
 
 def close(args, extra):
@@ -174,11 +262,10 @@ def close(args, extra):
         requested = brief.resolve().relative_to(root).as_posix()
     except ValueError:
         return report_refusal(f"`{brief}` is outside the repository at {root}")
-    live = active_brief(root)
-    if live != requested:
-        current = f"`{live}` is active" if live else "no brief is active"
-        return report_refusal(f"`{requested}` is not active; {current}")
-    return emit_process(run_tool("scope", args.brief, "--deactivate"))
+    result = run_tool(
+        "scope", args.brief, "--deactivate", "--expect-brief", requested)
+    return emit_process(result) if result.returncode == 0 else report_stage(
+        "close", result, False)
 
 
 def status(args, extra):
@@ -202,12 +289,6 @@ def status(args, extra):
     else:
         print(f"{data['status']} {data['brief']} {data['base'] or '-'}")
     return 0
-
-
-def passthrough(name):
-    def handler(args, extra):
-        return emit_process(run_tool(name, *extra))
-    return handler
 
 
 def build_parser():
@@ -236,8 +317,7 @@ def build_parser():
     stated.set_defaults(handler=status)
 
     for name in LOW_LEVEL_COMMANDS:
-        low = commands.add_parser(name)
-        low.set_defaults(handler=passthrough(name))
+        commands.add_parser(name)
     return parser
 
 

@@ -40,8 +40,13 @@ def verify(path: str) -> dict:
 
         want_digest = expected_digest(baseline)
         got_digest = expected_digest(current)
-        if acceptance.get("before_after") and want_digest:
-            ok = ok and got_digest == want_digest
+        reason = current.get("reason")
+        if acceptance.get("before_after"):
+            if want_digest is None:
+                ok = False
+                reason = "before_after baseline is missing its expected sha256 digest"
+            else:
+                ok = ok and got_digest == want_digest
 
         results.append({
             "cmd": norm_cmd(acceptance.get("cmd")),
@@ -49,7 +54,7 @@ def verify(path: str) -> dict:
             "status": current.get("status"),
             "ok": ok,
             "evidence": current.get("evidence"),
-            "reason": current.get("reason"),
+            "reason": reason,
             "expected_digest": want_digest,
             "actual_digest": got_digest,
         })
@@ -65,18 +70,26 @@ def verify(path: str) -> dict:
     }
 
 
+def report_error(message, json_mode):
+    if json_mode:
+        print(json.dumps({"status": "indeterminate", "error": message},
+                         ensure_ascii=False))
+    else:
+        print(message)
+    return 2
+
+
 def main(argv: list[str]) -> int:
+    json_mode = "--json" in argv
     args = [arg for arg in argv[1:] if not arg.startswith("--")]
     if not args:
-        print("usage: verify_acceptance.py brief.yaml [--json]")
-        return 2
+        return report_error("usage: verify_acceptance.py brief.yaml [--json]", json_mode)
     try:
         result = verify(args[0])
     except (BriefError, RepoError, UnicodeDecodeError) as error:
-        print(str(error))
-        return 2
+        return report_error(str(error), json_mode)
 
-    if "--json" in argv:
+    if json_mode:
         print(json.dumps(result, ensure_ascii=False))
     else:
         for result_row in result["results"]:
