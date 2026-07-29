@@ -10,23 +10,31 @@ short. If it grew long, it failed.
 
 ## Primary workflow
 
-Before handoff, after writing `.prompire/<slug>.yaml`:
+### Prepare
+
+After writing `.prompire/<slug>.yaml`, prepare the handoff:
 
 ```bash
 prompire prepare .prompire/<slug>.yaml --target generic
 ```
 
-Hand the generated prompt to any coding agent.
-Prompire does not launch or control the agent.
+### Hand off — Prompire does not launch the agent
 
-After the agent stops:
+Hand the generated prompt to any coding agent.
+
+### Verify scope and acceptance
+
+After the agent stops, run the combined verdict:
 
 ```bash
 prompire verify .prompire/<slug>.yaml
 ```
 
-`prompire verify` is the combined scope and acceptance verdict. Review the generated
-checklist, then close the guard explicitly:
+Review the generated checklist.
+
+### Close explicitly
+
+Close the guard after review:
 
 ```bash
 prompire close .prompire/<slug>.yaml
@@ -34,10 +42,16 @@ prompire close .prompire/<slug>.yaml
 
 ## Diagnostic commands
 
+### Combined verdict
+
 The CLI runs the measured baseline, lint, generic rendering, guard activation, strict
 scope check, acceptance verification, and deactivation. Use `prompire verify` for the
-combined scope and acceptance verdict. The scripts below are individual diagnostic
-commands for inspecting one stage; they are not a second handoff workflow.
+combined scope and acceptance verdict.
+
+### Individual tools
+
+The scripts below are individual diagnostic commands for inspecting one stage; they
+are not a second handoff workflow.
 
 `$PROMPIRE` below is this directory — wherever this skill is installed, which differs
 per host and per personal/repository install (`references/hosts.md` lists them).

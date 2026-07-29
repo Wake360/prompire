@@ -70,8 +70,20 @@ EXPECTED_INTERFACE = {
 
 PRIMARY_WORKFLOWS = (
     ("SKILL.md", "Primary workflow"),
-    ("README.md", "Host-neutral workflow"),
+    ("README.md", "Primary workflow"),
     ("references/hosts.md", "Primary workflow"),
+)
+
+PRIMARY_PHASES = (
+    "Prepare",
+    "Hand off — Prompire does not launch the agent",
+    "Verify scope and acceptance",
+    "Close explicitly",
+)
+
+DIAGNOSTIC_PHASES = (
+    "Combined verdict",
+    "Individual tools",
 )
 
 DIAGNOSTIC_TOOLS = (
@@ -86,22 +98,24 @@ def read(rel):
     return (SKILL / rel).read_text(encoding="utf-8")
 
 
-def markdown_section(text, heading):
+def markdown_section(text, heading, level=2):
+    marks = "#" * level
     match = re.search(
-        rf"^## {re.escape(heading)}\s*\n(.*?)(?=^## |\Z)",
+        rf"^{marks} {re.escape(heading)}\s*\n"
+        rf"(.*?)(?=^#{{1,{level}}}\s|\Z)",
         text,
         re.M | re.S,
     )
     return match.group(1) if match else None
 
 
-def workflow_commands(section):
+def shell_commands(section):
     blocks = re.findall(r"```(?:bash|sh)\n(.*?)```", section, re.S)
     return [
         line.strip()
         for block in blocks
         for line in block.splitlines()
-        if line.strip().startswith("prompire ")
+        if line.strip() and not line.lstrip().startswith("#")
     ]
 
 
@@ -109,59 +123,67 @@ def cli_problems():
     out = []
     for rel, heading in PRIMARY_WORKFLOWS:
         text = read(rel)
-        if re.search(
-                r"\bprompire\s+(?:(?:can|will)\s+)?"
-                r"(?:launch|launches|start|starts|control|controls)\s+"
-                r"(?:an?|the)\s+(?:coding\s+)?agent\b",
-                text,
-                re.I):
-            out.append(f"{rel} contradicts Prompire's no-launch boundary")
         section = markdown_section(text, heading)
         if section is None:
             out.append(f"{rel} has no `## {heading}` section")
-            continue
-        commands = workflow_commands(section)
-        expected = [
-            re.compile(r"^prompire prepare (\.prompire/\S+\.yaml) --target generic$"),
-            re.compile(r"^prompire verify (\.prompire/\S+\.yaml)$"),
-            re.compile(r"^prompire close (\.prompire/\S+\.yaml)$"),
-        ]
-        matches = [
-            pattern.fullmatch(command)
-            for pattern, command in zip(expected, commands)
-        ]
-        if len(commands) != 3 or not all(matches):
-            out.append(
-                f"{rel}'s primary workflow must order exact prepare → verify → close "
-                "commands, with `--target generic` on prepare"
-            )
-        elif len({match.group(1) for match in matches}) != 1:
-            out.append(f"{rel}'s primary workflow uses different brief paths")
+            section = ""
 
-        for pattern, why in (
-                (r"\bbefore\s+handoff\b", "does not place prepare before handoff"),
-                (r"\bafter\s+the\s+agent\s+stops\b",
-                 "does not place verify after the agent"),
-                (r"\bclose\s+the\s+guard\b", "does not close the lifecycle"),
-                (r"\bprompire\s+does\s+not\s+launch(?:\s+or\s+control)?\s+the\s+agent\b",
-                 "does not state the no-launch boundary"),
-                (r"\bscope\s+and\s+acceptance\b",
-                 "does not describe verify's combined verdict")):
-            if not re.search(pattern, section, re.I):
-                out.append(f"{rel}'s primary workflow {why}")
+        headings = re.findall(r"^### (.+?)\s*$", section, re.M)
+        if headings != list(PRIMARY_PHASES):
+            out.append(
+                f"{rel}'s primary workflow phases are {headings!r}, expected "
+                f"{list(PRIMARY_PHASES)!r}"
+            )
+        else:
+            phase_bodies = [
+                markdown_section(section, phase, level=3)
+                for phase in PRIMARY_PHASES
+            ]
+            commands = [shell_commands(body) for body in phase_bodies]
+            expected = (
+                re.compile(
+                    r"^prompire prepare (\.prompire/\S+\.yaml) --target generic$"
+                ),
+                None,
+                re.compile(r"^prompire verify (\.prompire/\S+\.yaml)$"),
+                re.compile(r"^prompire close (\.prompire/\S+\.yaml)$"),
+            )
+            matches = [
+                pattern.fullmatch(phase_commands[0])
+                if pattern is not None and len(phase_commands) == 1
+                else None
+                for pattern, phase_commands in zip(expected, commands)
+            ]
+            if commands[1]:
+                out.append(f"{rel}'s handoff phase must not run Prompire")
+            if any(
+                    pattern is not None and match is None
+                    for pattern, match in zip(expected, matches)):
+                out.append(
+                    f"{rel}'s lifecycle commands are not in their exact prepare, "
+                    "verify, and close phases"
+                )
+            elif len({match.group(1) for match in matches if match}) != 1:
+                out.append(f"{rel}'s primary workflow uses different brief paths")
 
         diagnostic = markdown_section(text, "Diagnostic commands")
         if diagnostic is None:
             out.append(f"{rel} has no `## Diagnostic commands` section")
             continue
-        if "prompire verify" not in diagnostic:
+        headings = re.findall(r"^### (.+?)\s*$", diagnostic, re.M)
+        if headings != list(DIAGNOSTIC_PHASES):
             out.append(
-                f"{rel}'s diagnostic section does not direct combined verdicts to "
-                "`prompire verify`"
+                f"{rel}'s diagnostic phases are {headings!r}, expected "
+                f"{list(DIAGNOSTIC_PHASES)!r}"
             )
+            continue
+        combined = markdown_section(diagnostic, DIAGNOSTIC_PHASES[0], level=3)
+        individual = markdown_section(diagnostic, DIAGNOSTIC_PHASES[1], level=3)
+        if "prompire verify" not in combined:
+            out.append(f"{rel}'s combined verdict phase does not name `prompire verify`")
         for tool in DIAGNOSTIC_TOOLS:
-            if tool not in diagnostic:
-                out.append(f"{rel}'s diagnostic section never names `{tool}`")
+            if tool not in individual:
+                out.append(f"{rel}'s individual tools phase never names `{tool}`")
 
     try:
         pyproject = tomllib.loads(read("pyproject.toml"))

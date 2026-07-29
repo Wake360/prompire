@@ -29,17 +29,35 @@ uv tool install prompire
 
 Prompire supports Python 3.11+ on macOS, Linux, and Windows.
 
-## Host-neutral workflow
+## Primary workflow
 
-Before handoff, run `prompire prepare`. Prompire does not launch or control the agent.
-After the agent stops, `prompire verify` gives the combined scope and acceptance
-verdict. Review the generated checklist, then close the guard.
+This workflow is host-neutral and works with any coding agent.
+
+### Prepare
 
 ```bash
 prompire prepare .prompire/task.yaml --target generic
-# give .prompire/task.generic.md to any coding agent
+```
+
+### Hand off — Prompire does not launch the agent
+
+Give `.prompire/task.generic.md` to the coding agent.
+
+### Verify scope and acceptance
+
+After the agent stops:
+
+```bash
 prompire verify .prompire/task.yaml
-# review .prompire/task.checklist.md
+```
+
+Review `.prompire/task.checklist.md`.
+
+### Close explicitly
+
+After review:
+
+```bash
 prompire close .prompire/task.yaml
 ```
 
@@ -114,8 +132,12 @@ the only way to tell which state you got.
 
 ## Diagnostic commands
 
+### Combined verdict
+
 Use `prompire verify` for the combined scope and acceptance verdict. The commands below
 diagnose individual stages; they are not an alternative handoff workflow.
+
+### Individual tools
 
 ```bash
 python3 baseline.py .prompire/task.yaml --write
