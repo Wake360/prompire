@@ -1,22 +1,44 @@
 ---
 name: prompire
-description: Turn a short request into a checkable brief for a coding agent — goal, bounded scope, executable acceptance criteria, declared autonomy — then lint it and render it for Claude Code, GitHub Copilot CLI, Codex, or a human checklist. Use when handing substantial work to an agent, when a previous agent run went off the rails or gamed its own success check, or when the user asks for a spec/brief/task description for an agent.
+description: Use when delegating substantial coding work, recovering from an agent run that drifted or gamed its checks, or writing a checkable agent brief.
 ---
 
 # Prompire
 
-Compile a one-line request into the smallest brief that can be *checked*, measure what
-its criteria say before the work starts, lint it, render it for the target. The output
-is short. If it grew long, it failed.
+Compile a one-line request into the smallest brief that can be *checked*. The output is
+short. If it grew long, it failed.
 
-This skill works the same way on Claude Code and on GitHub Copilot CLI; install
-locations and hook setup for both are in `references/hosts.md`.
+## Primary workflow
 
-Four tools, all in this directory. `$PROMPIRE` below is that directory — wherever
-this skill is installed, which differs per host and per personal/repository install
-(`references/hosts.md` lists them). Substitute it; do not assume one host's path.
+After writing `.prompire/<slug>.yaml`:
 
-Four tools:
+```bash
+prompire prepare .prompire/<slug>.yaml --target generic
+```
+
+Hand the generated prompt to any coding agent. Prompire does not launch it.
+
+After the agent stops:
+
+```bash
+prompire verify .prompire/<slug>.yaml
+```
+
+Review the generated checklist, then close the guard explicitly:
+
+```bash
+prompire close .prompire/<slug>.yaml
+```
+
+## Diagnostic commands
+
+The CLI runs the measured baseline, lint, generic rendering, guard activation, strict
+scope check, acceptance verification, and deactivation. Use these scripts to diagnose
+or inspect an individual step.
+
+`$PROMPIRE` below is this directory — wherever this skill is installed, which differs
+per host and per personal/repository install (`references/hosts.md` lists them).
+Substitute it; do not assume one host's path.
 
 | | |
 |---|---|
@@ -31,7 +53,7 @@ Four tools:
 One-file edits, a bug you can describe in a sentence, anything you'd finish faster than
 the brief. This is for work you're delegating and won't watch.
 
-## Workflow
+## Detailed diagnostic workflow
 
 1. **Read the request. Do not interview.** Infer everything you can from the repo — test
    command, package manager, layout, conventions. Ask at most **two** questions, only

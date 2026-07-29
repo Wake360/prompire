@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prompire"
+  short_description: "Create checkable briefs for coding agents"
+  default_prompt: "Use $prompire to turn this coding request into a measured, bounded brief."
