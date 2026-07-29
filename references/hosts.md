@@ -22,13 +22,33 @@ the CLI instructions below.
 
 ## Primary workflow
 
-Before handoff, run `prompire prepare`. Prompire does not launch or control the agent.
-After the agent stops, `prompire verify` gives the combined scope and acceptance
-verdict. Review the generated checklist, then close the guard.
+This workflow is the same for any agent and host.
+
+### Prepare
 
 ```bash
 prompire prepare .prompire/task.yaml --target generic
+```
+
+### Hand off — Prompire does not launch the agent
+
+Give `.prompire/task.generic.md` to the coding agent.
+
+### Verify scope and acceptance
+
+After the agent stops:
+
+```bash
 prompire verify .prompire/task.yaml
+```
+
+Review `.prompire/task.checklist.md`.
+
+### Close explicitly
+
+After review:
+
+```bash
 prompire close .prompire/task.yaml
 ```
 
@@ -97,8 +117,12 @@ commands one of three ways, in order of preference:
 
 ## Diagnostic commands
 
+### Combined verdict
+
 Use `prompire verify` for the combined scope and acceptance verdict on every host. These
 individual scripts diagnose one stage; they are not a host-specific handoff workflow.
+
+### Individual tools
 
 | Command | Diagnostic purpose |
 |---|---|
