@@ -3,6 +3,89 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.5.0 — 2026-07-29
+
+**GitHub Copilot CLI is now a supported agent host, alongside Claude Code.** CLI only —
+Copilot's cloud agent loads hooks only from `.github/hooks/*.json` on the default branch,
+and nothing in this tree has been run or tested against it; do not configure Prompire for
+it on the strength of this release. The brief, the linter, the baseline and the boundary
+are unchanged and unaware hosts exist at all — only the hook and the renderer needed to
+learn a second protocol.
+
+### Added
+
+- **The hook is split into a host-neutral core and two thin adapters.**
+  `hook_policy.py` is the new core: it holds `verdict_for()`, which is the only caller of
+  `brief_common.py`'s `boundary_verdict`/`tests_verdict` left in either hook, so the hook
+  and `check_scope.py` still cannot disagree about what `scope` means. `hook_scope_guard.py`
+  is now a thin Claude Code adapter over that core — its stderr wording and exit codes are
+  byte-for-byte unchanged. `hook_copilot_guard.py` is the new Copilot CLI adapter.
+- **`hook_copilot_guard.py`**, the Copilot CLI `preToolUse` adapter. It reads `create`,
+  `edit`, `str_replace_editor` and `apply_patch`, plus the Claude-compatible `Write`,
+  `Edit`, `MultiEdit` and `NotebookEdit` names for a PascalCase entry reusing a
+  Claude-format hook. Paths are read from `path`, `file_path` and `notebook_path`; for
+  `apply_patch` they come from the patch envelope carried in `input` or `patch`, read for
+  every `*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move to:` header.
+  Both documented payload shapes are accepted — the native camelCase `preToolUse` event
+  and the PascalCase VS Code-compatible one — and `toolArgs` is read both as an object and
+  as a JSON-encoded string, because both occur in practice.
+- **The `copilot` renderer target.** `render_brief.py --target X` now accepts `claude`,
+  `generic`, `codex`, `copilot`, `agents.md`, `claude.md` and `checklist`.
+- **`references/hosts.md`**, the reference for both hosts: install locations (repo
+  `.github/hooks/`, user `~/.copilot/hooks/`, `%USERPROFILE%\.copilot\hooks\`,
+  `$COPILOT_HOME/hooks/`, hook config `version: 1`), the failure-semantics table, the
+  supported tools and argument shapes, and skill install locations for both hosts.
+  `examples/hooks/*.json` holds four validated configs it points at.
+- **The failure-semantics difference this forced a second adapter to handle.** Copilot CLI
+  is fail-closed on a command `preToolUse` hook: a crash, an exit 2, or any non-zero exit
+  is read as a **denial**. Prompire's guard is required to fail open on its own trouble —
+  a missing repo, an unreadable brief, a parse error — because it runs on every write in
+  every project on the machine, and a guard that denies whenever it has a bug gets
+  uninstalled. Claude Code's own convention already matches that requirement, which is why
+  `hook_scope_guard.py` needed no rewrite; Copilot CLI's is the exact reverse, so
+  `hook_copilot_guard.py` translates explicitly and **never exits non-zero**: a definite
+  violation is exit 0 plus one `{"permissionDecision":"deny","permissionDecisionReason":…}`
+  object on stdout, and everything else — an in-scope path, no brief armed, an unreadable
+  or malformed brief, a payload or patch the adapter cannot interpret, any unexpected
+  exception — is exit 0 with empty stdout. Neutral is deliberately **not**
+  `permissionDecision: "allow"`: allowing would skip the permission prompt Copilot would
+  otherwise show the operator, a real approval bought with the hook's silence for the
+  reason that the hook did not understand the question.
+
+  Two things make "never exits non-zero" true rather than merely intended, and both were
+  found by reviewing this release rather than by writing it. **The unconditional checks
+  run before the import.** `.prompire/ACTIVE`, `.prompire/ACTIVE.tombstones` and a
+  NUL-byte path are refused in a first pass inside `verdict_for()` that touches no brief
+  and imports nothing; only the brief-dependent half sits below
+  `from brief_common import …`. Hoisting that import — which the refactor did, briefly —
+  made protection this project documents as unconditional depend on PyYAML being
+  installed and importable, so a half-installed venv let a forged-pointer write through
+  on both hosts. **A closed stdout is not a denial.** If Copilot stops reading, Python's
+  flush at interpreter exit raises `BrokenPipeError`, prints to stderr and exits 120,
+  which Copilot reads as a refusal nobody decided on; the adapter now swallows that and
+  points fd 1 at the null device so the interpreter's own final flush cannot fail either.
+  Both are pinned in `tests/hook.py`.
+
+### Reproduced limitation
+
+- **An `apply_patch` envelope the adapter cannot parse draws no verdict at all.** The
+  adapter refuses to guess which files a patch touches from a partial read — a multi-file
+  patch whose second file is out of scope would otherwise read as compliant because its
+  first file was fine — so an unparseable patch is silently not checked by the hook.
+  `check_scope.py` on the resulting git diff is what catches it; this is the same
+  "silence over a guess" rule the rest of the guard already follows, reproduced at the one
+  new place a host gave it a chance to matter.
+
+### Intentionally unsupported
+
+- **Shell interception.** `bash` and `powershell` are deliberately not matched on either
+  host, exactly as `Bash` is not matched on Claude Code. A shell write bypasses the early
+  guard entirely; it is caught only by `check_scope.py` on the final git diff, because git
+  sees the write whatever tool made it. Inspecting a command line for the files it will
+  touch is a much weaker claim than reading a diff, and a guard that made it would be worse
+  than one with a stated hole.
+- **Copilot cloud agent.** Not implemented, not tested. See the opening paragraph.
+
 ## 0.4.0 — 2026-07-28
 
 **The project is renamed: `agent-brief` is now Prompire.** The state directory this tool

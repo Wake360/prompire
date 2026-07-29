@@ -36,6 +36,16 @@ difference between them.
 separate sections: a path you must not touch and an invariant you must preserve are
 different instructions.
 
+**`copilot`** — the same prose block as `claude` (it names the brief file too), with two
+differences. First, `manual_checks` appear right after the numbered criteria, under
+*"No command covers these; a human confirms them:"*, one bullet per entry, never mixed
+into the numbered list — no other prompt target renders `manual_checks` at all. Second,
+the external-check sentence grows two more: a preToolUse hook may catch an out-of-scope
+write before it lands but cannot see shell commands, `check_scope.py` is what checks the
+real diff afterwards, and the agent must not edit the brief or Prompire's state files.
+That warning exists because Copilot-style hosts commonly run shell tools the hook cannot
+observe.
+
 **`agents.md`** and **`claude.md`** — the durable half only: `## Never touch`,
 `## Keep true`, `## Tests`, `## Verify`. No goal, no scope, no autonomy, no baseline,
 because those describe a task that will be finished next week, and a stale task in a

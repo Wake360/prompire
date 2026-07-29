@@ -1,6 +1,6 @@
 ---
 name: prompire
-description: Turn a short request into a checkable brief for a coding agent — goal, bounded scope, executable acceptance criteria, declared autonomy — then lint it and render it for Claude Code, Codex, or a human checklist. Use when handing substantial work to an agent, when a previous agent run went off the rails or gamed its own success check, or when the user asks for a spec/brief/task description for an agent.
+description: Turn a short request into a checkable brief for a coding agent — goal, bounded scope, executable acceptance criteria, declared autonomy — then lint it and render it for Claude Code, GitHub Copilot CLI, Codex, or a human checklist. Use when handing substantial work to an agent, when a previous agent run went off the rails or gamed its own success check, or when the user asks for a spec/brief/task description for an agent.
 ---
 
 # Prompire
@@ -9,7 +9,14 @@ Compile a one-line request into the smallest brief that can be *checked*, measur
 its criteria say before the work starts, lint it, render it for the target. The output
 is short. If it grew long, it failed.
 
-Four tools, all in this directory:
+This skill works the same way on Claude Code and on GitHub Copilot CLI; install
+locations and hook setup for both are in `references/hosts.md`.
+
+Four tools, all in this directory. `$PROMPIRE` below is that directory — wherever
+this skill is installed, which differs per host and per personal/repository install
+(`references/hosts.md` lists them). Substitute it; do not assume one host's path.
+
+Four tools:
 
 | | |
 |---|---|
@@ -38,7 +45,7 @@ the brief. This is for work you're delegating and won't watch.
 
 3. **Measure the baseline:**
    ```
-   python3 ~/.claude/skills/prompire/baseline.py .prompire/<slug>.yaml --write
+   python3 $PROMPIRE/baseline.py .prompire/<slug>.yaml --write
    ```
    It runs each command on HEAD, refuses the ones that are destructive, interactive,
    repo-writing or environment-dependent, and appends the `baseline:` block **and the
@@ -53,17 +60,17 @@ the brief. This is for work you're delegating and won't watch.
 
 4. **Lint it:**
    ```
-   python3 ~/.claude/skills/prompire/lint_brief.py .prompire/<slug>.yaml
+   python3 $PROMPIRE/lint_brief.py .prompire/<slug>.yaml
    ```
    Exit 0 = shippable. Fix errors and re-run. Warnings are judgment calls — resolve them
    or say out loud why you're accepting them. Never edit the linter to make a brief pass.
 
-5. **Render** for the target the user named (`claude`, `codex`, `agents.md`,
+5. **Render** for the target the user named (`claude`, `codex`, `copilot`, `agents.md`,
    `claude.md`, `checklist`; default: `generic,checklist`).
 
 6. **Arm the guard — before the agent starts, not after:**
    ```
-   python3 ~/.claude/skills/prompire/check_scope.py .prompire/<slug>.yaml --activate
+   python3 $PROMPIRE/check_scope.py .prompire/<slug>.yaml --activate
    ```
    This is the step that makes the verdict worth anything, and it is the one that is easy
    to skip because nothing fails without it. It copies the brief's `base_rev` and a
@@ -178,3 +185,4 @@ Full table with what each rule can and cannot catch: **`references/rules.md`**.
 Where each one comes from: **`references/grounding.md`**.
 Renderer targets and wording rules: **`references/rendering.md`**.
 Tests, and how to change a rule safely: **`references/maintaining.md`**.
+Running on Claude Code and GitHub Copilot CLI: **`references/hosts.md`**.

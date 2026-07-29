@@ -1804,6 +1804,175 @@ def _(repo, c):
          f"a genuinely different base must still be flagged: {g2['findings']}")
 
 
+# ------------------------------------------------ GitHub Copilot CLI, on real repos
+
+COPILOT_HOOK = str(SKILL / "hook_copilot_guard.py")
+
+
+def copilot_hook(repo, tool_name, args, cwd=None):
+    """One Copilot CLI `preToolUse` call, as a real subprocess on a real repo."""
+    payload = json.dumps({"sessionId": "e2e", "timestamp": 0, "cwd": str(cwd or repo),
+                          "toolName": tool_name, "toolArgs": args})
+    return subprocess.run([sys.executable, COPILOT_HOOK], input=payload,
+                          capture_output=True, text=True)
+
+
+def _denial(c, r, *must_contain):
+    """A Copilot denial is exit 0 plus one JSON object — never a non-zero exit.
+
+    Copilot CLI reads a crash or any non-zero exit from a command `preToolUse` hook as a
+    denial of its own, so a hook that refused by exiting 2 would look identical to a
+    hook that crashed. The difference matters: one is a decision the brief made, the
+    other is Prompire being broken, and Prompire being broken is required to allow.
+    """
+    c.ok(r.returncode == 0,
+         f"a Copilot denial must still exit 0, got {r.returncode}: {r.stderr[:200]}")
+    c.ok(not r.stderr.strip(), f"the hook wrote to stderr: {r.stderr[:200]}")
+    try:
+        decision = json.loads(r.stdout)
+    except ValueError:
+        c.ok(False, f"denial is not valid JSON: {r.stdout[:200]!r}")
+        return {}
+    c.ok(decision.get("permissionDecision") == "deny",
+         f"expected a deny decision, got {decision}")
+    for s in must_contain:
+        c.ok(s in decision.get("permissionDecisionReason", ""),
+             f"denial reason does not mention {s!r}: {decision}")
+    return decision
+
+
+@case("copilot-hook-and-the-checker-draw-one-boundary")
+def _(repo, c):
+    """The early guard and the post-hoc authority must not be two opinions.
+
+    The Copilot adapter is a different protocol, not a different boundary: it calls the
+    same `boundary_verdict` that `check_scope.py` calls against the real diff
+    afterwards. So the same path must draw a refusal before the write and a VIOLATION
+    after it — and the second one is what the verdict rests on, since the first can be
+    walked around."""
+    head = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    p = _spec(repo, head)
+    tool("check_scope.py", p, "--activate")
+
+    _denial(c, copilot_hook(repo, "create",
+                            {"path": "golden/report.txt", "content": "x"}), "forbidden")
+    c.ok(not copilot_hook(repo, "edit", {"path": "src/cart.py"}).stdout.strip(),
+         "an in-scope edit must reach Copilot's normal permission flow, not a denial")
+
+    # The write happens anyway — the hook is a speed bump, and this is what the
+    # authority sees.
+    fixtures.write(repo, "golden/report.txt", "apples: 3\npears: 5\nTAMPERED\n")
+    g = guard(p)
+    c.ok(any("golden/report.txt" in v["path"] and "forbidden" in v["message"]
+             for v in violations(g)),
+         f"the checker must flag the same path the hook refused: {g['findings']}")
+
+
+@case("copilot-shell-writes-bypass-the-hook-and-the-git-diff-catches-them")
+def _(repo, c):
+    """The documented gap, reproduced rather than asserted in prose.
+
+    `bash` and `powershell` are deliberately not matched: reading a command line for the
+    files it will touch is a much weaker claim than reading a diff, and a guard that
+    pretends otherwise is worse than one with a stated hole. So the identical
+    out-of-scope path must be refused under `create` and pass untouched under `bash`,
+    and `check_scope.py` must still see the file the shell actually wrote."""
+    head = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    p = _spec(repo, head)
+    tool("check_scope.py", p, "--activate")
+
+    _denial(c, copilot_hook(repo, "create", {"path": "src/other.py"}), "outside `scope`")
+    shell = copilot_hook(repo, "bash", {"command": "echo x > src/other.py"})
+    c.ok(shell.returncode == 0 and not shell.stdout.strip(),
+         f"a shell call must pass untouched, not be claimed as checked: {shell.stdout!r}")
+
+    subprocess.run("echo x > src/other.py", shell=True, cwd=str(repo), check=True)
+    g = guard(p)
+    c.ok(any("src/other.py" in v["path"] for v in violations(g)),
+         f"the git diff must catch the write the hook never saw: {g['findings']}")
+
+
+@case("copilot-multi-file-patch-is-judged-whole")
+def _(repo, c):
+    """A tool call is atomic, so a patch is judged on every file it names.
+
+    The first file here is squarely in `scope`; the second is `forbidden`. A guard that
+    answered from the first path would approve the whole patch, and the forbidden write
+    would land with the hook's blessing. The refusal must name the offending path, not
+    the innocent one."""
+    head = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    p = _spec(repo, head)
+    tool("check_scope.py", p, "--activate")
+
+    patch = ("*** Begin Patch\n"
+             "*** Update File: src/cart.py\n@@\n-    return sum(items) - 1\n"
+             "+    return sum(items)\n"
+             "*** Update File: golden/report.txt\n@@\n-apples: 3\n+apples: 4\n"
+             "*** End Patch\n")
+    decision = _denial(c, copilot_hook(repo, "apply_patch", {"input": patch}),
+                       "forbidden")
+    c.ok("golden/report.txt" in decision.get("permissionDecisionReason", ""),
+         f"the refusal must name the offending file, not the first one: {decision}")
+    c.ok("src/cart.py" not in decision.get("permissionDecisionReason", ""),
+         f"the refusal must not blame the in-scope file: {decision}")
+
+    # A patch whose every file is inside the boundary is not refused.
+    ok_patch = ("*** Begin Patch\n*** Update File: src/cart.py\n@@\n-a\n+b\n"
+                "*** End Patch\n")
+    r = copilot_hook(repo, "apply_patch", {"input": ok_patch})
+    c.ok(r.returncode == 0 and not r.stdout.strip(),
+         f"an entirely in-scope patch must not be refused: {r.stdout!r}")
+
+
+@case("the-copilot-workflow-end-to-end")
+def _(repo, c):
+    """measure -> lint -> render copilot -> activate -> work -> --strict, on one repo.
+
+    The same six commands the Claude workflow runs, with one different `--target`. What
+    this pins is that nothing about the host changed the order or the meaning: the
+    baseline is still measured before the work, `--activate` still happens before the
+    agent starts, and `--strict` is still the human's check afterwards."""
+    p, data = measured(repo, "copilot-flow", """
+goal: Fix the off-by-one in src/cart.total().
+scope: [src/cart.py]
+forbidden: [golden/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_total
+    expect: exit 0
+    transition: flip
+autonomy: ask
+""")
+    c.ok(any(r["status"] == "fail" for r in data["results"]),
+         f"sanity: the flip criterion must be red on HEAD: {data['results']}")
+    c.ok(not lint(p)["findings"] or all(f["severity"] != "error"
+                                        for f in lint(p)["findings"]),
+         f"the brief must lint clean before it is armed: {lint(p)['findings']}")
+
+    r = tool("render_brief.py", p, "--target", "copilot")
+    c.ok(r.returncode == 0,
+         f"the copilot target must render inside the word budget: {r.stdout}{r.stderr}")
+    c.ok("check_scope.py" in r.stdout and "preToolUse" in r.stdout,
+         f"the copilot prompt must name both layers: {r.stdout}")
+
+    c.ok(tool("check_scope.py", p, "--activate").returncode == 0, "arming must succeed")
+
+    # The agent works, inside the boundary. The hook agrees; then the real diff does.
+    c.ok(not copilot_hook(repo, "edit", {"path": "src/cart.py"}).stdout.strip(),
+         "the in-scope edit must not be refused")
+    _denial(c, copilot_hook(repo, "create", {"path": "golden/report.txt"}), "forbidden")
+    fixtures.write(repo, "src/cart.py",
+                   (pathlib.Path(repo) / "src/cart.py").read_text(encoding="utf-8")
+                   .replace("return sum(items) - 1", "return sum(items)"))
+
+    strict = tool("check_scope.py", p, "--strict")
+    c.ok(strict.returncode == 0,
+         f"--strict must be clean on an armed, in-scope run: {strict.stdout}{strict.stderr}")
+    c.ok(guard(p)["base_source"] == "pin",
+         f"the base must be corroborated by the pin, not merely uncontradicted: "
+         f"{guard(p)['base_source']!r}")
+
+
 def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="prompire-e2e-"))
     fails = 0

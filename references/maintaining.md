@@ -11,18 +11,24 @@ lint_brief.py         is the brief shippable
 baseline.py           measure each criterion on untouched HEAD
 check_scope.py        did the agent stay inside the boundary (run after the agent)
 render_brief.py       prompt and checklist targets
+hook_policy.py        the host-neutral hook core: which paths, which roots, which verdict
+hook_scope_guard.py   Claude Code PreToolUse adapter — stderr + exit 2
+hook_copilot_guard.py GitHub Copilot CLI preToolUse adapter — stdout JSON decision
 references/
   schema.md           the authoritative field list — one definition per field
   rules.md            what each rule catches, and what it cannot
   rendering.md        target-by-target output rules
+  hosts.md            Claude Code and Copilot CLI: install, hooks, failure semantics
   grounding.md        the book passage behind each rule
   maintaining.md      this file
 examples/             five briefs; baselines measured, not written
+  hooks/              hook configurations for both hosts; tests/docs.py parses each one
 tests/
   battery.py          adversarial YAML cases: which rule ids fire, as errors or warnings
   e2e.py              real git repos, real commands, real diffs
   examples.py         regenerates and verifies examples/
   golden.py           renderer snapshots + the wording rules
+  hook.py             both hook adapters, as subprocesses, on throwaway repos
   fixtures.py         builds the throwaway repo the last three measure against
   docs.py             the docs and the code still agree
   run_all.py          all of the above
@@ -41,10 +47,34 @@ python3 tests/battery.py       adversarial linter cases
 python3 tests/e2e.py           end-to-end workflows and attacks (builds temp git repos)
 python3 tests/examples.py      examples lint clean and reproduce their baselines
 python3 tests/golden.py        renderer snapshots
+python3 tests/hook.py          both hook adapters: blocked vs allowed vs neutral
 python3 tests/docs.py          rule ids, schema keys and docs are consistent
 ```
 
 `tests/e2e.py --verbose` keeps the temp repos so you can look at a failing diff.
+
+## Changing the hook
+
+The boundary lives in `brief_common.py` and the walk lives in `hook_policy.py`. An
+adapter knows its host's wire format and nothing else — the moment one of them decides
+what a path *means*, there are two interpretations of `scope` in the tree and they will
+diverge. So:
+
+1. A boundary rule changes in `brief_common.py`, never in an adapter. Both hooks and
+   `check_scope.py` pick it up together, which is the point.
+2. Which paths a tool call touches, which roots govern, and how a path is resolved
+   change in `hook_policy.py`. Both hosts pick it up together.
+3. Only payload parsing and the shape of the answer belong in an adapter.
+
+`tests/hook.py` asserts the two adapters agree (`cp-both-hosts-read-one-boundary`): for
+the same repo and the same path, Claude Code's exit code and Copilot's decision must
+match. If a change makes that case fail, the change put a second opinion somewhere.
+
+The two hosts fail in opposite directions and the adapters are not interchangeable:
+Claude Code lets a call through on a crash, Copilot CLI denies on one. `hook_copilot_
+guard.py` therefore never exits non-zero and never emits `permissionDecision: "allow"`.
+Both properties are pinned in `tests/hook.py`; neither is a style choice. The full
+matrix is in `references/hosts.md`.
 
 ## Changing a rule
 

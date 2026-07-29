@@ -18,9 +18,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 SKILL = HERE.parent
 GOLDEN = HERE / "golden"
 EXAMPLES = SKILL / "examples"
-TARGETS = ("claude", "generic", "codex", "agents.md", "claude.md", "checklist")
+TARGETS = ("claude", "generic", "codex", "copilot", "agents.md", "claude.md", "checklist")
 WORD_BUDGET = 250
-PROMPTS = ("claude", "generic", "codex")
+PROMPTS = ("claude", "generic", "codex", "copilot")
 
 # Phrases that must never reach a rendered prompt: each one tells an agent that the
 # boundary is negotiable in conversation.
