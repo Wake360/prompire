@@ -10,17 +10,37 @@ it can edit will, sooner or later, edit the suite. So will one that is graded on
 whose starting point it gets to declare. Everything here follows from taking that
 seriously.
 
-```
-lint_brief.py brief.yaml                  is the brief shippable?
-baseline.py brief.yaml --write            what does each criterion say on untouched HEAD?
-render_brief.py brief.yaml --target X     the prompt and the human checklist
-check_scope.py brief.yaml --activate      arm the guard — BEFORE the agent starts
-check_scope.py brief.yaml --strict        did the agent stay inside the boundary?
-check_scope.py brief.yaml --strict --ack-disarms <digest>   …once a repin is read and accepted
+```bash
+prompire prepare .prompire/task.yaml --target generic
+prompire verify .prompire/task.yaml
+prompire close .prompire/task.yaml
 ```
 
-`X` is one of `claude`, `generic`, `codex`, `copilot`, `agents.md`, `claude.md`,
-`checklist`. Python 3 and PyYAML. Nothing else — no service, no key, no network.
+Python 3 and PyYAML. Nothing else — no service, no key, no network. The underlying
+scripts remain documented under [Diagnostic commands](#diagnostic-commands).
+
+## Install the CLI
+
+```bash
+pipx install prompire
+# or
+uv tool install prompire
+```
+
+Prompire supports Python 3.11+ on macOS, Linux, and Windows.
+
+## Host-neutral workflow
+
+```bash
+prompire prepare .prompire/task.yaml --target generic
+# give .prompire/task.generic.md to any coding agent
+prompire verify .prompire/task.yaml
+# review .prompire/task.checklist.md
+prompire close .prompire/task.yaml
+```
+
+The CLI does not launch an agent. Claude Code and Copilot CLI hooks are optional
+early-warning adapters; the final git-diff check is host-neutral.
 
 ## Two layers, neither sufficient alone
 
@@ -86,7 +106,7 @@ Read that paragraph before relying on any of this. In particular: the workflow p
 the *weakest* state unless you run `--activate` before the agent starts, and the base
 source printed on every summary line is the only way to tell which state you got.
 
-## Quickstart
+## Diagnostic commands
 
 ```bash
 # 1. write .prompire/<slug>.yaml — see SKILL.md for the shape

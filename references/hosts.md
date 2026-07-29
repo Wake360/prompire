@@ -11,6 +11,15 @@ hooks only from `.github/hooks/*.json` on the default branch, and nothing in thi
 has been run or tested against it. Do not configure Prompire for it on the strength of
 the CLI instructions below.
 
+## Host support matrix
+
+| Surface | Any agent | Claude Code | Copilot CLI |
+|---|---:|---:|---:|
+| Generic rendered prompt | yes | yes | yes |
+| Post-run git diff verdict | yes | yes | yes |
+| Pre-write hook | no | yes | yes |
+| Agent launching | no | no | no |
+
 ## One tree, one boundary
 
 ```

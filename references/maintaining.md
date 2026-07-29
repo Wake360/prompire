@@ -6,11 +6,14 @@ Nothing here is needed to *use* the skill. It is for changing it.
 
 ```
 SKILL.md              when to use it, the workflow, the shape, the hard rules
+prompire.py           CLI: prepare, verify, and close
 brief_common.py       schema helpers every tool shares: loading, keys, transitions, globs
 lint_brief.py         is the brief shippable
 baseline.py           measure each criterion on untouched HEAD
 check_scope.py        did the agent stay inside the boundary (run after the agent)
 render_brief.py       prompt and checklist targets
+verify_acceptance.py  run the declared acceptance criteria
+pyproject.toml        package metadata and the `prompire` command
 hook_policy.py        the host-neutral hook core: which paths, which roots, which verdict
 hook_scope_guard.py   Claude Code PreToolUse adapter — stderr + exit 2
 hook_copilot_guard.py GitHub Copilot CLI preToolUse adapter — stdout JSON decision
@@ -29,6 +32,9 @@ tests/
   examples.py         regenerates and verifies examples/
   golden.py           renderer snapshots + the wording rules
   hook.py             both hook adapters, as subprocesses, on throwaway repos
+  verify.py           acceptance verifier integration cases
+  cli.py              prepare, verify, and close integration cases
+  package.py          installed CLI packaging checks
   fixtures.py         builds the throwaway repo the last three measure against
   docs.py             the docs and the code still agree
   run_all.py          all of the above
@@ -48,6 +54,9 @@ python3 tests/e2e.py           end-to-end workflows and attacks (builds temp git
 python3 tests/examples.py      examples lint clean and reproduce their baselines
 python3 tests/golden.py        renderer snapshots
 python3 tests/hook.py          both hook adapters: blocked vs allowed vs neutral
+python3 tests/verify.py        acceptance verifier integration cases
+python3 tests/cli.py           prepare, verify, and close integration cases
+python3 tests/package.py       installed CLI packaging checks
 python3 tests/docs.py          rule ids, schema keys and docs are consistent
 ```
 

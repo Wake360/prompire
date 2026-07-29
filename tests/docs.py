@@ -64,6 +64,27 @@ def read(rel):
     return (SKILL / rel).read_text(encoding="utf-8")
 
 
+def cli_problems():
+    out = []
+    skill = read("SKILL.md")
+    readme = read("README.md")
+    pyproject = read("pyproject.toml")
+
+    for command in ("prompire prepare", "prompire verify", "prompire close"):
+        if command not in skill:
+            out.append(f"SKILL.md does not document `{command}`")
+        if command not in readme:
+            out.append(f"README.md does not document `{command}`")
+
+    if 'prompire = "prompire:entrypoint"' not in pyproject:
+        out.append("pyproject.toml does not expose the prompire command")
+
+    metadata = SKILL / "agents" / "openai.yaml"
+    if not metadata.is_file():
+        out.append("missing agents/openai.yaml")
+    return out
+
+
 def enforced_rule_ids():
     src = read("lint_brief.py")
     return sorted({m.group(1) for m in re.finditer(r'(?:err|warn)\(\s*"(B\d+)\s', src)},
@@ -324,6 +345,7 @@ def main():
         problems.append("maintaining.md lost the mirror sync command")
 
     problems += release_problems()
+    problems += cli_problems()
     problems += host_problems()
     problems += hook_config_problems()
     problems += overclaim_problems()
