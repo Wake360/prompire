@@ -12,7 +12,9 @@ every write in every project on the machine: one that blocks unrelated sessions 
 uninstalled, and an uninstalled guard protects nothing.
 """
 import json
+import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -619,13 +621,641 @@ def main():
             bad.append(f"{name}: expected log condition not met")
         print(f"{'pass' if ok else 'FAIL'}  {name}")
 
+    copilot_total = copilot_cases(tmp, bad, case_folds, norm_folds)
+
     shutil.rmtree(tmp, ignore_errors=True)
     total = (len(CASES) + len(open_cases) + len(extra_cases) + len(UNARMED_CASES)
-             + len(probe_cases) + len(log_cases))
+             + len(probe_cases) + len(log_cases) + copilot_total)
     for b in bad:
         print(f"        {b}")
     print(f"\n{total - len(bad)}/{total} hook cases")
     return 1 if bad else 0
+
+
+COPILOT_HOOK = str(SKILL / "hook_copilot_guard.py")
+
+FOLD_CASE = "fold-case"    # correct answer depends on whether this volume folds case
+FOLD_NORM = "fold-norm"    # …or Unicode normalisation
+
+WIDE_BRIEF = ("goal: wide open\nscope:\n  - '**'\ntests_policy: immutable\n"
+              "acceptance:\n  - cmd: \"true\"\n    expect: exit 0\nautonomy: auto\n")
+
+
+def _armed(tmp, name, policy="immutable", editable="", body=None):
+    """A throwaway repo with a brief armed the ordinary way — `check_scope.py
+    --activate`, never a hand-written pointer."""
+    repo = fixtures.build(tmp / name)
+    fixtures.write(repo, ".prompire/spec.yaml",
+                   body if body is not None else BRIEF.format(policy=policy,
+                                                              editable=editable))
+    subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
+                   cwd=str(repo), capture_output=True, text=True)
+    return repo
+
+
+def camel(tool, args, cwd, **extra):
+    """The native camelCase `preToolUse` payload: sessionId, timestamp, cwd, toolName,
+    toolArgs — no event-name field."""
+    payload = {"sessionId": "0f9c", "timestamp": 0, "cwd": str(cwd),
+               "toolName": tool, "toolArgs": args}
+    payload.update(extra)
+    return json.dumps(payload)
+
+
+def pascal(tool, args, cwd, **extra):
+    """The PascalCase VS Code-compatible payload: hook_event_name, session_id, a STRING
+    timestamp, cwd, tool_name, tool_input."""
+    payload = {"hook_event_name": "PreToolUse", "session_id": "0f9c",
+               "timestamp": "2026-07-29T09:00:00Z", "cwd": str(cwd),
+               "tool_name": tool, "tool_input": args}
+    payload.update(extra)
+    return json.dumps(payload)
+
+
+def run_copilot(payload, env=None):
+    r = subprocess.run([sys.executable, COPILOT_HOOK], input=payload,
+                       capture_output=True, text=True,
+                       env=dict(os.environ, **env) if env else None)
+    return r.returncode, r.stdout, r.stderr
+
+
+def _copilot_problems(rc, out, err, want):
+    """Every case asserts the whole protocol, not just the decision.
+
+    `want` is None for a neutral outcome or a substring the denial reason must contain.
+    Copilot CLI reads a crash, exit 2, or any other non-zero exit as a denial, so exit 0
+    is not a detail here — it is the only exit status this adapter is ever allowed to
+    produce, and a case that passes its decision check while exiting 1 would deny in
+    production for a reason nobody chose. stderr must stay empty for the same reason: a
+    traceback on stderr means the process took the fail-closed path.
+    """
+    problems = []
+    if rc != 0:
+        problems.append(f"exit {rc}, wanted 0 — a non-zero exit is a Copilot denial: "
+                        f"{err.strip()[:200]}")
+    if err.strip():
+        problems.append(f"wrote to stderr: {err.strip()[:200]}")
+    body = out.strip()
+    if want is None:
+        # Neutral is empty output or `{}` — never `permissionDecision: "allow"`, which
+        # would skip the permission prompt Copilot would otherwise show the operator.
+        if body not in ("", "{}"):
+            problems.append(f"expected neutral output, got {body[:200]!r}")
+        return problems
+    if not body:
+        problems.append(f"expected a denial containing {want!r}, got empty output")
+        return problems
+    try:
+        decision = json.loads(body)
+    except ValueError:
+        problems.append(f"denial is not valid JSON: {body[:200]!r}")
+        return problems
+    if not isinstance(decision, dict):
+        problems.append(f"denial is not a JSON object: {body[:200]!r}")
+        return problems
+    if decision.get("permissionDecision") != "deny":
+        problems.append(f"permissionDecision is {decision.get('permissionDecision')!r}, "
+                        "wanted 'deny'")
+    reason = decision.get("permissionDecisionReason")
+    if not isinstance(reason, str) or not reason:
+        problems.append("denial carries no permissionDecisionReason")
+    elif want not in reason:
+        problems.append(f"reason missing {want!r} — {reason[:200]!r}")
+    return problems
+
+
+PATCH = """*** Begin Patch
+*** Update File: {path}
+@@
+-old
++new
+*** End Patch
+"""
+
+
+def copilot_cases(tmp, bad, case_folds, norm_folds):
+    """The GitHub Copilot CLI adapter: same boundary, opposite failure convention.
+
+    Every case here runs the hook as a real subprocess and asserts stdin -> stdout,
+    stderr and exit status together. The cases that must be NEUTRAL matter more than the
+    ones that must deny: Copilot fails closed on its own, so every shape this adapter
+    cannot read has to leave the call to Copilot's normal permission flow rather than
+    refusing it or — worse — approving it.
+    """
+    cases = []   # (name, payload, want_substring_or_None)
+
+    # --- the two documented payload shapes, both directions ---------------------
+    repo = _armed(tmp, "cp-shapes")
+    cases += [
+        ("cp-camel-create-in-scope",
+         camel("create", {"path": "src/cart.py", "content": "x"}, repo), None),
+        ("cp-camel-create-outside-scope",
+         camel("create", {"path": "src/other.py", "content": "x"}, repo),
+         "outside `scope`"),
+        ("cp-pascal-write-outside-scope",
+         pascal("Write", {"file_path": "src/other.py"}, repo), "outside `scope`"),
+        ("cp-pascal-edit-in-scope",
+         pascal("Edit", {"file_path": "src/cart.py"}, repo), None),
+        # The runtime name can arrive under the PascalCase envelope too — the matcher
+        # fires on either spelling, so the payload may carry either.
+        ("cp-pascal-runtime-name",
+         pascal("edit", {"path": "src/other.py"}, repo), "outside `scope`"),
+        # GitHub's own worked example parses `toolArgs` with a second `jq` call because
+        # it arrives as a JSON *string*. Reading only the object form would make this
+        # adapter silently blind on whichever host version disagrees with it.
+        ("cp-toolargs-as-json-string",
+         camel("create", json.dumps({"path": "src/other.py"}), repo), "outside `scope`"),
+        # sessionId and timestamp are metadata this adapter never reads; a payload
+        # without them must decide exactly the same way.
+        ("cp-missing-optional-metadata",
+         json.dumps({"cwd": str(repo), "toolName": "create",
+                     "toolArgs": {"path": "src/other.py"}}), "outside `scope`"),
+    ]
+
+    # --- malformed and uninterpretable payloads: neutral, never a verdict -------
+    cases += [
+        ("cp-malformed-json", "not json at all", None),
+        ("cp-empty-stdin", "", None),
+        ("cp-non-object-json-array", "[1, 2, 3]", None),
+        ("cp-non-object-json-scalar", '"just a string"', None),
+        ("cp-non-object-json-null", "null", None),
+        ("cp-toolname-wrong-type",
+         json.dumps({"cwd": str(repo), "toolName": 7, "toolArgs": {"path": "src/other.py"}}),
+         None),
+        ("cp-toolargs-wrong-type",
+         camel("create", ["src/other.py"], repo), None),
+        ("cp-toolargs-string-not-json",
+         camel("create", "src/other.py", repo), None),
+        ("cp-toolargs-missing",
+         json.dumps({"cwd": str(repo), "toolName": "create"}), None),
+        # No cwd, no verdict: a relative `path` cannot be resolved without it, and
+        # resolving it against this process's own cwd would judge a file in a directory
+        # nobody named.
+        ("cp-missing-cwd",
+         json.dumps({"toolName": "create", "toolArgs": {"path": "src/other.py"}}), None),
+        ("cp-cwd-wrong-type",
+         json.dumps({"cwd": 3, "toolName": "create",
+                     "toolArgs": {"path": "src/other.py"}}), None),
+        # Misconfigured onto another event, this hook must say nothing rather than
+        # answer a question it was not asked.
+        ("cp-wrong-event",
+         pascal("Write", {"file_path": "src/other.py"}, repo,
+                hook_event_name="PostToolUse"), None),
+        ("cp-create-with-no-path-key",
+         camel("create", {"contents": "x"}, repo), None),
+        ("cp-unknown-tool",
+         camel("mcp__something__write", {"path": "src/other.py"}, repo), None),
+    ]
+
+    # --- tools that do not write files ------------------------------------------
+    # `bash`/`powershell` are the documented gap, and this pins that the gap is real
+    # rather than quietly half-covered: an identical out-of-scope path is denied under
+    # `create` and passes untouched under `bash`. check_scope.py on the git diff is what
+    # catches the shell write afterwards.
+    cases += [
+        ("cp-irrelevant-tool-view", camel("view", {"path": "src/other.py"}, repo), None),
+        ("cp-irrelevant-tool-grep", camel("grep", {"pattern": "x"}, repo), None),
+        ("cp-shell-write-not-intercepted",
+         camel("bash", {"command": "echo x > src/other.py"}, repo), None),
+        ("cp-powershell-write-not-intercepted",
+         camel("powershell", {"command": "'x' > src/other.py"}, repo), None),
+    ]
+
+    # --- str_replace_editor: the operation lives in `command` --------------------
+    cases += [
+        ("cp-editor-str-replace-outside-scope",
+         camel("str_replace_editor",
+               {"command": "str_replace", "path": "src/other.py",
+                "old_str": "a", "new_str": "b"}, repo), "outside `scope`"),
+        ("cp-editor-create-forbidden",
+         camel("str_replace_editor",
+               {"command": "create", "path": "golden/report.txt", "file_text": "x"},
+               repo), "forbidden"),
+        # `view` reads. Refusing a read would be a boundary this brief does not draw.
+        ("cp-editor-view-is-neutral",
+         camel("str_replace_editor", {"command": "view", "path": "src/other.py"}, repo),
+         None),
+        # `undo_edit` writes, and is not assumed harmless just because it restores.
+        ("cp-editor-undo-edit-writes",
+         camel("str_replace_editor", {"command": "undo_edit", "path": "src/other.py"},
+               repo), "outside `scope`"),
+        ("cp-editor-in-scope",
+         camel("str_replace_editor",
+               {"command": "str_replace", "path": "src/cart.py"}, repo), None),
+    ]
+
+    # --- apply_patch: every file in the envelope, not the first one --------------
+    multi = ("*** Begin Patch\n"
+             "*** Update File: src/cart.py\n@@\n-old\n+new\n"
+             "*** Update File: golden/report.txt\n@@\n-old\n+new\n"
+             "*** End Patch\n")
+    quoting = ("*** Begin Patch\n"
+               "*** Update File: src/cart.py\n@@\n"
+               " *** Update File: golden/report.txt\n"
+               "+*** Delete File: docs/secret/x.md\n"
+               "*** End Patch\n")
+    cases += [
+        ("cp-patch-single-outside-scope",
+         camel("apply_patch", {"input": PATCH.format(path="src/other.py")}, repo),
+         "outside `scope`"),
+        ("cp-patch-in-scope", camel("apply_patch",
+                                    {"input": PATCH.format(path="src/cart.py")}, repo),
+         None),
+        # The one that matters: file 1 is allowed, file 2 is forbidden. A guard that
+        # answered from the first path would approve this whole patch.
+        ("cp-patch-second-file-forbidden",
+         camel("apply_patch", {"input": multi}, repo), "forbidden"),
+        ("cp-patch-add-file-outside-scope",
+         camel("apply_patch", {"input": "*** Begin Patch\n*** Add File: src/new.py\n"
+                                        "+x\n*** End Patch\n"}, repo),
+         "outside `scope`"),
+        ("cp-patch-delete-file-forbidden",
+         camel("apply_patch", {"input": "*** Begin Patch\n"
+                                        "*** Delete File: golden/report.txt\n"
+                                        "*** End Patch\n"}, repo), "forbidden"),
+        # A rename names two paths. The destination is the one that escapes here, and a
+        # source-only reading would miss it.
+        ("cp-patch-move-destination-forbidden",
+         camel("apply_patch", {"input": "*** Begin Patch\n"
+                                        "*** Update File: src/cart.py\n"
+                                        "*** Move to: golden/cart.py\n"
+                                        "@@\n-old\n+new\n*** End Patch\n"}, repo),
+         "forbidden"),
+        # Content lines are prefixed with a space, `+` or `-`. A context line that
+        # quotes a header — a diff of this file's own docstring would — is content, not
+        # a path to refuse.
+        ("cp-patch-quoted-header-is-content",
+         camel("apply_patch", {"input": quoting}, repo), None),
+        # A patch we cannot read is a set of changes we cannot enumerate. Silence, not a
+        # guess from whatever path happens to be nearby.
+        ("cp-patch-unparseable",
+         camel("apply_patch", {"input": "just some text"}, repo), None),
+        ("cp-patch-envelope-with-no-files",
+         camel("apply_patch", {"input": "*** Begin Patch\n*** End Patch\n"}, repo), None),
+        ("cp-patch-unreadable-does-not-fall-back-to-path",
+         camel("apply_patch", {"input": "not a patch", "path": "src/other.py"}, repo),
+         None),
+        ("cp-patch-under-the-patch-key",
+         camel("apply_patch", {"patch": PATCH.format(path="src/other.py")}, repo),
+         "outside `scope`"),
+    ]
+
+    # --- path shapes -------------------------------------------------------------
+    cases += [
+        ("cp-absolute-path-outside-scope",
+         camel("create", {"path": str(repo / "src" / "other.py")}, repo),
+         "outside `scope`"),
+        ("cp-absolute-path-in-scope",
+         camel("create", {"path": str(repo / "src" / "cart.py")}, repo), None),
+        ("cp-dot-relative-outside-scope",
+         camel("create", {"path": "./src/other.py"}, repo), "outside `scope`"),
+        ("cp-dot-relative-in-scope",
+         camel("create", {"path": "./src/cart.py"}, repo), None),
+        ("cp-dotdot-escapes-the-repo",
+         camel("create", {"path": "../escaped.py"}, repo), "outside the repository"),
+        ("cp-cwd-is-a-subdirectory",
+         camel("create", {"path": "cart.py"}, repo / "src"), None),
+        ("cp-cwd-is-a-subdirectory-outside-scope",
+         camel("create", {"path": "other.py"}, repo / "src"), "outside `scope`"),
+        ("cp-nul-in-path",
+         camel("create", {"path": "src/x\x00.py"}, repo), "unnameable-path"),
+        # POSIX names a backslash as an ordinary character, so `src\other.py` is one
+        # file at the repo root, and it is outside `scope`. Pinned so the answer is a
+        # decision rather than an accident of whichever normalisation ran last.
+        ("cp-backslash-separator",
+         camel("create", {"path": "src\\other.py"}, repo), "outside `scope`"),
+    ]
+
+    # --- the state files, unconditionally ---------------------------------------
+    cases += [
+        ("cp-state-pointer", camel("create", {"path": ".prompire/ACTIVE"}, repo),
+         "guard pointer"),
+        ("cp-state-tombstones",
+         camel("create", {"path": ".prompire/ACTIVE.tombstones"}, repo), "guard pointer"),
+        ("cp-state-nested-pointer",
+         camel("create", {"path": "src/.prompire/ACTIVE"}, repo), "guard pointer"),
+        ("cp-state-under-tombstones",
+         camel("create", {"path": "src/.prompire/ACTIVE.tombstones/x"}, repo),
+         "guard pointer"),
+        ("cp-state-case-fold",
+         camel("create", {"path": ".PROMPIRE/active"}, repo), "guard pointer"),
+        ("cp-state-nfd-spelling",
+         camel("create", {"path": unicodedata.normalize("NFD", ".prompire/ACTIVE")},
+               repo), "guard pointer"),
+        ("cp-state-dotdot",
+         camel("create", {"path": "x/../.prompire/ACTIVE"}, repo), "guard pointer"),
+        ("cp-state-legacy-pointer",
+         camel("create", {"path": ".agent-brief/ACTIVE"}, repo), "guard pointer"),
+        ("cp-state-legacy-tombstones",
+         camel("create", {"path": ".agent-brief/ACTIVE.tombstones"}, repo),
+         "guard pointer"),
+        ("cp-state-legacy-nested",
+         camel("create", {"path": "src/.agent-brief/ACTIVE"}, repo), "guard pointer"),
+        # The narrowness pin, on this host too: `.prompire/` is where notes and renders
+        # live (`ALWAYS_ALLOWED`), and only the two record files are off limits. The
+        # legacy directory has no such blanket allowance and never did, so an armed
+        # brief judges a note in it by `scope` like any other path — the pin that the
+        # *shape* match stays narrow is `cp-never-armed-legacy-notes-allowed` below,
+        # where no brief governs and only the shape rule can speak.
+        ("cp-state-notes-allowed",
+         camel("create", {"path": ".prompire/active-notes.md"}, repo), None),
+        # An armed patch that touches the pointer among ordinary files is still a
+        # pointer write.
+        ("cp-patch-touching-the-pointer",
+         camel("apply_patch", {"input": "*** Begin Patch\n"
+                                        "*** Update File: src/cart.py\n@@\n-a\n+b\n"
+                                        "*** Update File: .prompire/ACTIVE\n@@\n-a\n+b\n"
+                                        "*** End Patch\n"}, repo), "guard pointer"),
+        ("cp-self-edit-the-brief",
+         camel("edit", {"path": ".prompire/spec.yaml"}, repo), "active brief"),
+    ]
+
+    # --- tests_policy, through the same tests_verdict check_scope.py uses --------
+    immutable = _armed(tmp, "cp-tests-immutable")
+    named = _armed(tmp, "cp-tests-named", policy="named", editable=NAMED)
+    cases += [
+        ("cp-tests-immutable-refused",
+         camel("edit", {"path": "tests/test_cart.py"}, immutable), "tests_policy"),
+        ("cp-tests-named-listed-allowed",
+         camel("edit", {"path": "tests/test_cart.py"}, named), None),
+        ("cp-tests-named-other-refused",
+         camel("edit", {"path": "tests/test_total.py"}, named), "tests_editable"),
+        ("cp-patch-touching-an-immutable-test",
+         camel("apply_patch", {"input": "*** Begin Patch\n"
+                                        "*** Update File: src/cart.py\n@@\n-a\n+b\n"
+                                        "*** Update File: tests/test_cart.py\n@@\n-a\n+b\n"
+                                        "*** End Patch\n"}, immutable), "tests_policy"),
+    ]
+
+    # --- no repo / no brief / broken brief: neutral, every one of them -----------
+    bare = pathlib.Path(tempfile.mkdtemp(prefix="prompire-cp-bare-"))
+    disarmed = _armed(tmp, "cp-disarmed")
+    subprocess.run([sys.executable, GUARD, "--deactivate"], cwd=str(disarmed),
+                   capture_output=True, text=True)
+    broken = _armed(tmp, "cp-broken-pointer")
+    (broken / ".prompire" / "ACTIVE").write_text("nope/missing.yaml\n", encoding="utf-8")
+    unreadable = _armed(tmp, "cp-unreadable-pointer")
+    (unreadable / ".prompire" / "ACTIVE").write_bytes(b"\xff\xfe\x00garbage")
+    invalid = _armed(tmp, "cp-invalid-brief")
+    fixtures.write(invalid, ".prompire/spec.yaml", "- this is a list\n- not a mapping\n")
+    unarmed = fixtures.build(tmp / "cp-never-armed")
+    cases += [
+        ("cp-no-repo-anywhere", camel("create", {"path": str(bare / "x.py")}, bare), None),
+        ("cp-no-active-brief", camel("create", {"path": "src/other.py"}, disarmed), None),
+        ("cp-unreadable-pointer",
+         camel("create", {"path": "src/other.py"}, unreadable), None),
+        ("cp-pointer-at-a-missing-brief",
+         camel("create", {"path": "src/other.py"}, broken), None),
+        ("cp-brief-is-not-a-mapping",
+         camel("create", {"path": "src/other.py"}, invalid), None),
+        ("cp-never-armed-ordinary-file",
+         camel("create", {"path": "src/other.py"}, unarmed), None),
+        # …but the two record files are refused in a repo that never armed anything,
+        # which is the state each of them exists to describe.
+        ("cp-never-armed-pointer-refused",
+         camel("create", {"path": ".prompire/ACTIVE"}, unarmed), "guard pointer"),
+        ("cp-never-armed-legacy-tombstones-refused",
+         camel("create", {"path": ".agent-brief/ACTIVE.tombstones"}, unarmed),
+         "guard pointer"),
+        # …and the shape match stays narrow while it does so: an ordinary note whose
+        # name merely starts with "active" is a working file, under either state
+        # directory name.
+        ("cp-never-armed-notes-allowed",
+         camel("create", {"path": ".prompire/active-notes.md"}, unarmed), None),
+        ("cp-never-armed-legacy-notes-allowed",
+         camel("create", {"path": ".agent-brief/active-notes.md"}, unarmed), None),
+    ]
+
+    # --- symlinks: the same three shapes the Claude adapter is pinned against ----
+    # Not a claim that symlinks are solved — README lists a symlinked `.prompire`
+    # directory as a live limitation, and creating any of these needs Bash, which neither
+    # adapter watches. What is pinned is narrower and is the part that must not differ by
+    # host: `_as_written` collapses `..` lexically BEFORE resolving symlinks, matching the
+    # write tool rather than the OS, so `<symlink>/../…` is judged where the write lands.
+    # Both adapters call the same function; a Copilot-only regression here would be
+    # invisible without these.
+    sym = _armed(tmp, "cp-symlink")
+    (sym / "flink").symlink_to(sym / "src" / "cart.py")
+    (sym / "docs" / "sub").mkdir(parents=True, exist_ok=True)
+    (sym / "dclink").symlink_to(sym / "docs" / "sub")
+    outside = pathlib.Path(tempfile.mkdtemp(prefix="prompire-cp-outside-"))
+    (outside / "link.py").symlink_to(sym / "src" / "other.py")
+    cases += [
+        # `flink/..` is the LINK's parent, not the target's — so this lands on the brief.
+        ("cp-symlink-dotdot-onto-the-brief",
+         camel("create", {"path": "flink/../.prompire/spec.yaml"}, sym), "active brief"),
+        # Judged inside `docs/**`, lands in `golden/**`.
+        ("cp-symlink-dotdot-into-forbidden",
+         camel("create", {"path": "dclink/../golden/report.txt"}, sym), "forbidden"),
+        # The root walk starts from the RESOLVED target's parent: a symlink whose final
+        # component points into an armed repo puts the write inside that repo, so that
+        # repo's brief judges it even though cwd is nowhere near it.
+        ("cp-symlink-target-into-armed-repo",
+         camel("create", {"path": str(outside / "link.py")}, outside), "outside `scope`"),
+    ]
+
+    # --- an agent bound by repo A must not escape into repo B --------------------
+    a = _armed(tmp, "cp-cross-a")
+    b = _armed(tmp, "cp-cross-b", body=WIDE_BRIEF)
+    cases.append(("cp-cross-repo-escape",
+                  camel("create", {"path": str(b / "anything.md")}, a),
+                  "outside the repository"))
+
+    # --- case and normalisation folding, through the same fs_fold probe ----------
+    fold_repo = _armed(tmp, "cp-fold-case", body=(
+        "goal: Refactor helpers under src/.\nscope:\n  - src/**\n"
+        "forbidden:\n  - src/golden/**\ntests_policy: immutable\n"
+        "acceptance:\n  - cmd: \"true\"\n    expect: exit 0\nautonomy: auto\n"))
+    nfc_dir = unicodedata.normalize("NFC", "café")
+    nfd_dir = unicodedata.normalize("NFD", "café")
+    norm_repo = _armed(tmp, "cp-fold-norm", body=(
+        "goal: Update docs under docs/.\nscope:\n  - docs/**\n"
+        f"forbidden:\n  - docs/{nfc_dir}/**\ntests_policy: immutable\n"
+        "acceptance:\n  - cmd: \"true\"\n    expect: exit 0\nautonomy: auto\n"))
+    cases += [
+        ("cp-forbidden-case-variant",
+         camel("create", {"path": "src/GOLDEN/x.txt"}, fold_repo), FOLD_CASE),
+        ("cp-forbidden-normalisation-variant",
+         camel("create", {"path": f"docs/{nfd_dir}/x.txt"}, norm_repo), FOLD_NORM),
+    ]
+
+    for name, payload, want in cases:
+        if want == FOLD_CASE:
+            want = "forbidden" if case_folds else None
+        elif want == FOLD_NORM:
+            want = "forbidden" if norm_folds else None
+        rc, out, err = run_copilot(payload)
+        problems = _copilot_problems(rc, out, err, want)
+        if problems:
+            bad.append(f"{name}: " + "; ".join(problems))
+        print(f"{'FAIL' if problems else 'pass'}  {name}")
+
+    extra = []
+
+    # --- the exact denial text, byte for byte ------------------------------------
+    # The reason is what the agent reads and acts on, so it is pinned rather than
+    # substring-matched once: a reason that drifts into "ask and you may" wording would
+    # pass every `want`-substring case above.
+    _, out, _ = run_copilot(camel("create", {"path": "src/other.py"}, repo))
+    expected_reason = (
+        "BLOCKED by Prompire scope guard [outside-scope]: src/other.py — changed "
+        "outside `scope` -> revert it, or revise the brief and re-run the baseline — a "
+        "scope change is an edit to the brief, not a confirmation in chat. The brief is "
+        "the contract. Widening `scope` is an edit to the brief followed by a fresh "
+        "baseline, not a decision to make mid-task.")
+    got_reason = json.loads(out).get("permissionDecisionReason")
+    extra.append(("cp-denial-reason-is-deterministic", got_reason == expected_reason,
+                  f"reason drifted:\n  got  {got_reason!r}\n  want {expected_reason!r}"))
+
+    # The decision object carries the decision and nothing else — no `allow`, no
+    # `modifiedArgs` rewriting the agent's call behind its back.
+    extra.append(("cp-denial-object-is-exactly-the-decision",
+                  set(json.loads(out)) == {"permissionDecision",
+                                           "permissionDecisionReason"},
+                  f"unexpected keys in the decision object: {sorted(json.loads(out))}"))
+
+    # --- one boundary, two hosts -------------------------------------------------
+    # The point of the shared core: for the same repo and the same path, the Claude
+    # adapter's exit code and the Copilot adapter's decision must agree. They disagree
+    # only in protocol.
+    agree = []
+    for rel in ("src/cart.py", "src/other.py", "golden/report.txt", "tests/test_cart.py",
+                ".prompire/ACTIVE", ".prompire/active-notes.md", "docs/secret/x.md"):
+        claude_rc, _ = run_hook(repo, "Write", rel, ".")
+        _, cp_out, _ = run_copilot(camel("create", {"path": rel}, repo))
+        cp_denied = bool(cp_out.strip())
+        if (claude_rc == 2) != cp_denied:
+            agree.append(f"{rel}: claude exit {claude_rc}, copilot denied={cp_denied}")
+    extra.append(("cp-both-hosts-read-one-boundary", not agree,
+                  f"the two adapters disagree about: {agree}"))
+
+    # --- PyYAML unimportable: which protections survive, on both hosts -----------
+    #
+    # Forced for real, at process level, with no test-only branch in the shipped code: a
+    # `yaml.py` on PYTHONPATH that raises on import makes `brief_common` explode inside
+    # `verdict_for`. That is neither OSError nor BriefError, so it reaches each
+    # adapter's catch-all.
+    #
+    # The split this pins is the whole point. `.prompire/ACTIVE`,
+    # `.prompire/ACTIVE.tombstones` and a NUL path are documented as refused
+    # UNCONDITIONALLY — README's guarantee paragraph and CLAUDE.md's Architecture
+    # section both say so without qualification — so they must survive an import that
+    # cannot happen, which is why `verdict_for` runs them in a first pass ABOVE the
+    # `from brief_common import …`. Everything brief-dependent below that import is
+    # infrastructure trouble and correctly fails open.
+    #
+    # This regressed once, silently, when the import was hoisted to the top of
+    # `verdict_for` during the two-host refactor: the unconditional pair started
+    # depending on PyYAML being installed and importable, and a half-installed venv was
+    # enough to let a forged-pointer write through. An ordinary-path case alone cannot
+    # see that — fail-open is the correct answer there — so the state-file and NUL cases
+    # below are the ones that actually hold the line.
+    shim = tmp / "cp-import-boom"
+    shim.mkdir(parents=True, exist_ok=True)
+    (shim / "yaml.py").write_text("raise RuntimeError('forced import failure')\n",
+                                  encoding="utf-8")
+    boom = {"PYTHONPATH": str(shim)}
+
+    # Sanity first: the shim really does break the import, so nothing below passes
+    # merely because nothing went wrong.
+    probe = subprocess.run([sys.executable, "-c", "import yaml"],
+                           capture_output=True, text=True, env=dict(os.environ, **boom))
+    extra.append(("broken-import-shim-actually-breaks-yaml", probe.returncode != 0,
+                  "the PYTHONPATH shim did not break `import yaml`, so every case below "
+                  "proves nothing"))
+
+    def claude_broken(rel):
+        return subprocess.run(
+            [sys.executable, HOOK],
+            input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                              "cwd": str(repo), "tool_input": {"file_path": rel}}),
+            capture_output=True, text=True, env=dict(os.environ, **boom)).returncode
+
+    # (name, path, claude_exit, copilot_wants_denial)
+    BROKEN_IMPORT = [
+        ("pointer", ".prompire/ACTIVE", 2, True),
+        ("tombstones", ".prompire/ACTIVE.tombstones", 2, True),
+        ("nested-pointer", "src/.prompire/ACTIVE", 2, True),
+        ("legacy-pointer", ".agent-brief/ACTIVE", 2, True),
+        ("legacy-tombstones", ".agent-brief/ACTIVE.tombstones", 2, True),
+        ("case-fold-pointer", ".PROMPIRE/active", 2, True),
+        ("nul-path", "src/x\x00.py", 2, True),
+        # The other half: a boundary question genuinely cannot be answered without the
+        # brief, so this one must still fail open on both hosts. A guard that started
+        # refusing ordinary writes whenever an unrelated import broke would be
+        # uninstalled by lunchtime, and an uninstalled guard protects nothing.
+        ("ordinary-file", "src/other.py", 0, False),
+    ]
+    for label, rel, want_claude, want_deny in BROKEN_IMPORT:
+        got = claude_broken(rel)
+        extra.append((f"broken-import-claude-{label}", got == want_claude,
+                      f"exit {got}, wanted {want_claude} — with PyYAML unimportable the "
+                      f"Claude adapter must behave exactly as it did before the "
+                      f"two-host refactor for {rel!r}"))
+        rc, out, err = run_copilot(camel("create", {"path": rel}, repo), env=boom)
+        denied = bool(out.strip())
+        ok = rc == 0 and not err.strip() and denied == want_deny
+        extra.append((f"broken-import-copilot-{label}", ok,
+                      f"exit {rc}, denied={denied} (wanted {want_deny}), stdout "
+                      f"{out.strip()[:120]!r}, stderr {err.strip()[:160]!r}"))
+
+    # --- a closed stdout must not become a denial --------------------------------
+    # Copilot reads ANY non-zero exit as a denial. If it stops reading our stdout — a
+    # killed session, a hook it abandoned — the write, or Python's own flush at
+    # interpreter exit, raises BrokenPipeError; unhandled that prints to stderr and exits
+    # 120, and the tool call is refused for a reason the brief never gave. Reproduced by
+    # closing the read end before the hook writes its decision.
+    proc = subprocess.Popen([sys.executable, COPILOT_HOOK], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc.stdout.close()
+    try:
+        proc.stdin.write(camel("create", {"path": "golden/report.txt"}, repo))
+        proc.stdin.close()
+    except OSError:
+        pass
+    pipe_rc = proc.wait()
+    pipe_err = proc.stderr.read()
+    proc.stderr.close()
+    extra.append(("cp-closed-stdout-is-not-a-denial",
+                  pipe_rc == 0 and not pipe_err.strip(),
+                  f"exit {pipe_rc}, stderr {pipe_err.strip()[:160]!r} — a broken pipe "
+                  "must not exit non-zero, which Copilot would read as a denial"))
+
+    # …and the OTHER way stdout can be unusable, which raises something else entirely.
+    # With fd 1 closed outright (`>&-`), Python sets `sys.stdout` to None and the write
+    # raises AttributeError, not OSError — so an enumerated `except (BrokenPipeError,
+    # OSError)` misses it and the process exits 1 with a traceback. Both branches are
+    # covered: the deny branch writes, and the NEUTRAL branch still flushes, so an
+    # ordinary in-scope write was refused by this too.
+    for label, rel in (("deny-branch", "golden/report.txt"),
+                       ("neutral-branch", "src/cart.py")):
+        closed = subprocess.run(
+            [sys.executable, COPILOT_HOOK],
+            input=camel("create", {"path": rel}, repo),
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            preexec_fn=lambda: os.close(1))
+        extra.append((f"cp-closed-stdout-fd-is-not-a-denial-{label}",
+                      closed.returncode == 0 and not (closed.stderr or "").strip(),
+                      f"exit {closed.returncode}, stderr "
+                      f"{(closed.stderr or '').strip()[:200]!r} — a closed stdout "
+                      "descriptor must not exit non-zero either"))
+
+    # The decision object is only ever built with "deny". `allow` would skip the
+    # permission prompt Copilot would otherwise show the operator, so it must not be
+    # constructible at all — checked against the source, since no input can produce it.
+    guard_src = pathlib.Path(COPILOT_HOOK).read_text(encoding="utf-8")
+    decisions = re.findall(r'"permissionDecision":\s*"(\w+)"', guard_src)
+    extra.append(("cp-only-deny-is-ever-constructed",
+                  decisions == ["deny"],
+                  f"the adapter constructs {decisions} — only ['deny'] is permitted"))
+
+    for name, ok, msg in extra:
+        if not ok:
+            bad.append(f"{name}: {msg}")
+        print(f"{'pass' if ok else 'FAIL'}  {name}")
+
+    shutil.rmtree(bare, ignore_errors=True)
+    return len(cases) + len(extra)
 
 
 def _deactivate(repo):

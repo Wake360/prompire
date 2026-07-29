@@ -2,7 +2,7 @@
 """Render a linted brief for one of the handover targets.
 
 Usage: python3 render_brief.py brief.yaml [--target generic,checklist] [--words]
-Targets: claude | generic | codex | agents.md | claude.md | checklist
+Targets: claude | generic | codex | copilot | agents.md | claude.md | checklist
 Exit 0 = rendered, 1 = a prompt target exceeded the 250-word budget, 2 = unreadable.
 
 Target semantics and the wording rules: references/rendering.md. The renderer is
@@ -26,9 +26,9 @@ from brief_common import (
     tests_policy_of,
 )
 
-TARGETS = ("claude", "generic", "codex", "agents.md", "claude.md", "checklist")
+TARGETS = ("claude", "generic", "codex", "copilot", "agents.md", "claude.md", "checklist")
 WORD_BUDGET = 250
-PROMPT_TARGETS = ("claude", "generic", "codex")
+PROMPT_TARGETS = ("claude", "generic", "codex", "copilot")
 
 SKILL_DIR = pathlib.Path(__file__).resolve().parent
 
@@ -144,6 +144,9 @@ def render_prompt(brief, brief_path, flavour):
         lines += ["Done when all of these hold:"]
     lines += numbered(brief)
     lines.append("")
+    if flavour == "copilot":
+        manual = [str(m) for m in as_list(brief.get("manual_checks"))]
+        lines += _bullets("No command covers these; a human confirms them:", manual)
     ts = tests_sentence(brief)
     if ts:
         lines += [ts, ""]
@@ -151,8 +154,15 @@ def render_prompt(brief, brief_path, flavour):
         lines += ["Write the plan first and get it approved before editing anything.", ""]
     lines += [autonomy_sentence(brief), ""]
     rel = brief_path if flavour != "generic" else "the brief"
-    lines += [f"After you stop, the diff is checked from outside with `check_scope.py "
-              f"{rel}`. A file changed outside the list above fails it."]
+    if flavour == "copilot":
+        lines += ["A preToolUse hook may refuse an out-of-scope file write before it "
+                  "lands; it does not see shell commands. After you stop, the real git "
+                  f"diff is checked from outside with `check_scope.py {rel}`. A file "
+                  "changed outside the list above fails it. Do not edit the brief or "
+                  "Prompire's state files."]
+    else:
+        lines += [f"After you stop, the diff is checked from outside with `check_scope.py "
+                  f"{rel}`. A file changed outside the list above fails it."]
     ctx = str(brief.get("context") or "").strip()
     if ctx:
         lines += ["", ctx]
@@ -210,7 +220,7 @@ def render_checklist(brief, brief_path):
 
 
 def render(brief, brief_path, target):
-    if target in ("claude", "generic", "codex"):
+    if target in PROMPT_TARGETS:
         return render_prompt(brief, brief_path, target)
     if target == "agents.md":
         return render_durable(brief, "# AGENTS.md — durable rules for this repo")

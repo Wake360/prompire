@@ -19,15 +19,18 @@ check_scope.py brief.yaml --strict        did the agent stay inside the boundary
 check_scope.py brief.yaml --strict --ack-disarms <digest>   …once a repin is read and accepted
 ```
 
-Python 3 and PyYAML. Nothing else — no service, no key, no network.
+`X` is one of `claude`, `generic`, `codex`, `copilot`, `agents.md`, `claude.md`,
+`checklist`. Python 3 and PyYAML. Nothing else — no service, no key, no network.
 
 ## Two layers, neither sufficient alone
 
-**A PreToolUse hook** (`hook_scope_guard.py`) refuses an out-of-scope write before it
-lands. It is cheap and early, and it is evadable by design: it sees `Write`, `Edit`,
-`MultiEdit` and `NotebookEdit`, and it does not see `Bash`. It is a speed bump against
-accidental and lazy scope drift. It is not a sandbox and must not be described as
-prevention.
+**A PreToolUse hook** refuses an out-of-scope write before it lands. It is cheap and
+early, and it is evadable by design: on Claude Code (`hook_scope_guard.py`) it sees
+`Write`, `Edit`, `MultiEdit` and `NotebookEdit`; on GitHub Copilot CLI
+(`hook_copilot_guard.py`) it sees `create`, `edit`, `str_replace_editor` and
+`apply_patch`. On neither host does it see the shell — not `Bash`, not `powershell`. It
+is a speed bump against accidental and lazy scope drift. It is not a sandbox and must
+not be described as prevention.
 
 **`check_scope.py`** reads the real git diff after the agent stops. This is the
 authority, because git sees the write whatever tool made it. It needs no cooperation
@@ -38,6 +41,11 @@ The hook exists because a violation caught before it lands costs nothing to undo
 checker exists because the hook can be walked around. Running only the hook gives you a
 guard with a documented hole; running only the checker gives you a post-mortem. The
 design is both.
+
+Two hosts, one boundary: both adapters are thin protocol shims over `hook_policy.py`,
+which is the only caller of the `boundary_verdict`/`tests_verdict` that `check_scope.py`
+also calls. A second interpretation of `scope` is the one thing that split must never
+grow. Install locations and hook configuration for both hosts: `references/hosts.md`.
 
 ## The guarantee
 
@@ -97,11 +105,11 @@ python3 check_scope.py .prompire/task.yaml --deactivate
 `.prompire/` belongs in `.gitignore`. The briefs are local task specs, and the
 guard's state files (`ACTIVE`, `ACTIVE.tombstones`) are not history.
 
-## Installing the hook
+## Installing the hook — Claude Code and GitHub Copilot CLI
 
 The hook is optional and machine-wide: once installed it runs on every `Write`/`Edit` in
-every project, and does nothing at all in a repository with no armed brief. Add to
-`~/.claude/settings.json`:
+every project, and does nothing at all in a repository with no armed brief. On Claude
+Code, add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -136,6 +144,36 @@ afterwards. It fails closed only on a definite verdict.
 
 To remove it, delete the `PreToolUse` entry from `~/.claude/settings.json`.
 
+### GitHub Copilot CLI
+
+Copilot uses its own hook file and its own way of saying no. User-level example
+(`examples/hooks/copilot-user.json`):
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "create|edit|str_replace_editor|apply_patch",
+        "bash": "python3 \"$HOME/.copilot/skills/prompire/hook_copilot_guard.py\"",
+        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\hook_copilot_guard.py\"",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}
+```
+
+**It never exits non-zero.** Copilot CLI treats a crash or any non-zero exit from a
+command `preToolUse` hook as a denial, the opposite of the fail-open behaviour this guard
+needs. So `hook_copilot_guard.py` always exits 0: a definite violation is exit 0 plus one
+`{"permissionDecision":"deny",…}` object on stdout, and everything else — including its
+own trouble — is exit 0 with empty stdout, leaving the call in Copilot's normal
+permission flow rather than silently approving it. Full install locations, both payload
+shapes, and the complete failure-semantics table: `references/hosts.md`.
+
 ## Limitations
 
 These are known, reproduced, and stated here rather than in a footnote. None is a
@@ -149,6 +187,7 @@ surprise to the design; each is a place where the tool's claim stops.
 | **A hand-written `ACTIVE` containing `../..`** loads a brief from outside the root: `norm_path` strips leading `./` and slashes, not `..`. | No watched tool can write such a pointer — the depth-agnostic shape check blocks every spelling, confirmed against 11 attempts. Writing pointers is `--activate`'s business. |
 | **A rename-out VIOLATION names only the destination**, so it does not say which test vanished. | Cosmetic. Byte-identity with the pre-refactor checker was a hard constraint when the checker was rewired, and changing the message was out of scope there. |
 | **`rel.lower()`/`casefold` adequacy for the two ASCII literals is filesystem-dependent.** | Probed: on APFS, `active` and `AcTiVe` fold onto `ACTIVE` and are blocked; Turkish dotless ı, fullwidth forms, the Kelvin sign, a trailing dot and a trailing space each create a *distinct* file and cannot clobber the real one. The brief-identity check does not use string comparison at all — it uses device+inode identity. |
+| **An `apply_patch` envelope the Copilot adapter cannot parse draws no verdict at all.** | The adapter refuses to guess which files an unreadable patch touches — a partial read would let a multi-file patch's second, out-of-scope file ride in on the first file's approval. `check_scope.py` on the resulting git diff is what catches it instead. |
 
 Two more, from operating it rather than from attacking it:
 
@@ -192,6 +231,8 @@ what was declared was pinned before the work began.
 ## Documentation
 
 - `SKILL.md` — the workflow, the brief shape, the hard rules.
+- `references/hosts.md` — running on Claude Code and GitHub Copilot CLI: install
+  locations, hook configuration, the failure-semantics table.
 - `references/schema.md` — every field, every edge case.
 - `references/rules.md` — the sixteen lint rules and what each can and cannot catch.
 - `references/grounding.md` — where each rule comes from.
