@@ -12,6 +12,7 @@ import json
 import pathlib
 import re
 import sys
+import tomllib
 
 import yaml
 
@@ -59,29 +60,135 @@ OVERCLAIMS = ("sandboxed", "fully secure", "cannot be bypassed", "cannot bypass"
 PROSE = ("README.md", "SKILL.md", "references/hosts.md", "references/rendering.md",
          "references/rules.md", "references/schema.md", "references/maintaining.md")
 
+EXPECTED_INTERFACE = {
+    "display_name": "Prompire",
+    "short_description": "Create checkable briefs for coding agents",
+    "default_prompt": (
+        "Use $prompire to turn this coding request into a measured, bounded brief."
+    ),
+}
+
+PRIMARY_WORKFLOWS = (
+    ("SKILL.md", "Primary workflow"),
+    ("README.md", "Host-neutral workflow"),
+    ("references/hosts.md", "Primary workflow"),
+)
+
+DIAGNOSTIC_TOOLS = (
+    "baseline.py",
+    "lint_brief.py",
+    "render_brief.py",
+    "check_scope.py",
+)
+
 
 def read(rel):
     return (SKILL / rel).read_text(encoding="utf-8")
 
 
+def markdown_section(text, heading):
+    match = re.search(
+        rf"^## {re.escape(heading)}\s*\n(.*?)(?=^## |\Z)",
+        text,
+        re.M | re.S,
+    )
+    return match.group(1) if match else None
+
+
+def workflow_commands(section):
+    blocks = re.findall(r"```(?:bash|sh)\n(.*?)```", section, re.S)
+    return [
+        line.strip()
+        for block in blocks
+        for line in block.splitlines()
+        if line.strip().startswith("prompire ")
+    ]
+
+
 def cli_problems():
     out = []
-    skill = read("SKILL.md")
-    readme = read("README.md")
-    pyproject = read("pyproject.toml")
+    for rel, heading in PRIMARY_WORKFLOWS:
+        text = read(rel)
+        if re.search(
+                r"\bprompire\s+(?:(?:can|will)\s+)?"
+                r"(?:launch|launches|start|starts|control|controls)\s+"
+                r"(?:an?|the)\s+(?:coding\s+)?agent\b",
+                text,
+                re.I):
+            out.append(f"{rel} contradicts Prompire's no-launch boundary")
+        section = markdown_section(text, heading)
+        if section is None:
+            out.append(f"{rel} has no `## {heading}` section")
+            continue
+        commands = workflow_commands(section)
+        expected = [
+            re.compile(r"^prompire prepare (\.prompire/\S+\.yaml) --target generic$"),
+            re.compile(r"^prompire verify (\.prompire/\S+\.yaml)$"),
+            re.compile(r"^prompire close (\.prompire/\S+\.yaml)$"),
+        ]
+        matches = [
+            pattern.fullmatch(command)
+            for pattern, command in zip(expected, commands)
+        ]
+        if len(commands) != 3 or not all(matches):
+            out.append(
+                f"{rel}'s primary workflow must order exact prepare → verify → close "
+                "commands, with `--target generic` on prepare"
+            )
+        elif len({match.group(1) for match in matches}) != 1:
+            out.append(f"{rel}'s primary workflow uses different brief paths")
 
-    for command in ("prompire prepare", "prompire verify", "prompire close"):
-        if command not in skill:
-            out.append(f"SKILL.md does not document `{command}`")
-        if command not in readme:
-            out.append(f"README.md does not document `{command}`")
+        for pattern, why in (
+                (r"\bbefore\s+handoff\b", "does not place prepare before handoff"),
+                (r"\bafter\s+the\s+agent\s+stops\b",
+                 "does not place verify after the agent"),
+                (r"\bclose\s+the\s+guard\b", "does not close the lifecycle"),
+                (r"\bprompire\s+does\s+not\s+launch(?:\s+or\s+control)?\s+the\s+agent\b",
+                 "does not state the no-launch boundary"),
+                (r"\bscope\s+and\s+acceptance\b",
+                 "does not describe verify's combined verdict")):
+            if not re.search(pattern, section, re.I):
+                out.append(f"{rel}'s primary workflow {why}")
 
-    if 'prompire = "prompire:entrypoint"' not in pyproject:
-        out.append("pyproject.toml does not expose the prompire command")
+        diagnostic = markdown_section(text, "Diagnostic commands")
+        if diagnostic is None:
+            out.append(f"{rel} has no `## Diagnostic commands` section")
+            continue
+        if "prompire verify" not in diagnostic:
+            out.append(
+                f"{rel}'s diagnostic section does not direct combined verdicts to "
+                "`prompire verify`"
+            )
+        for tool in DIAGNOSTIC_TOOLS:
+            if tool not in diagnostic:
+                out.append(f"{rel}'s diagnostic section never names `{tool}`")
 
-    metadata = SKILL / "agents" / "openai.yaml"
-    if not metadata.is_file():
+    try:
+        pyproject = tomllib.loads(read("pyproject.toml"))
+    except tomllib.TOMLDecodeError as exc:
+        out.append(f"pyproject.toml is invalid TOML: {exc}")
+    else:
+        entrypoint = pyproject.get("project", {}).get("scripts", {}).get("prompire")
+        if entrypoint != "prompire:entrypoint":
+            out.append(
+                "pyproject.toml must expose `project.scripts.prompire` as "
+                "`prompire:entrypoint`"
+            )
+
+    metadata_path = SKILL / "agents" / "openai.yaml"
+    if not metadata_path.is_file():
         out.append("missing agents/openai.yaml")
+    else:
+        try:
+            metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            out.append(f"agents/openai.yaml is invalid YAML: {exc}")
+        else:
+            if metadata != {"interface": EXPECTED_INTERFACE}:
+                out.append(
+                    "agents/openai.yaml must contain exactly the required interface "
+                    f"metadata, got {metadata!r}"
+                )
     return out
 
 
