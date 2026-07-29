@@ -29,8 +29,7 @@ with tempfile.TemporaryDirectory() as tmp:
     command = scripts / ("prompire.exe" if sys.platform == "win32" else "prompire")
 
     installed = subprocess.run(
-        [str(python), "-m", "pip", "install", "--no-deps",
-         "--no-build-isolation", str(ROOT)],
+        [str(python), "-m", "pip", "install", "--no-deps", str(ROOT)],
         capture_output=True,
         text=True,
     )
