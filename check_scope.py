@@ -163,6 +163,13 @@ def _loads(path):
         return False
 
 
+def active_brief(root):
+    """The repo-relative brief enforced by the live pointer, or None."""
+    cur = read_pointer(root)
+    rel = cur["brief"]
+    return rel if rel and _loads(pathlib.Path(root) / rel) else None
+
+
 def activate(brief, rel_brief, brief_path, root):
     """Point .prompire/ACTIVE at this brief so the PreToolUse hook enforces it, and
     record what the brief said while it still said it honestly.
@@ -190,8 +197,9 @@ def activate(brief, rel_brief, brief_path, root):
     # A pointer whose brief does not load is not a live guard — the hook walks straight
     # past it — so it must not lock arming out of the repo either. That covers a pointer
     # with no path line at all, whose first line reads as some other record entirely.
-    if cur["brief"] and cur["brief"] != rel_brief and _loads(root / cur["brief"]):
-        print(f"refused: `{cur['brief']}` is already active here, and arming a second "
+    live = active_brief(root)
+    if live and live != rel_brief:
+        print(f"refused: `{live}` is already active here, and arming a second "
               "brief would overwrite what was recorded for it.\nrun `check_scope.py "
               "--deactivate` first — turning a guard off is meant to leave a trace")
         return 2

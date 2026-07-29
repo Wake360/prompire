@@ -945,6 +945,35 @@ autonomy: ask
          f"--deactivate with flag-first order should remove the pointer: {r.stdout}{r.stderr}")
 
 
+@case("active-brief-query-matches-activation")
+def _(repo, c):
+    sys.path.insert(0, str(SKILL))
+    from check_scope import active_brief
+
+    p, _ = measured(repo, "status", """
+goal: Keep the cart behavior unchanged.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+autonomy: ask
+""")
+
+    c.ok(active_brief(pathlib.Path(repo)) is None, "nothing is active before arming")
+    armed = tool("check_scope.py", p, "--activate")
+    c.ok(armed.returncode == 0, armed.stdout + armed.stderr)
+    c.ok(active_brief(pathlib.Path(repo)) == ".prompire/status.yaml",
+         "the query returns the brief the guard enforces")
+
+    dead = pathlib.Path(repo) / ".prompire" / "missing.yaml"
+    (pathlib.Path(repo) / ".prompire" / "ACTIVE").write_text(
+        ".prompire/missing.yaml\n", encoding="utf-8")
+    c.ok(not dead.exists() and active_brief(pathlib.Path(repo)) is None,
+         "a pointer to an unreadable brief is not a live guard")
+
+
 @case("no-base-and-no-flag-refuses-a-verdict")
 def _(repo, c):
     """Fix round 2: a brief that never sees lint_brief.py (or is hand-edited after)
