@@ -8,7 +8,17 @@ import subprocess
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
-SUITES = ("battery.py", "e2e.py", "examples.py", "golden.py", "docs.py", "hook.py")
+SUITES = (
+    "battery.py",
+    "e2e.py",
+    "examples.py",
+    "golden.py",
+    "docs.py",
+    "hook.py",
+    "verify.py",
+    "cli.py",
+    "package.py",
+)
 
 
 def main():

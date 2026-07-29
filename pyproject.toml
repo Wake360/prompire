@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompire"
+version = "0.6.0"
+description = "Compile coding-agent requests into checkable briefs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = ["PyYAML>=6"]
+
+[project.scripts]
+prompire = "prompire:entrypoint"
+
+[tool.setuptools]
+py-modules = [
+  "prompire",
+  "baseline",
+  "brief_common",
+  "check_scope",
+  "hook_policy",
+  "hook_scope_guard",
+  "hook_copilot_guard",
+  "lint_brief",
+  "render_brief",
+  "verify_acceptance",
+]
