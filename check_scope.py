@@ -29,6 +29,7 @@ satisfy it. Semantics: references/schema.md (scope, forbidden, tests_policy).
 VIOLATION is mechanical: the path changed and the brief did not allow it.
 REVIEW is a flag for a human: something a diff can show but no checker can judge.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -64,6 +65,7 @@ SHA_RE = re.compile(r"[0-9a-fA-F]{7,40}")
 # commit: long enough that a reviewer cannot type a fragment ambiguous with some other
 # state of the log, short enough to read off a terminal.
 ACK_DIGEST_RE = re.compile(r"[0-9a-fA-F]{12,64}")
+LOCK_WAIT_SECONDS = 5
 
 # How the base being diffed against was established. Printed on every run: a reader who
 # does not know which of these applied cannot know how much the verdict is worth.
@@ -96,6 +98,34 @@ def repo_root(start):
 
 def active_path(root):
     return pathlib.Path(root) / ".prompire" / "ACTIVE"
+
+
+def state_lock_path(root):
+    return pathlib.Path(root) / ".prompire" / "ACTIVE.lock"
+
+
+@contextlib.contextmanager
+def guard_state_lock(root):
+    lock = state_lock_path(root)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RepoError(f"timed out waiting for guard-state lock {lock}")
+            time.sleep(0.01)
+        except OSError as exc:
+            raise RepoError(f"could not acquire guard-state lock {lock}: {exc}") from exc
+    try:
+        yield
+    finally:
+        try:
+            lock.rmdir()
+        except OSError as exc:
+            raise RepoError(f"could not release guard-state lock {lock}: {exc}") from exc
 
 
 def tombstone_path(root):
@@ -170,7 +200,7 @@ def active_brief(root):
     return rel if rel and _loads(pathlib.Path(root) / rel) else None
 
 
-def activate(brief, rel_brief, brief_path, root):
+def _activate_locked(brief, rel_brief, brief_path, root):
     """Point .prompire/ACTIVE at this brief so the PreToolUse hook enforces it, and
     record what the brief said while it still said it honestly.
 
@@ -238,6 +268,15 @@ def activate(brief, rel_brief, brief_path, root):
     return 0
 
 
+def activate(brief, rel_brief, brief_path, root):
+    try:
+        with guard_state_lock(root):
+            return _activate_locked(brief, rel_brief, brief_path, root)
+    except RepoError as exc:
+        print(str(exc))
+        return 2
+
+
 def any_disarm(root):
     """Has any guard been disarmed in this repo? True, False, or "unreadable".
 
@@ -303,16 +342,15 @@ def _unreadable_tombstone_path(root):
     return None
 
 
-def deactivate(start):
-    p = pathlib.Path(start).resolve()
-    if p.is_file():
-        p = p.parent          # callers pass the brief, not the directory holding it
-    try:
-        root = repo_root(p)
-    except RepoError as e:
-        print(str(e))
-        return 2
+def _deactivate_locked(root, expected_brief=None):
     cur = read_pointer(root)
+    if expected_brief is not None:
+        expected_brief = norm_path(expected_brief)
+        live = active_brief(root)
+        if live != expected_brief:
+            current = f"`{live}` is active" if live else "no brief is active"
+            print(f"refused: `{expected_brief}` is not active; {current}")
+            return 2
     p = active_path(root)
     if p.exists():
         # Turning the guard off must succeed even when the log cannot be appended to —
@@ -362,6 +400,19 @@ def deactivate(start):
     else:
         print("no active brief")
     return 0
+
+
+def deactivate(start, expected_brief=None):
+    p = pathlib.Path(start).resolve()
+    if p.is_file():
+        p = p.parent          # callers pass the brief, not the directory holding it
+    try:
+        root = repo_root(p)
+        with guard_state_lock(root):
+            return _deactivate_locked(root, expected_brief)
+    except RepoError as e:
+        print(str(e))
+        return 2
 
 
 def git_show(root, rev, rel):
@@ -629,7 +680,14 @@ def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
 
     if "--deactivate" in argv:
-        return deactivate(args[0] if args else pathlib.Path.cwd())
+        expected = None
+        if "--expect-brief" in argv:
+            idx = argv.index("--expect-brief")
+            if idx + 1 >= len(argv) or argv[idx + 1].startswith("--"):
+                print("`--expect-brief` requires the repo-relative active brief path")
+                return 2
+            expected = argv[idx + 1]
+        return deactivate(args[0] if args else pathlib.Path.cwd(), expected)
 
     if not args:
         print(__doc__.strip())

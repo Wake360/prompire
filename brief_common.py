@@ -141,6 +141,8 @@ def load_brief(path):
             data = yaml.safe_load(f)
     except OSError as e:
         raise BriefError(f"cannot read {path}: {e}") from e
+    except UnicodeError as e:
+        raise BriefError(f"cannot decode {path} as UTF-8: {e}") from e
     except yaml.YAMLError as e:
         raise BriefError(f"cannot parse {path}: {e}") from e
     if not isinstance(data, dict):

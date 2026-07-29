@@ -24,6 +24,7 @@ CASES = (
     "unsafe criterion is not executed",
     "unreadable brief returns exit 2",
     "before_after digest mismatch returns exit 1",
+    "before_after missing digest returns exit 1",
 )
 
 
@@ -156,6 +157,25 @@ def test_unreadable_brief_returns_exit_2():
         cli = run_cli(invalid_utf8)
         assert cli.returncode == 2, cli.stdout + cli.stderr
         assert "Traceback" not in cli.stderr, cli.stderr
+        json_results = (
+            run_cli(missing, "--json"),
+            run_cli(invalid_utf8, "--json"),
+            subprocess.run(
+                [sys.executable, str(SKILL / "verify_acceptance.py"), "--json"],
+                capture_output=True, text=True, env=ENV,
+            ),
+        )
+        for result in json_results:
+            assert result.returncode == 2, result.stdout + result.stderr
+            try:
+                payload = json.loads(result.stdout)
+            except json.JSONDecodeError as error:
+                raise AssertionError(
+                    f"--json error output is not one object: {result.stdout!r}"
+                ) from error
+            assert payload["status"] == "indeterminate", payload
+            assert payload["error"], payload
+            assert result.stderr == "", result.stderr
 
 
 # Break caught: treating changed before/after output as valid when its digest changed.
@@ -188,6 +208,34 @@ baseline:
         assert payload["results"][0]["actual_digest"] != "2cf24dba5fb0", payload
 
 
+def test_before_after_missing_digest_returns_exit_1():
+    with tempfile.TemporaryDirectory(prefix="prompire-verify-") as tmp:
+        repo = fixtures.build(pathlib.Path(tmp) / "repo")
+        path = brief(repo, "missing-digest", """
+goal: Preserve the generated output.
+scope: [src/report.py]
+acceptance:
+  - cmd: python -c "print('stable')"
+    expect: exit 0
+    before_after: true
+baseline:
+  - cmd: python -c "print('stable')"
+    status: pass
+    evidence: exit 0, 1 line(s) stdout, 0.0s
+""")
+
+        result = verify(str(path))
+        cli = run_cli(path, "--json")
+
+        row = result["results"][0]
+        assert result["failed"] == 1, result
+        assert row["ok"] is False, row
+        assert row["expected_digest"] is None, row
+        assert "missing" in str(row["reason"]).lower(), row
+        assert "digest" in str(row["reason"]).lower(), row
+        assert cli.returncode == 1, cli.stdout + cli.stderr
+
+
 def main_test():
     tests = (
         test_green_criterion_remains_green,
@@ -196,12 +244,14 @@ def main_test():
         test_unsafe_criterion_is_not_executed,
         test_unreadable_brief_returns_exit_2,
         test_before_after_digest_mismatch_returns_exit_1,
+        test_before_after_missing_digest_returns_exit_1,
     )
     failures = []
     with tempfile.TemporaryDirectory(prefix="prompire-verify-tools-") as directory:
         tool_dir = pathlib.Path(directory)
         if os.name == "nt":
-            (tool_dir / "python.cmd").write_text(f'"{sys.executable}" %*\n', encoding="utf-8")
+            (tool_dir / "python.cmd").write_text(
+                f'@"{sys.executable}" %*\n', encoding="utf-8")
         else:
             (tool_dir / "python").symlink_to(sys.executable)
         ENV["PATH"] = str(tool_dir) + os.pathsep + ENV["PATH"]

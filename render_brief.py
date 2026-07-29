@@ -8,7 +8,10 @@ Exit 0 = rendered, 1 = a prompt target exceeded the 250-word budget, 2 = unreada
 Target semantics and the wording rules: references/rendering.md. The renderer is
 deterministic — same brief, same bytes — so `tests/golden/` can pin every target.
 """
+import os
 import pathlib
+import shlex
+import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -27,6 +30,7 @@ from brief_common import (
 )
 
 TARGETS = ("claude", "generic", "codex", "copilot", "agents.md", "claude.md", "checklist")
+CLI_CHECKLIST_TARGET = "_cli-checklist"
 WORD_BUDGET = 250
 PROMPT_TARGETS = ("claude", "generic", "codex", "copilot")
 
@@ -191,9 +195,14 @@ def render_durable(brief, heading):
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_checklist(brief, brief_path):
+def cli_scope_command(brief_path):
+    command = ["prompire", "scope", str(brief_path), "--strict"]
+    return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
+
+
+def render_checklist(brief, brief_path, guard=None):
     slug = pathlib.Path(brief_path).stem
-    guard = f"python3 {skill_path('check_scope.py')} {brief_path}"
+    guard = guard or f"python3 {skill_path('check_scope.py')} {brief_path}"
     lines = [f"# Checklist — {slug}", "",
              "Run from the repo root. Every box is something you can see for yourself.",
              "",
@@ -229,6 +238,8 @@ def render(brief, brief_path, target):
                                      "expires with the task. -->")
     if target == "checklist":
         return render_checklist(brief, brief_path)
+    if target == CLI_CHECKLIST_TARGET:
+        return render_checklist(brief, brief_path, cli_scope_command(brief_path))
     raise BriefError(f"unknown target `{target}` — one of: " + " | ".join(TARGETS))
 
 

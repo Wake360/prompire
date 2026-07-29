@@ -44,9 +44,9 @@ prompire close .prompire/<slug>.yaml
 
 ### Combined verdict
 
-The CLI runs the measured baseline, lint, generic rendering, guard activation, strict
-scope check, acceptance verification, and deactivation. Use `prompire verify` for the
-combined scope and acceptance verdict.
+`prompire verify` runs a strict scope preflight, acceptance verification, and a final
+strict scope check. It never closes the guard. Only an explicit `prompire close`
+deactivates it.
 
 ### Individual tools
 
