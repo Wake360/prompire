@@ -37,7 +37,7 @@ tests/
 ## Run everything
 
 ```
-python3 ~/.claude/skills/prompire/tests/run_all.py
+python3 tests/run_all.py
 ```
 
 Exit 0 = every suite passes. Individually:
@@ -122,20 +122,58 @@ a brief that is not on disk has no digest, so `armed_verdict`'s digest refusal a
 coverage gap, so the branch stays reachable only from a caller that already holds a
 parsed brief, pinned by `tests/e2e.py`'s `brief-deleted-after-the-baseline`.
 
-## The mirror
+## The copies
 
-The canonical copy is `~/.claude/skills/prompire/`. `~/LifeOS/scripts/prompire/`
-is a git-tracked mirror so the skill has a history. After editing the canonical copy:
-
-```
-rsync -a --delete ~/.claude/skills/prompire/ ~/LifeOS/scripts/prompire/ \
-  --exclude __pycache__
-```
-
-Then confirm they match:
+**The git repository is canonical.** Work happens there and the history lives there.
+Everything else is downstream and is overwritten by a sync, so a change made anywhere
+else is a change waiting to be deleted.
 
 ```
-diff -r ~/.claude/skills/prompire ~/LifeOS/scripts/prompire -x __pycache__
+<repo>                          canonical — edit here, commit here
+~/.claude/skills/prompire/      installed skill, Claude Code
+~/.copilot/skills/prompire/     installed skill, GitHub Copilot CLI
+~/LifeOS/scripts/prompire/      older mirror, from before the repo existed
 ```
 
-Never edit the mirror directly — the next rsync deletes the change.
+This inverted once already. The canonical copy used to be `~/.claude/skills/prompire/`,
+with the LifeOS mirror existing purely to give the skill a git history — a job the
+repository now does. Both installs and the mirror are downstream of the repo today, and
+a sync run in the old direction would overwrite the repository with a stale install.
+Check which way you are pointing before running any of these.
+
+Push the repo out to both installs after a change lands:
+
+```
+rsync -a --delete <repo>/ ~/.claude/skills/prompire/ \
+  --exclude __pycache__ --exclude .git --exclude .github --exclude .gitignore \
+  --exclude CLAUDE.md --exclude .prompire --exclude .agent-brief
+rsync -a --delete <repo>/ ~/.copilot/skills/prompire/ \
+  --exclude __pycache__ --exclude .git --exclude .github --exclude .gitignore \
+  --exclude CLAUDE.md --exclude .prompire --exclude .agent-brief
+```
+
+Then confirm each matches:
+
+```
+diff -r <repo> ~/.claude/skills/prompire \
+  -x __pycache__ -x .git -x .github -x .gitignore -x CLAUDE.md
+```
+
+Four of those excludes are the repository's own scaffolding, which an installed skill has
+no use for: `.git`, `.github`, `.gitignore`, `CLAUDE.md`.
+
+**`--exclude .prompire` and `--exclude .agent-brief` are not tidiness.** `--delete` would
+otherwise remove whatever state a destination is carrying — briefs, and in the worst case
+an `ACTIVE.tombstones` recording that a guard was once disarmed. A disarm log a sync can
+erase is not a log, and `any_disarm()` reads both directory names. The LifeOS mirror is
+carrying seven dogfood briefs under `.prompire/` right now; without these two excludes the
+command above deletes them.
+
+After syncing, run the suite from the destination, not only from the repo — that is what
+proves the install is complete rather than merely recent:
+
+```
+python3 ~/.claude/skills/prompire/tests/run_all.py
+```
+
+Never edit an install or the mirror directly. The next sync deletes the change, silently.
