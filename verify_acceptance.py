@@ -72,7 +72,7 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         result = verify(args[0])
-    except (BriefError, RepoError) as error:
+    except (BriefError, RepoError, UnicodeDecodeError) as error:
         print(str(error))
         return 2
 

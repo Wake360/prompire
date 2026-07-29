@@ -145,10 +145,15 @@ baseline:
 def test_unreadable_brief_returns_exit_2():
     with tempfile.TemporaryDirectory(prefix="prompire-verify-") as tmp:
         missing = pathlib.Path(tmp) / "missing.yaml"
+        invalid_utf8 = pathlib.Path(tmp) / "invalid-utf8.yaml"
+        invalid_utf8.write_bytes(b"\xff")
 
         assert main(["verify_acceptance.py", str(missing)]) == 2
         cli = run_cli(missing)
         assert cli.returncode == 2, cli.stdout + cli.stderr
+        cli = run_cli(invalid_utf8)
+        assert cli.returncode == 2, cli.stdout + cli.stderr
+        assert "Traceback" not in cli.stderr, cli.stderr
 
 
 # Break caught: treating changed before/after output as valid when its digest changed.
