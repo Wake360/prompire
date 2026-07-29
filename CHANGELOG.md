@@ -3,6 +3,30 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.6.0 — 2026-07-29
+
+**Prompire now has a host-neutral, cross-platform command.**
+
+### Added
+
+- `prompire prepare`, which measures, lints, renders, writes artifacts, and arms in that order.
+- `prompire verify`, which combines the strict git-diff verdict with post-work acceptance checks.
+- `prompire status` and `prompire close`.
+- `pipx`, `uv tool`, and `python -m prompire` entry points.
+- CLI workflow coverage for macOS, Linux, and Windows.
+
+### Compatibility
+
+- Existing YAML briefs are unchanged.
+- Existing Python script entry points remain supported.
+- Existing renderer output remains byte-identical.
+
+### Limits
+
+- The CLI does not launch or supervise agents.
+- Generic hosts do not receive a pre-write hook. They receive the rendered contract and the post-run git-diff verdict.
+- Commands declared unsafe or environment-dependent are reported as `NOT RUN`; Prompire does not execute them automatically.
+
 ## 0.5.0 — 2026-07-29
 
 **GitHub Copilot CLI is now a supported agent host, alongside Claude Code.** CLI only —
