@@ -7,7 +7,7 @@ import pathlib
 import subprocess
 import sys
 
-from check_scope import active_brief, read_pointer, repo_root
+from check_scope import RepoError, active_brief, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
 TOOLS = {
@@ -18,6 +18,7 @@ TOOLS = {
     "acceptance": "verify_acceptance.py",
 }
 PROMPT_TARGETS = ("generic", "claude", "codex", "copilot")
+LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
 
 
 def run_tool(name, *args):
@@ -96,7 +97,10 @@ def prepare(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
     brief = pathlib.Path(args.brief)
-    root = repo_root(brief.resolve().parent)
+    try:
+        root = repo_root(brief.resolve().parent)
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
     live = active_brief(root)
     if live:
         return report_refusal(
@@ -161,13 +165,29 @@ def verify(args, extra):
 def close(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra))
+    brief = pathlib.Path(args.brief)
+    try:
+        root = repo_root(brief.resolve().parent)
+    except RepoError as exc:
+        return report_refusal(str(exc))
+    try:
+        requested = brief.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return report_refusal(f"`{brief}` is outside the repository at {root}")
+    live = active_brief(root)
+    if live != requested:
+        current = f"`{live}` is active" if live else "no brief is active"
+        return report_refusal(f"`{requested}` is not active; {current}")
     return emit_process(run_tool("scope", args.brief, "--deactivate"))
 
 
 def status(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
-    root = repo_root(pathlib.Path(args.brief).resolve().parent)
+    try:
+        root = repo_root(pathlib.Path(args.brief).resolve().parent)
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
     live = active_brief(root)
     if not live:
         data = {"status": "inactive"}
@@ -215,7 +235,7 @@ def build_parser():
     stated.add_argument("--json", action="store_true")
     stated.set_defaults(handler=status)
 
-    for name in ("baseline", "lint", "render", "scope"):
+    for name in LOW_LEVEL_COMMANDS:
         low = commands.add_parser(name)
         low.set_defaults(handler=passthrough(name))
     return parser
@@ -223,6 +243,8 @@ def build_parser():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in LOW_LEVEL_COMMANDS:
+        return emit_process(run_tool(argv[0], *argv[1:]))
     parser = build_parser()
     args, extra = parser.parse_known_args(argv)
     return args.handler(args, extra)

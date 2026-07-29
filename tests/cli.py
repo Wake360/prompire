@@ -47,7 +47,7 @@ def run(*args):
 
 def brief(repo, name="task", extra=""):
     path = pathlib.Path(repo) / ".prompire" / f"{name}.yaml"
-    path.parent.mkdir(exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("""\
 goal: Add a count helper to src/cart.py.
 scope: [src/cart.py]
@@ -113,6 +113,40 @@ def _(repo, checks):
               "a failed lint must not arm the guard")
 
 
+@case("prepare returns structured exit 2 outside a git repository")
+def _(repo, checks):
+    outside = pathlib.Path(repo).parent / "outside-prepare"
+    path = brief(outside)
+    result = run("prepare", path, "--json")
+    checks.equal(result.returncode, 2, "repository discovery refusal exit")
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        data = {}
+        checks.ok(False, f"repository discovery stdout must be JSON: {result.stdout!r}")
+    checks.equal(data.get("status"), "refused", "repository discovery JSON status")
+    checks.ok("not inside a git repository" in data.get("message", ""),
+              "repository discovery refusal must retain the cause")
+    checks.ok("Traceback" not in result.stderr, "repository discovery must not traceback")
+
+
+@case("status returns structured exit 2 outside a git repository")
+def _(repo, checks):
+    outside = pathlib.Path(repo).parent / "outside-status"
+    path = brief(outside)
+    result = run("status", path, "--json")
+    checks.equal(result.returncode, 2, "status repository discovery refusal exit")
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        data = {}
+        checks.ok(False, f"status discovery stdout must be JSON: {result.stdout!r}")
+    checks.equal(data.get("status"), "refused", "status repository discovery JSON status")
+    checks.ok("not inside a git repository" in data.get("message", ""),
+              "status refusal must retain the cause")
+    checks.ok("Traceback" not in result.stderr, "status discovery must not traceback")
+
+
 @case("prepare refuses before mutation when another brief is active")
 def _(repo, checks):
     prepared(repo, "live")
@@ -123,6 +157,20 @@ def _(repo, checks):
     checks.equal(result.returncode, 2, "active-brief refusal exit")
     checks.equal(after, before, "candidate bytes must stay unchanged before refusal")
     checks.ok("already active" in result.stdout, "refusal must explain the live brief")
+
+
+@case("prepare does not arm when an artifact write fails")
+def _(repo, checks):
+    path = brief(repo)
+    prompt = path.with_name("task.generic.md")
+    checklist = path.with_name("task.checklist.md")
+    checklist.mkdir()
+    result = run("prepare", path)
+    checks.equal(result.returncode, 2, "artifact write refusal exit")
+    checks.ok(prompt.is_file(), "prompt write must precede the failing checklist write")
+    checks.ok(checklist.is_dir(), "failed artifact destination must remain untouched")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
+              "artifact write failure must happen before activation")
 
 
 @case("prepare defaults to generic")
@@ -166,6 +214,26 @@ def _(repo, checks):
               "close must retain a tombstone")
 
 
+@case("close refuses a brief that is not active")
+def _(repo, checks):
+    live = prepared(repo, "live")
+    candidate = brief(repo, "candidate")
+    active = pathlib.Path(repo) / ".prompire" / "ACTIVE"
+    before = active.read_bytes()
+    result = run("close", candidate)
+    checks.equal(result.returncode, 2, "mismatched close exit")
+    checks.ok(active.exists(), "mismatched close must preserve ACTIVE")
+    after = active.read_bytes() if active.exists() else None
+    checks.equal(after, before, "mismatched close must preserve ACTIVE bytes")
+    active_text = active.read_text(encoding="utf-8") if active.exists() else ""
+    checks.ok(active_text.startswith(".prompire/live.yaml\n"),
+              "mismatched close must leave the live brief active")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones").exists(),
+              "mismatched close must not record a deactivation")
+    checks.ok(str(live.relative_to(repo)) in result.stdout,
+              "mismatched close must identify the active brief")
+
+
 @case("status reports active, repin, and inactive states")
 def _(repo, checks):
     path = prepared(repo)
@@ -195,6 +263,45 @@ def _(repo, checks):
         forwarded = run(command)
         checks.equal(forwarded.returncode, direct.returncode,
                      f"{command} must preserve its underlying exit code")
+
+
+@case("low-level subcommands forward help verbatim")
+def _(repo, checks):
+    for command, script in (("baseline", "baseline.py"), ("lint", "lint_brief.py"),
+                            ("render", "render_brief.py"), ("scope", "check_scope.py")):
+        direct = subprocess.run([sys.executable, str(ROOT / script), "--help"],
+                                capture_output=True, text=True)
+        forwarded = run(command, "--help")
+        checks.equal(forwarded.returncode, direct.returncode,
+                     f"{command} --help exit must come from the underlying script")
+        checks.equal(forwarded.stdout, direct.stdout,
+                     f"{command} --help stdout must come from the underlying script")
+        checks.equal(forwarded.stderr, direct.stderr,
+                     f"{command} --help stderr must come from the underlying script")
+
+
+@case("low-level subcommands preserve 0, 1, 2 and option forwarding")
+def _(repo, checks):
+    good = brief(repo, "good")
+    measured = subprocess.run([sys.executable, str(ROOT / "baseline.py"), str(good), "--write"],
+                              capture_output=True, text=True)
+    checks.equal(measured.returncode, 0, "good fixture baseline")
+    bad = brief(repo, "bad", extra="scope: []\n")
+    probes = (
+        ("lint", "lint_brief.py", (good, "--json")),
+        ("lint", "lint_brief.py", (bad, "--json")),
+        ("baseline", "baseline.py", ()),
+    )
+    for command, script, arguments in probes:
+        direct = subprocess.run([sys.executable, str(ROOT / script), *map(str, arguments)],
+                                capture_output=True, text=True)
+        forwarded = run(command, *arguments)
+        checks.equal(forwarded.returncode, direct.returncode,
+                     f"{command} {arguments} exit must be preserved")
+        checks.equal(forwarded.stdout, direct.stdout,
+                     f"{command} {arguments} stdout must be preserved")
+        checks.equal(forwarded.stderr, direct.stderr,
+                     f"{command} {arguments} stderr must be preserved")
 
 
 @case("json mode emits one parseable object and no prose")
