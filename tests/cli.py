@@ -5,6 +5,7 @@ Run: python3 tests/cli.py
 """
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import fixtures  # noqa: E402
 
 
 CASES = []
+ENV = os.environ.copy()
 
 
 def case(name):
@@ -42,7 +44,7 @@ class Checks:
 
 def run(*args):
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=ENV)
 
 
 def brief(repo, name="task", extra=""):
@@ -54,7 +56,7 @@ scope: [src/cart.py]
 forbidden: [tests/**]
 tests_policy: immutable
 acceptance:
-  - cmd: python3 -m unittest -q tests.test_cart
+  - cmd: python -c "print('ok')"
     expect: exit 0
 """ + extra + "autonomy: ask\n", encoding="utf-8")
     return path
@@ -89,7 +91,8 @@ def _(repo, checks):
     checks.ok(active.is_file(), "prepare must arm after the artifacts exist")
     checks.ok(active.read_text(encoding="utf-8").startswith(".prompire/task.yaml\n"),
               "ACTIVE must name the prepared brief")
-    checks.ok(f"prompire verify {path}" in result.stdout,
+    output = result.stdout.replace("\\", "/")
+    checks.ok(f"prompire verify {path.as_posix()}" in output,
               "prepare must print the next verification command")
 
 
@@ -230,7 +233,8 @@ def _(repo, checks):
               "mismatched close must leave the live brief active")
     checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones").exists(),
               "mismatched close must not record a deactivation")
-    checks.ok(str(live.relative_to(repo)) in result.stdout,
+    output = result.stdout.replace("\\", "/")
+    checks.ok(live.relative_to(repo).as_posix() in output,
               "mismatched close must identify the active brief")
 
 
@@ -318,6 +322,13 @@ def main():
     failures = 0
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
+        tool_dir = root / "bin"
+        tool_dir.mkdir()
+        if os.name == "nt":
+            (tool_dir / "python.cmd").write_text(f'"{sys.executable}" %*\n', encoding="utf-8")
+        else:
+            (tool_dir / "python").symlink_to(sys.executable)
+        ENV["PATH"] = str(tool_dir) + os.pathsep + ENV["PATH"]
         for name, fn in CASES:
             repo = fixtures.build(root / name.replace(" ", "-"))
             checks = Checks()
