@@ -31,6 +31,10 @@ Prompire supports Python 3.11+ on macOS, Linux, and Windows.
 
 ## Host-neutral workflow
 
+Before handoff, run `prompire prepare`. Prompire does not launch or control the agent.
+After the agent stops, `prompire verify` gives the combined scope and acceptance
+verdict. Review the generated checklist, then close the guard.
+
 ```bash
 prompire prepare .prompire/task.yaml --target generic
 # give .prompire/task.generic.md to any coding agent
@@ -39,8 +43,8 @@ prompire verify .prompire/task.yaml
 prompire close .prompire/task.yaml
 ```
 
-The CLI does not launch an agent. Claude Code and Copilot CLI hooks are optional
-early-warning adapters; the final git-diff check is host-neutral.
+Claude Code and Copilot CLI hooks are optional early-warning adapters; the final
+git-diff check is host-neutral.
 
 ## Two layers, neither sufficient alone
 
@@ -89,35 +93,35 @@ grow. Install locations and hook configuration for both hosts: `references/hosts
 > a `repin`, it corroborates nothing on its own; read `.prompire/ACTIVE.tombstones`
 > against the current pin and `git diff` between the two bases to see what the re-arm moved
 > past. `repin` is also what you get while the disarm log is not a readable file, which is
-> deliberate. `base uncorroborated` means the only record of where the work started is the field
-> the agent could edit — and that is the state the documented workflow produces today if
-> you skip `--activate`, in which the tool is an advisory diff-classifier and one Write to
-> the brief (a wider `scope`, one `dirty_baseline` entry, a `base_rev` re-stamped at a
-> commit that already contains the work) buys a clean verdict. None of it binds an agent
-> with shell access: every record here is a file. The guarantee is that evasion stops being
-> a silent one-field edit and becomes a named act in the transcript. Two more things now
-> hold unconditionally, whether or not a guard is armed anywhere in the repo:
+> deliberate. `base uncorroborated` means the only record of where the work started is
+> the field the agent could edit — and that is the state a direct low-level check
+> produces if its operator skips `--activate`, in which the tool is an advisory
+> diff-classifier and one Write to the brief (a wider `scope`, one `dirty_baseline`
+> entry, a `base_rev` re-stamped at a commit that already contains the work) buys a clean
+> verdict. None of it binds an agent with shell access: every record here is a file. The
+> guarantee is that evasion stops being a silent one-field edit and becomes a named act
+> in the transcript. Two more things now hold unconditionally, whether or not a guard is
+> armed anywhere in the repo:
 > `.prompire/ACTIVE` and `.prompire/ACTIVE.tombstones` cannot be written by
 > `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, at any depth or spelling, so neither a `pin`
 > nor the disarm history behind a `repin` can be forged or erased by the same four tools
 > the rest of this guarantee already covers.
 
-Read that paragraph before relying on any of this. In particular: the workflow produces
-the *weakest* state unless you run `--activate` before the agent starts, and the base
-source printed on every summary line is the only way to tell which state you got.
+Read that paragraph before relying on any of this. The primary workflow activates the
+guard inside `prompire prepare`. When diagnosing with the low-level scripts, run
+`--activate` before the agent starts. The base source printed on every summary line is
+the only way to tell which state you got.
 
 ## Diagnostic commands
 
+Use `prompire verify` for the combined scope and acceptance verdict. The commands below
+diagnose individual stages; they are not an alternative handoff workflow.
+
 ```bash
-# 1. write .prompire/<slug>.yaml — see SKILL.md for the shape
-python3 baseline.py .prompire/task.yaml --write     # measures, writes base_rev + baseline
-python3 lint_brief.py .prompire/task.yaml           # exit 0 = shippable
-python3 render_brief.py .prompire/task.yaml --target claude
-
-# 2. arm the guard, THEN launch the agent
+python3 baseline.py .prompire/task.yaml --write
+python3 lint_brief.py .prompire/task.yaml
+python3 render_brief.py .prompire/task.yaml --target generic
 python3 check_scope.py .prompire/task.yaml --activate
-
-# 3. after the agent stops — you run this, not the agent
 python3 check_scope.py .prompire/task.yaml --strict
 python3 check_scope.py .prompire/task.yaml --deactivate
 ```

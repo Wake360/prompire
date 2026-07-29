@@ -10,13 +10,14 @@ short. If it grew long, it failed.
 
 ## Primary workflow
 
-After writing `.prompire/<slug>.yaml`:
+Before handoff, after writing `.prompire/<slug>.yaml`:
 
 ```bash
 prompire prepare .prompire/<slug>.yaml --target generic
 ```
 
-Hand the generated prompt to any coding agent. Prompire does not launch it.
+Hand the generated prompt to any coding agent.
+Prompire does not launch or control the agent.
 
 After the agent stops:
 
@@ -24,7 +25,8 @@ After the agent stops:
 prompire verify .prompire/<slug>.yaml
 ```
 
-Review the generated checklist, then close the guard explicitly:
+`prompire verify` is the combined scope and acceptance verdict. Review the generated
+checklist, then close the guard explicitly:
 
 ```bash
 prompire close .prompire/<slug>.yaml
@@ -33,8 +35,9 @@ prompire close .prompire/<slug>.yaml
 ## Diagnostic commands
 
 The CLI runs the measured baseline, lint, generic rendering, guard activation, strict
-scope check, acceptance verification, and deactivation. Use these scripts to diagnose
-or inspect an individual step.
+scope check, acceptance verification, and deactivation. Use `prompire verify` for the
+combined scope and acceptance verdict. The scripts below are individual diagnostic
+commands for inspecting one stage; they are not a second handoff workflow.
 
 `$PROMPIRE` below is this directory — wherever this skill is installed, which differs
 per host and per personal/repository install (`references/hosts.md` lists them).
@@ -53,7 +56,7 @@ Substitute it; do not assume one host's path.
 One-file edits, a bug you can describe in a sentence, anything you'd finish faster than
 the brief. This is for work you're delegating and won't watch.
 
-## Detailed diagnostic workflow
+## Diagnostic internals
 
 1. **Read the request. Do not interview.** Infer everything you can from the repo — test
    command, package manager, layout, conventions. Ask at most **two** questions, only
@@ -101,19 +104,20 @@ the brief. This is for work you're delegating and won't watch.
    more `dirty_baseline` entry, a `base_rev` re-stamped at a commit that already contains
    the work — makes `check_scope.py` produce **no verdict at all** instead of a
    favourable one. Skip it and the brief is the only record of where the work started,
-   which means one Write buys a clean run. Run `--deactivate` when the task is over; it
-   leaves a tombstone on purpose.
+   which means one Write buys a clean run. The primary lifecycle uses `prompire close`.
+   Direct `--deactivate` is for diagnosing cleanup; it leaves a tombstone on purpose.
 
 7. **Hand over both artifacts**: the prompt for the agent, and the checklist for the
-   human. Tell the user the checklist's first line — `check_scope.py` — is what
-   catches an out-of-scope edit or a weakened test, and that it has to be run *after*
-   the agent stops, by them or by you, not by the agent. Reviewers run it with
-   `--strict`, which turns review flags into exit 1 — including an uncorroborated base,
-   so a run nobody armed fails the check rather than merely annotating it. If `--strict`
-   is red only on a `repin` finding, that means a guard was disarmed somewhere in this
-   repo's past — read `.prompire/ACTIVE.tombstones`, and if you accept it, re-run with
-   the `--ack-disarms <digest>` the finding printed. It does not go away on its own, and
-   a fresh disarm invalidates the acknowledgement again.
+   human. After the agent stops, run `prompire verify` for the combined strict scope and
+   acceptance verdict. When diagnosing the scope stage directly, the checklist's first
+   line — `check_scope.py` — catches an out-of-scope edit or a weakened test, and it has
+   to be run by the reviewer, not by the agent. Reviewers use `--strict`, which turns
+   review flags into exit 1 — including an uncorroborated base, so a run nobody armed
+   fails the check rather than merely annotating it. If `--strict` is red only on a
+   `repin` finding, that means a guard was disarmed somewhere in this repo's past — read
+   `.prompire/ACTIVE.tombstones`, and if you accept it, re-run with the
+   `--ack-disarms <digest>` the finding printed. It does not go away on its own, and a
+   fresh disarm invalidates the acknowledgement again.
 
 ## Reading the verdict
 

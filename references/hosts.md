@@ -20,6 +20,18 @@ the CLI instructions below.
 | Pre-write hook | no | yes | yes |
 | Agent launching | no | no | no |
 
+## Primary workflow
+
+Before handoff, run `prompire prepare`. Prompire does not launch or control the agent.
+After the agent stops, `prompire verify` gives the combined scope and acceptance
+verdict. Review the generated checklist, then close the guard.
+
+```bash
+prompire prepare .prompire/task.yaml --target generic
+prompire verify .prompire/task.yaml
+prompire close .prompire/task.yaml
+```
+
 ## One tree, one boundary
 
 ```
@@ -38,8 +50,8 @@ inside an adapter, the decision belongs in `brief_common.py`.
 
 ## Installing the skill
 
-The skill is one directory — `SKILL.md` plus the five scripts and `references/`. Install
-it once per place you want it discoverable. **Do not copy the scripts into several source
+The skill is one directory — `SKILL.md`, the scripts and `references/`. Install it once
+per place you want it discoverable. **Do not copy the scripts into several source
 directories to serve several hosts**; a second copy is a second thing to keep in sync,
 and the mirror in `references/maintaining.md` is already as much duplication as this tree
 tolerates.
@@ -83,25 +95,23 @@ commands one of three ways, in order of preference:
 3. **Separate examples per host**, clearly labelled, when a document has to show a
    literal path — which is what this file does below.
 
-## The workflow, on either host
+## Diagnostic commands
 
-Unchanged except for `--target`:
+Use `prompire verify` for the combined scope and acceptance verdict on every host. These
+individual scripts diagnose one stage; they are not a host-specific handoff workflow.
 
-```bash
-python3 baseline.py BRIEF --write
-python3 lint_brief.py BRIEF
-python3 render_brief.py BRIEF --target copilot      # or claude, codex, generic
-python3 check_scope.py BRIEF --activate
+| Command | Diagnostic purpose |
+|---|---|
+| `python3 baseline.py BRIEF --write` | inspect baseline measurement |
+| `python3 lint_brief.py BRIEF` | inspect brief validation |
+| `python3 render_brief.py BRIEF --target copilot` | inspect a host-specific rendering target |
+| `python3 check_scope.py BRIEF --activate` | inspect guard activation |
+| `python3 check_scope.py BRIEF --strict` | inspect the strict git-diff verdict |
+| `python3 check_scope.py BRIEF --deactivate` | inspect guard cleanup |
 
-# launch the agent only now
-
-python3 check_scope.py BRIEF --strict
-python3 check_scope.py BRIEF --deactivate
-```
-
-`--activate` before the agent starts is the step that makes the verdict worth anything,
-and it is exactly as load-bearing on Copilot as on Claude Code. `--strict` afterwards is
-the human reviewer's, not the agent's.
+Direct `--activate` must run before the agent starts. Direct `--strict` is the human
+reviewer's, not the agent's. The primary CLI lifecycle performs those stages through
+`prompire prepare`, `prompire verify`, and `prompire close`.
 
 ## Installing the hook — Claude Code
 
