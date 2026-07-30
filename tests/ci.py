@@ -285,6 +285,28 @@ def _(tmp, c):
          f"and must not forge a verdict line under it:\n{refused.summary}")
 
 
+@case("a-hostile-path-stays-inside-its-table-cell")
+def _(tmp, c):
+    # `check_scope.py` reads the diff with `-z`, so a path reaches the summary exactly as
+    # it is on disk — pipes and control characters included. A `|` is what splits a table
+    # cell in GFM, and it splits it before any inline markup is parsed, so this escape is
+    # the whole reason a hostile path cannot rearrange the findings table.
+    root, head = repo(tmp)
+    fixtures.write(root, "src/re|port\x7f.py", "# out of scope\n")
+    commit(root, "edit outside scope")
+
+    r = run(root, tmp, base=head)
+    c.ok(r.code == 1, f"expected exit 1, got {r.code}: {r.out}{r.err}")
+    rows = [ln for ln in r.summary.splitlines() if ln.startswith("| VIOLATION")]
+    c.ok(len(rows) == 1, f"expected one violation row:\n{r.summary}")
+    row = rows[0] if rows else ""
+    c.ok(row.count("|") - row.count("\\|") == 4,
+         f"the row must still be three cells wide; the path split it: {row!r}")
+    c.ok("\\|" in row, f"the pipe in the path must be escaped, not a delimiter: {row!r}")
+    c.ok("\x7f" not in r.summary,
+         f"a control character must not reach the comment body: {r.summary!r}")
+
+
 @case("out-of-scope-change-fails-and-annotates")
 def _(tmp, c):
     root, head = repo(tmp)
