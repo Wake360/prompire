@@ -19,6 +19,8 @@ sys.path.insert(0, str(SKILL))
 
 import run as bench_run
 from behaviors import BEHAVIORS
+from brief_common import load_brief
+from variants import VARIANTS
 
 TASKS = SKILL / "bench" / "tasks"
 FAILS = 0
@@ -51,10 +53,21 @@ def check_behavior_coverage():
     check("every task has a scripted good behavior", not missing, str(missing))
 
 
+def check_variants():
+    brief = load_brief(str(TASKS / "T01-flip-fix.yaml"))
+    cur = VARIANTS["current"](brief, bench_run.BRIEF_REL)
+    per = VARIANTS["persona"](brief, bench_run.BRIEF_REL)
+    check("current names the external check", "check_scope.py" in cur)
+    check("current carries no persona", "senior engineer" not in cur.lower())
+    check("persona is current plus its one header",
+          per != cur and per.endswith(cur))
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
     check_behavior_coverage()
+    check_variants()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 
