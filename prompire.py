@@ -5,6 +5,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -278,6 +279,22 @@ def demo_verdict(result):
           else f"     caught (exit {result.returncode})")
 
 
+def _clear_readonly_and_retry(func, path, exc_info):
+    """`shutil.rmtree`'s onerror hook. Every object git writes under `.git/objects`
+    is created read-only, and unlike POSIX (where deletion is a directory-permission
+    question, so the file's own read-only bit doesn't matter), Windows refuses to
+    unlink a read-only file. Clear the attribute and retry once."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree(root):
+    try:
+        shutil.rmtree(root, onerror=_clear_readonly_and_retry)
+    except OSError:
+        pass
+
+
 def demo(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra))
@@ -302,7 +319,7 @@ def demo(args, extra):
         (root / ".prompire").mkdir()
         (root / ".prompire" / "demo.yaml").write_text(DEMO_BRIEF, encoding="utf-8")
     except (OSError, subprocess.CalledProcessError) as exc:
-        shutil.rmtree(root, ignore_errors=True)
+        _rmtree(root)
         return report_refusal(f"could not build the demo repository: {exc}")
 
     print(f"demo repo: {root}")
@@ -333,7 +350,7 @@ def demo(args, extra):
     if args.keep:
         print(f"kept: {root}")
     else:
-        shutil.rmtree(root, ignore_errors=True)
+        _rmtree(root)
     if not (prepared.returncode == 0 and clean.returncode == 0 and caught.returncode == 1):
         return report_refusal("the demo story did not play out; rerun with --keep")
     print("the violation above was read out of the real git diff against the pinned base —")

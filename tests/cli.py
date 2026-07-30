@@ -680,6 +680,43 @@ def _(repo, checks):
                      f"{command} {arguments} stderr must be preserved")
 
 
+@case("demo cleanup clears a read-only file before removing it")
+def _(repo, checks):
+    # Regression: `shutil.rmtree(..., ignore_errors=True)` leaves a demo repo behind
+    # on Windows, where every object under `.git/objects` is created read-only and
+    # Windows (unlike POSIX, where deletion is a directory-permission question) refuses
+    # to unlink a read-only file. `_clear_readonly_and_retry` is the onerror hook that
+    # fixes that; tested directly because POSIX would let the naive rmtree pass here
+    # even without the fix, so an rmtree-level test alone would not have caught this.
+    sys.path.insert(0, str(ROOT))
+    import importlib
+    prompire_mod = importlib.import_module("prompire")
+    with tempfile.TemporaryDirectory() as tmp:
+        target = pathlib.Path(tmp) / "readonly.txt"
+        target.write_text("x", encoding="utf-8")
+        target.chmod(0o444)
+        prompire_mod._clear_readonly_and_retry(os.remove, str(target), None)
+        checks.ok(not target.exists(), "the handler must clear read-only and retry")
+
+
+@case("demo removes its throwaway repo even with a read-only file inside")
+def _(repo, checks):
+    sys.path.insert(0, str(ROOT))
+    import importlib
+    prompire_mod = importlib.import_module("prompire")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp) / "demo-like"
+        root.mkdir()
+        locked = root / "objects" / "ab"
+        locked.mkdir(parents=True)
+        locked_file = locked / "cdef0123"
+        locked_file.write_text("blob", encoding="utf-8")
+        locked_file.chmod(0o444)
+        prompire_mod._rmtree(root)
+        checks.ok(not root.exists(), "_rmtree must remove a tree containing a "
+                  "read-only file, not just the writable parts")
+
+
 @case("demo shows a clean pass and a caught violation, then cleans up")
 def _(repo, checks):
     result = run("demo", cwd=repo)
