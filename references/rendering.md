@@ -29,9 +29,11 @@ These hold for every target and are asserted in `tests/golden.py`:
 **`claude` / `generic`** — one prose block: goal, the paths, `Never touch:`,
 `Keep true:`, the numbered criteria with their state, the Human review section when
 `manual_checks` exist, the tests sentence, the autonomy sentence, the external-check
-sentence, then `context` if present. `claude` names the brief file in the
-external-check sentence; `generic` says "the brief". That is the only difference
-between them.
+sentence, then `context` if present, under a Reference context heading inside
+`<context>…</context>` delimiters — labelled as data, not instructions. The delimiter is
+a readability measure, not an injection defence; the scope check stays the real
+protection. `claude` names the brief file in the external-check sentence; `generic` says
+"the brief". That is the only difference between them.
 
 **`codex`** — the same content as markdown sections: `## Task`, `## Files you may edit`,
 `## Never touch`, `## Keep true`, `## Verify`, `## Human review`. Forbidden paths and
