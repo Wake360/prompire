@@ -28,6 +28,12 @@ inputs:
   fail:
     description: "Fail the step when the verdict is not clean."
     default: "true"
+  comment:
+    description: "Post the summary as one pull-request comment, edited in place on later runs. Needs `permissions: pull-requests: write`."
+    default: "false"
+  artifact-name:
+    description: "Upload the brief, the JSON verdict and the summary under this artifact name. Empty uploads nothing."
+    default: ""
   python-version:
     description: "Version for actions/setup-python, or `system` to use the runner's."
     default: "3.11"
@@ -56,6 +62,9 @@ outputs:
   json:
     description: "Path to the raw check_scope.py JSON, when RUNNER_TEMP is set"
     value: ${{ steps.verify.outputs.json }}
+  summary-file:
+    description: "Path to the job summary as markdown, when RUNNER_TEMP is set"
+    value: ${{ steps.verify.outputs.summary-file }}
   acceptance-passed:
     description: "Acceptance criteria that passed, empty unless acceptance ran"
     value: ${{ steps.verify.outputs.acceptance-passed }}
@@ -88,3 +97,29 @@ runs:
         PROMPIRE_FAIL: ${{ inputs.fail }}
         PYTHONDONTWRITEBYTECODE: "1"
       run: python3 "$GITHUB_ACTION_PATH/runner.py"
+    # Both of these carry a failing verdict out of the job, so they run after the verify
+    # step has already failed it. `!cancelled()` and not `always()`: a cancelled run has
+    # nothing to report.
+    - name: Upload the verdict as an artifact
+      if: ${{ !cancelled() && inputs.artifact-name != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ steps.verify.outputs.summary-file }}
+          ${{ steps.verify.outputs.json }}
+          ${{ steps.verify.outputs.brief }}
+        if-no-files-found: warn
+    - name: Comment the verdict on the pull request
+      if: ${{ !cancelled() && inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      # Every value arrives as env. A pull request's title and branch name are written by
+      # whoever opened it, and this step must stay uninteresting to them.
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BODY_FILE: ${{ steps.verify.outputs.summary-file }}
+      run: |
+        gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" \
+          --body-file "$BODY_FILE" --edit-last --create-if-none

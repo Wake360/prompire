@@ -109,6 +109,9 @@ def run(root, tmp, event=None, event_name="", **inputs):
         "GITHUB_OUTPUT": str(out_file),
         "GITHUB_STEP_SUMMARY": str(sum_file),
         "GITHUB_EVENT_NAME": event_name,
+        # a real runner always sets it, and the files the runner leaves there are what the
+        # artifact and comment steps upload
+        "RUNNER_TEMP": str(work),
         "PYTHONDONTWRITEBYTECODE": "1",
     })
     if event is not None:
@@ -125,6 +128,7 @@ def run(root, tmp, event=None, event_name="", **inputs):
         code = r.returncode
         out = r.stdout
         err = r.stderr
+        temp = str(work)
         outputs = dict(
             line.split("=", 1)
             for line in out_file.read_text(encoding="utf-8").splitlines() if "=" in line)
@@ -153,6 +157,29 @@ def _(tmp, c):
     c.ok(not errors(r), f"a clean run must not annotate an error: {errors(r)}")
     c.ok(head[:12] in r.summary or head in r.summary,
          f"the summary must name the base it used:\n{r.summary}")
+
+
+@case("the-summary-is-mirrored-to-a-file-the-later-steps-can-read")
+def _(tmp, c):
+    root, head = repo(tmp)
+    fixtures.write(root, "src/cart.py", "def total(items):\n    return sum(items)\n")
+    commit(root, "fix the off-by-one")
+    r = run(root, tmp, base=head)
+    mirror = pathlib.Path(r.temp) / "prompire-summary.md"
+    c.ok(mirror.is_file(), "the comment and artifact steps read the summary out of a file")
+    text = mirror.read_text(encoding="utf-8") if mirror.is_file() else ""
+    c.ok(text == r.summary,
+         f"the file must be the job summary verbatim, not a second rendering:\n{text}")
+    c.ok(r.outputs.get("summary-file") == str(mirror),
+         f"summary-file must name it: {r.outputs.get('summary-file')}")
+
+    # the run a reviewer most needs a comment for is the one that produced no verdict
+    refused = run(root, tmp, base="deadbeefdeadbeef")
+    mirror = pathlib.Path(refused.temp) / "prompire-summary.md"
+    c.ok(mirror.is_file() and "no verdict" in mirror.read_text(encoding="utf-8"),
+         "a refusal must be commentable too")
+    c.ok(refused.outputs.get("summary-file") == str(mirror),
+         f"summary-file must name it on a refusal: {refused.outputs.get('summary-file')}")
 
 
 @case("out-of-scope-change-fails-and-annotates")
@@ -429,6 +456,35 @@ def _(tmp, c):
     used -= {"PROMPIRE_HOME"}  # test-only seam, never set by action.yml
     c.ok(used <= env_names,
          f"runner.py reads env action.yml never sets: {sorted(used - env_names)}")
+
+    # An input either reaches runner.py through the verify step's env, or it is wiring for
+    # a step of its own and is named here. Nothing gets to be neither.
+    step_only = {"python-version", "comment", "artifact-name"}
+    mapped = set(re.findall(r"inputs\.([a-z0-9-]+)",
+                            " ".join(str(v) for v in verify["env"].values())))
+    c.ok(inputs - mapped == step_only,
+         "every input must reach runner.py or be listed as step-only wiring; "
+         f"{sorted((inputs - mapped) ^ step_only)} is neither")
+
+    # The comment and the artifact exist to carry a failing verdict, so a verify step that
+    # exits 1 must not skip them — and a cancelled job must not run them.
+    late = [s for s in steps
+            if re.search(r"inputs\.(comment|artifact-name)", str(s.get("if", "")))]
+    c.ok(len(late) == 2, f"expected a comment step and an artifact step, found {len(late)}")
+    for step in late:
+        cond = str(step.get("if", ""))
+        c.ok("!cancelled()" in cond or "always()" in cond,
+             f"`{step.get('name')}` would be skipped on the failing run it exists to "
+             f"report: {cond}")
+    for step in (s for s in late if "inputs.comment" in str(s.get("if", ""))):
+        cond = str(step["if"])
+        c.ok("github.event_name == 'pull_request'" in cond,
+             f"the comment step must be gated on the pull_request event: {cond}")
+        c.ok(step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}",
+             f"the comment step must take the token from github.token: {step.get('env')}")
+        c.ok("${{" not in step["run"],
+             "a pull request's title and branch are attacker-controlled — the comment "
+             f"step must read every value from env, not interpolate it: {step['run']}")
 
 
 @case("the-runner-outputs-every-key-action-yml-promises")

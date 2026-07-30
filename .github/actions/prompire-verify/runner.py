@@ -192,6 +192,12 @@ def annotate(root, findings):
         print(f"::{level} {','.join(props)}::{esc_data(message)}")
 
 
+def summary_file():
+    """Where the comment and artifact steps read this run's summary; empty off a runner."""
+    temp = env("RUNNER_TEMP")
+    return str(pathlib.Path(temp) / "prompire-summary.md") if temp else ""
+
+
 def summary(lines):
     path = env("GITHUB_STEP_SUMMARY")
     text = "\n".join(lines) + "\n"
@@ -200,6 +206,11 @@ def summary(lines):
             fh.write(text)
     else:
         print(text, end="")
+    mirror = summary_file()
+    if mirror:
+        # written, not appended: the job summary accumulates every step, a comment on the
+        # pull request has to be this run's verdict alone
+        pathlib.Path(mirror).write_text(text, encoding="utf-8")
 
 
 def outputs(pairs):
@@ -266,7 +277,8 @@ def main():
                  "This is not a passing verdict — the repository made no claim to check."])
         outputs({"verdict": "skipped", "exit-code": "0", "violations": "0",
                  "reviews": "0", "base": "", "base-source": "", "brief": "",
-                 "json": "", "acceptance-passed": "", "acceptance-failed": "",
+                 "json": "", "summary-file": summary_file(),
+                 "acceptance-passed": "", "acceptance-failed": "",
                  "acceptance-not-run": ""})
         return 0
 
@@ -340,6 +352,7 @@ def main():
         "base-source": str(data.get("base_source") or "uncorroborated"),
         "brief": rel_brief,
         "json": json_path,
+        "summary-file": summary_file(),
         "acceptance-passed": str(accepted.get("passed", 0)) if accepted else "",
         "acceptance-failed": str(accepted.get("failed", 0)) if accepted else "",
         "acceptance-not-run": str(accepted.get("not_run", 0)) if accepted else "",
@@ -356,7 +369,8 @@ def entrypoint():
                  "", "```", str(exc), "```"])
         outputs({"verdict": "indeterminate", "exit-code": "2", "violations": "0",
                  "reviews": "0", "base": "", "base-source": "", "brief": "",
-                 "json": "", "acceptance-passed": "", "acceptance-failed": "",
+                 "json": "", "summary-file": summary_file(),
+                 "acceptance-passed": "", "acceptance-failed": "",
                  "acceptance-not-run": ""})
         print(f"::error title=Prompire::{esc_data(exc)}")
         return 2
