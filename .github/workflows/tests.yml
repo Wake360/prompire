@@ -1,5 +1,11 @@
 name: tests
-on: [push, pull_request]
+# A pull request branch is pushed *and* has an open PR, so a bare `[push, pull_request]`
+# ran every suite twice on every push. Pushes are watched on the default branch only;
+# everywhere else the pull_request event is the one that gates the merge.
+on:
+  push:
+    branches: [master]
+  pull_request:
 jobs:
   full:
     strategy:
