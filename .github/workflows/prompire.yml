@@ -1,0 +1,16 @@
+name: prompire
+
+on: [pull_request]
+
+# Its own job, not a step in `tests`: that job pip-installs this tree, and the check
+# reads untracked files as additions.
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      # First, before anything writes to the tree.
+      - uses: ./.github/actions/prompire-verify

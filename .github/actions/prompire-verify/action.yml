@@ -1,0 +1,90 @@
+name: Prompire verify
+description: Check a pull request's diff against the Prompire brief the pull request carries.
+inputs:
+  brief:
+    description: "Path to the brief. Empty discovers the single .prompire/*.yaml."
+    default: ""
+  path:
+    description: "Repository to check."
+    default: "."
+  base:
+    description: "Revision to diff against. Empty derives it from the event."
+    default: ""
+  strict:
+    description: "Treat REVIEW findings as failures. tests_policy `named`/`authoring` raises one unconditionally, so this is red by construction for those briefs."
+    default: "false"
+  acceptance:
+    description: "Also run the brief's acceptance commands. They are shell lines out of the pull request."
+    default: "false"
+  acceptance-fail-on:
+    description: "failed | any — `any` also fails when a command was refused as not runnable."
+    default: "failed"
+  on-missing-brief:
+    description: "skip | fail — what to do when no brief is committed."
+    default: "skip"
+  annotations:
+    description: "Emit ::error/::warning annotations for each finding."
+    default: "true"
+  fail:
+    description: "Fail the step when the verdict is not clean."
+    default: "true"
+  python-version:
+    description: "Version for actions/setup-python, or `system` to use the runner's."
+    default: "3.11"
+outputs:
+  verdict:
+    description: "clean | findings | indeterminate | skipped"
+    value: ${{ steps.verify.outputs.verdict }}
+  exit-code:
+    description: "0 clean, 1 finding, 2 no verdict"
+    value: ${{ steps.verify.outputs.exit-code }}
+  violations:
+    description: "Number of VIOLATION findings"
+    value: ${{ steps.verify.outputs.violations }}
+  reviews:
+    description: "Number of REVIEW findings"
+    value: ${{ steps.verify.outputs.reviews }}
+  base:
+    description: "The revision the diff was read against"
+    value: ${{ steps.verify.outputs.base }}
+  base-source:
+    description: "How check_scope.py established the base"
+    value: ${{ steps.verify.outputs.base-source }}
+  brief:
+    description: "The brief that was checked, relative to the repository root"
+    value: ${{ steps.verify.outputs.brief }}
+  json:
+    description: "Path to the raw check_scope.py JSON, when RUNNER_TEMP is set"
+    value: ${{ steps.verify.outputs.json }}
+  acceptance-passed:
+    description: "Acceptance criteria that passed, empty unless acceptance ran"
+    value: ${{ steps.verify.outputs.acceptance-passed }}
+  acceptance-failed:
+    description: "Acceptance criteria that failed, empty unless acceptance ran"
+    value: ${{ steps.verify.outputs.acceptance-failed }}
+  acceptance-not-run:
+    description: "Acceptance criteria refused as not runnable, empty unless acceptance ran"
+    value: ${{ steps.verify.outputs.acceptance-not-run }}
+runs:
+  using: composite
+  steps:
+    - if: inputs.python-version != 'system'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - shell: bash
+      run: python3 -m pip install --disable-pip-version-check --quiet "PyYAML>=6"
+    - id: verify
+      shell: bash
+      env:
+        PROMPIRE_BRIEF: ${{ inputs.brief }}
+        PROMPIRE_PATH: ${{ inputs.path }}
+        PROMPIRE_BASE: ${{ inputs.base }}
+        PROMPIRE_STRICT: ${{ inputs.strict }}
+        PROMPIRE_ACCEPTANCE: ${{ inputs.acceptance }}
+        PROMPIRE_ACCEPTANCE_FAIL_ON: ${{ inputs.acceptance-fail-on }}
+        PROMPIRE_ON_MISSING_BRIEF: ${{ inputs.on-missing-brief }}
+        PROMPIRE_ANNOTATIONS: ${{ inputs.annotations }}
+        PROMPIRE_FAIL: ${{ inputs.fail }}
+        PYTHONDONTWRITEBYTECODE: "1"
+      run: python3 "$GITHUB_ACTION_PATH/runner.py"
