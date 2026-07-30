@@ -66,6 +66,43 @@ def check_variants():
     check("current carries no persona", "senior engineer" not in cur.lower())
     check("persona is current plus its one header",
           per != cur and per.endswith(cur))
+    bare = VARIANTS["bare"](brief, bench_run.BRIEF_REL)
+    check("bare carries the goal", str(brief["goal"]).strip() in bare)
+    check("bare withholds the boundary and the criteria",
+          "check_scope.py" not in bare and "src/cart.py" not in bare
+          and "unittest" not in bare)
+    check("bare is the shortest variant", len(bare.split()) < len(cur.split()))
+
+
+# One real `claude -p --output-format json` envelope, trimmed to the keys the
+# adapter reads. Recorded 2026-07-30: there is no top-level `model`, and
+# `usage.input_tokens` counts only the uncached remainder.
+CLAUDE_JSON = json.dumps({
+    "type": "result", "num_turns": 11, "total_cost_usd": 0.42,
+    "usage": {"input_tokens": 15, "cache_creation_input_tokens": 9575,
+              "cache_read_input_tokens": 15498, "output_tokens": 2152},
+    "modelUsage": {"claude-opus-5[1m]": {}, "claude-haiku-4-5-20251001": {}},
+})
+
+
+def check_claude_stats():
+    s = bench_run.claude_stats(0, CLAUDE_JSON)
+    check("every input token is counted, not just the uncached remainder",
+          s["tokens_in"] == 15 + 9575 + 15498, str(s))
+    check("output tokens are read straight", s["tokens_out"] == 2152, str(s))
+    check("the model comes from modelUsage, which is where it lives",
+          s["model"] == "claude-haiku-4-5-20251001+claude-opus-5[1m]", str(s))
+    check("cost is captured", s["cost_usd"] == 0.42, str(s))
+    check("turns are captured", s["turns"] == 11, str(s))
+    for label, payload in (("garbage", "not json at all"),
+                           ("a bare list", "[1, 2]"),
+                           ("an empty envelope", "{}"),
+                           ("a null usage", '{"usage": null, "modelUsage": null}')):
+        s = bench_run.claude_stats(1, payload)
+        check(f"{label} yields nulls, never a raise",
+              s == {"agent_exit": 1, "model": None, "turns": None,
+                    "tokens_in": None, "tokens_out": None, "cost_usd": None},
+              str(s))
 
 
 def check_scripted():
@@ -251,6 +288,7 @@ def main():
         check_cli(tmp)
     check_behavior_coverage()
     check_variants()
+    check_claude_stats()
     check_scripted()
     check_tamper()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")

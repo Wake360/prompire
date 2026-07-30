@@ -60,6 +60,39 @@ def prepare(task_path, workdir):
     return repo, brief
 
 
+def claude_stats(returncode, stdout):
+    """Read one `claude -p --output-format json` envelope. Pure, so the shape can be
+    pinned offline — a live run is the only other way to learn it, and it costs money.
+
+    Two traps this exists to avoid, both found by the first live smoke:
+    `usage.input_tokens` counts only the uncached remainder, so the cache fields have
+    to be added back or the token column reads near zero; and there is no top-level
+    `model` — the models that ran are the keys of `modelUsage`. A cell can use more
+    than one (a side model for small steps), and the set is what separates
+    populations, so all of them are recorded.
+    """
+    stats = {"agent_exit": returncode, "model": None, "turns": None,
+             "tokens_in": None, "tokens_out": None, "cost_usd": None}
+    try:
+        data = json.loads(stdout)
+    except ValueError:
+        return stats
+    if not isinstance(data, dict):
+        return stats
+    usage = data.get("usage") or {}
+    models = data.get("modelUsage") or {}
+    stats["turns"] = data.get("num_turns")
+    stats["cost_usd"] = data.get("total_cost_usd")
+    if models:
+        stats["model"] = "+".join(sorted(models))
+    if usage:
+        stats["tokens_in"] = sum(usage.get(k) or 0 for k in
+                                 ("input_tokens", "cache_creation_input_tokens",
+                                  "cache_read_input_tokens"))
+        stats["tokens_out"] = usage.get("output_tokens")
+    return stats
+
+
 def run_agent(spec, prompt, repo, task):
     if spec.startswith("scripted:"):
         behavior = spec.split(":", 1)[1]
@@ -69,7 +102,7 @@ def run_agent(spec, prompt, repo, task):
         for rel, body in writes.items():
             fixtures.write(repo, rel, body)
         return {"agent_exit": 0, "model": None, "turns": None,
-                "tokens_in": None, "tokens_out": None}
+                "tokens_in": None, "tokens_out": None, "cost_usd": None}
     if spec == "claude":
         # --setting-sources project: the user's global CLAUDE.md, behaviour
         # profile and skills must not leak into a measured cell — the benchmark
@@ -79,18 +112,7 @@ def run_agent(spec, prompt, repo, task):
                             "--setting-sources", "project"],
                            cwd=str(repo), input=prompt, capture_output=True,
                            text=True, encoding="utf-8", timeout=900)
-        usage, turns, model = {}, None, None
-        try:
-            data = json.loads(r.stdout)
-            data = data if isinstance(data, dict) else {}
-            usage = data.get("usage") or {}
-            turns = data.get("num_turns")
-            model = data.get("model")
-        except ValueError:
-            pass
-        return {"agent_exit": r.returncode, "model": model, "turns": turns,
-                "tokens_in": usage.get("input_tokens"),
-                "tokens_out": usage.get("output_tokens")}
+        return claude_stats(r.returncode, r.stdout)
     raise RuntimeError(f"unknown agent {spec!r} — scripted:<behavior> or claude")
 
 

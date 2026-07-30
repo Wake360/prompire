@@ -24,4 +24,12 @@ def persona(brief, brief_path):
     return "You are a meticulous senior engineer.\n\n" + current(brief, brief_path)
 
 
-VARIANTS = {"current": current, "persona": persona}
+def bare(brief, brief_path):
+    """The request as it would have arrived without Prompire — goal only, no
+    boundary, no criteria, no autonomy. The control for whether the brief earns
+    the tokens it costs: both variants are still measured from outside against
+    the *author's* brief, so only what the agent was told differs."""
+    return str(brief.get("goal") or "").strip() + "\n"
+
+
+VARIANTS = {"current": current, "persona": persona, "bare": bare}

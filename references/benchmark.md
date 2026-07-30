@@ -18,13 +18,23 @@ A cell is task × variant × agent:
 - **variant** — a prompt renderer in `bench/variants.py`. `current` is what
   `render_brief.py` produces today; every other entry is a hypothesis. A
   variant that does not beat `current` across the matrix does not move into
-  the renderer.
+  the renderer. `bare` is the opposite control: the goal line alone, the
+  request as it would have arrived without Prompire. It answers whether the
+  brief earns the tokens it costs, and the comparison is fair because both
+  variants are measured from outside against the *author's* brief — only what
+  the agent was told differs. Against `scripted:*` agents every variant scores
+  alike, because a scripted write-set ignores its prompt; variants only
+  separate under a live agent.
 - **agent** — `scripted:<behavior>` (deterministic write-sets from
   `bench/behaviors.py`; the only kind CI ever runs) or a live CLI (`claude`).
 
 Metrics per run (one JSONL row): acceptance passed/failed/not_run, check_scope
 exit, changed test files, wall seconds, prompt word count, and — when the
-agent's CLI reports them — turns, tokens and the model id. Every row also
+agent's CLI reports them — turns, tokens, cost and the model id. `tokens_in`
+sums the cached and uncached input fields: the CLI's `usage.input_tokens` alone
+counts only the uncached remainder and reads near zero on a cached run.
+`model` is joined from the keys of `modelUsage`, which is where the CLI records
+what actually ran — there is no top-level `model` field. Every row also
 carries its provenance: a timestamp, the Prompire commit (`prompire_rev`) and a
 sha256 prefix of the exact prompt text (`prompt_sha`). Rows whose `prompt_sha`
 or `model` differ are different populations — never average across them.
