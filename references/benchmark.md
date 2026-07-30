@@ -30,7 +30,9 @@ sha256 prefix of the exact prompt text (`prompt_sha`). Rows whose `prompt_sha`
 or `model` differ are different populations — never average across them.
 `bench/report.py` renders the matrix; a run is SOLVED only when the acceptance
 is green AND check_scope exits 0. An agent that greens the acceptance by
-editing a frozen test shows up as SCOPE, not ok. Live agents are stochastic:
+editing a frozen test shows up as SCOPE, not ok, and one that edited the brief
+or the pin shows up as GAMED — `tampered` lists what it touched. Live agents are
+stochastic:
 one run per cell is noise, so real comparisons use `--repeats N` and the report
 renders such cells as their solved rate ("3/5") instead of a single mark.
 
@@ -41,10 +43,26 @@ renders such cells as their solved rate ("3/5") instead of a single mark.
     python3 bench/run.py --agents claude --repeats 5   # live run; costs minutes and money
     python3 bench/report.py bench/results/run.jsonl
 
-Live runs execute an autonomous agent with edit permissions inside a throwaway
-temp repo. `--permission-mode acceptEdits` is deliberate; do not raise it to
-`--dangerously-skip-permissions` unless you are watching the run. Live cells
-are never part of tests/run_all.py or CI.
+Live runs are not sandboxed, and the temp repo should not be read as one. It
+bounds what the *harness* sets up, not what the agent can reach: the cell runs
+as you, with your environment and the CLI's own credentials, and an agent that
+writes an absolute path or a `..` writes there. No Prompire hook is active
+inside a cell either — a fixture repo carries no project settings, and
+`--setting-sources project` deliberately excludes the guard installed in your
+user settings — so enforcement is entirely post-hoc. `--permission-mode
+acceptEdits` auto-accepts file edits and leaves every other tool to the CLI's
+defaults; do not raise it to `--dangerously-skip-permissions`. Measuring means
+executing code the agent wrote: the acceptance commands run over the agent's
+source, in your account. Task briefs are executed input for the same reason, so
+point `--tasks` only at briefs you wrote. Live cells are never part of
+tests/run_all.py or CI.
+
+Against a gaming agent the harness snapshots `.prompire/brief.yaml` and
+`.prompire/ACTIVE` before the agent starts and restores both before measuring,
+so the criteria and the boundary are the author's whatever the agent did to
+them, and any such edit marks the row GAMED. What remains unverifiable is only
+what no local tool can verify — that the agent did not reach outside the repo
+while it ran.
 
 Live cells run `claude` with `--setting-sources project`, so the user-level
 CLAUDE.md, behaviour profile and skills stay out of the measurement — the

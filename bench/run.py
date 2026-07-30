@@ -35,6 +35,8 @@ from brief_common import is_test_path, load_brief, norm_path, utf8_stdio
 from variants import VARIANTS
 
 BRIEF_REL = ".prompire/brief.yaml"
+# Restored before every measurement — see run_cell.
+GUARDED = (BRIEF_REL, ".prompire/ACTIVE")
 
 
 def tool(repo, name, *args):
@@ -80,6 +82,7 @@ def run_agent(spec, prompt, repo, task):
         usage, turns, model = {}, None, None
         try:
             data = json.loads(r.stdout)
+            data = data if isinstance(data, dict) else {}
             usage = data.get("usage") or {}
             turns = data.get("num_turns")
             model = data.get("model")
@@ -106,7 +109,10 @@ def measure(repo, base):
     try:
         scope_report = json.loads(scope.stdout)
     except ValueError:
-        scope_report = {"raw": scope.stdout}
+        # stderr too: a check_scope that crashed and a check_scope that found
+        # something both leave a row without findings, and only the traceback
+        # tells them apart.
+        scope_report = {"raw": scope.stdout, "stderr": scope.stderr}
     changed = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", base],
                              capture_output=True, text=True, encoding="utf-8")
     untracked = subprocess.run(["git", "-C", str(repo), "ls-files", "--others",
@@ -138,14 +144,29 @@ def run_cell(task_path, variant, agent, keep=False):
         brief_data = load_brief(str(brief))
         base = str(brief_data.get("base_rev"))
         prompt = VARIANTS[variant](brief_data, BRIEF_REL)
+        # `.prompire/` is gitignored, check_scope never judges paths inside it, and no
+        # PreToolUse hook runs in a cell — a fixture repo has no project settings and
+        # the live adapter passes `--setting-sources project`. So the brief and the pin
+        # are agent-writable state: the criteria, the boundary and the record of both
+        # are exactly what a gaming agent would rewrite. Measuring against the file as
+        # the agent left it is measuring what the agent chose to be measured on, so
+        # snapshot the pristine bytes here and put them back before measuring.
+        pristine = {p: (repo / p).read_bytes() for p in GUARDED}
         t0 = time.monotonic()
         stats = run_agent(agent, prompt, repo, task_path.stem)
+        tampered = sorted(p for p in GUARDED
+                          if not (repo / p).is_file()
+                          or (repo / p).read_bytes() != pristine[p])
+        for p in tampered:
+            (repo / p).parent.mkdir(parents=True, exist_ok=True)
+            (repo / p).write_bytes(pristine[p])
         row = {"task": task_path.stem, "variant": variant, "agent": agent,
                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                "prompire_rev": prompire_rev(),
                "prompt_sha": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12],
                "prompt_words": len(prompt.split()),
                "seconds": round(time.monotonic() - t0, 2),
+               "tampered": tampered,
                **stats, **measure(repo, base)}
         if keep:
             row["repo"] = str(repo)
@@ -170,6 +191,9 @@ def main(argv=None):
                     help="keep each cell's repo for a post-mortem")
     ns = ap.parse_args(argv)
     tasks_path = pathlib.Path(ns.tasks)
+    if not tasks_path.exists():
+        print(f"no such path: {tasks_path}")
+        return 2
     tasks = sorted(tasks_path.glob("*.yaml")) if tasks_path.is_dir() else [tasks_path]
     if not tasks:
         print(f"no task briefs under {tasks_path}")
