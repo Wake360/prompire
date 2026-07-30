@@ -70,19 +70,24 @@ def run_agent(spec, prompt, repo, task):
     raise RuntimeError(f"unknown agent {spec!r} — scripted:<behavior>")
 
 
-def measure(repo):
+def measure(repo, base):
+    """`base` is captured before the agent runs: the brief lives in .prompire/, which
+    the scope check does not police, so an agent can re-stamp `base_rev` and delete the
+    pin. Re-reading the base here would let it choose its own diff."""
     verdict = verify_acceptance.verify(str(repo / BRIEF_REL))
-    scope = tool(repo, "check_scope.py", BRIEF_REL, "--json")
+    scope = tool(repo, "check_scope.py", BRIEF_REL, "--json", "--base", base, "--strict")
     try:
         scope_report = json.loads(scope.stdout)
     except ValueError:
         scope_report = {"raw": scope.stdout}
-    base = str(load_brief(str(repo / BRIEF_REL)).get("base_rev"))
     changed = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", base],
                              capture_output=True, text=True, encoding="utf-8")
     untracked = subprocess.run(["git", "-C", str(repo), "ls-files", "--others",
                                 "--exclude-standard"],
                                capture_output=True, text=True, encoding="utf-8")
+    if changed.returncode != 0 or untracked.returncode != 0:
+        raise RuntimeError(f"git could not diff against {base}: "
+                           f"{changed.stderr}{untracked.stderr}")
     paths = set(changed.stdout.split()) | set(untracked.stdout.split())
     return {"acceptance": {k: verdict[k] for k in ("passed", "failed", "not_run")},
             "scope_exit": scope.returncode,
@@ -103,7 +108,9 @@ def run_cell(task_path, variant, agent, keep=False):
     tmp = tempfile.mkdtemp(prefix="prompire-bench-")
     try:
         repo, brief = prepare(task_path, tmp)
-        prompt = VARIANTS[variant](load_brief(str(brief)), BRIEF_REL)
+        brief_data = load_brief(str(brief))
+        base = str(brief_data.get("base_rev"))
+        prompt = VARIANTS[variant](brief_data, BRIEF_REL)
         t0 = time.monotonic()
         stats = run_agent(agent, prompt, repo, task_path.stem)
         row = {"task": task_path.stem, "variant": variant, "agent": agent,
@@ -112,7 +119,7 @@ def run_cell(task_path, variant, agent, keep=False):
                "prompt_sha": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12],
                "prompt_words": len(prompt.split()),
                "seconds": round(time.monotonic() - t0, 2),
-               **stats, **measure(repo)}
+               **stats, **measure(repo, base)}
         if keep:
             row["repo"] = str(repo)
         return row
