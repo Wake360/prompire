@@ -218,7 +218,7 @@ autonomy: ask
     c.ok(lr["errors"] == 0, f"not_runnable + flip is legal: {lr['findings']}")
 
     # not_runnable without a declared flip cannot tell success from the starting state
-    p2 = brief(repo, "notyet-green", pathlib.Path(p).read_text().replace(
+    p2 = brief(repo, "notyet-green", pathlib.Path(p).read_text(encoding="utf-8").replace(
         "    transition: flip\n", ""))
     c.rules(lint(p2), must_warn=["B15"])
 
@@ -323,7 +323,8 @@ autonomy: ask
 @case("dirty-tree-is-refused-then-declared")
 def _(repo, c):
     (pathlib.Path(repo) / "src/cart.py").write_text(
-        (pathlib.Path(repo) / "src/cart.py").read_text() + "\n# local scratch\n")
+        (pathlib.Path(repo) / "src/cart.py").read_text(encoding="utf-8") + "\n# local scratch\n",
+        encoding="utf-8")
     p = brief(repo, "dirty", """
 goal: Add a count() helper to src/cart.py.
 scope: [src/cart.py]
@@ -531,7 +532,7 @@ class TestAdd(unittest.TestCase):
     # a skip marker is a VIOLATION even inside an editable file — `named` permits
     # rewriting the listed tests, not disabling them (SKIP_MARKERS, check_scope.py)
     fixtures.write(repo, "tests/test_cart.py",
-                   (pathlib.Path(repo) / "tests/test_cart.py").read_text() + '''
+                   (pathlib.Path(repo) / "tests/test_cart.py").read_text(encoding="utf-8") + '''
 
 class TestSkipped(unittest.TestCase):
     @unittest.skip("later")
@@ -575,7 +576,7 @@ autonomy: ask
 """)
     lr = lint(p3)
     c.rules(lr, must_err=["B7"])  # no oracle: nothing outside the edited suite judges it
-    p4 = brief(repo, "authoring-oracle", pathlib.Path(p3).read_text().replace(
+    p4 = brief(repo, "authoring-oracle", pathlib.Path(p3).read_text(encoding="utf-8").replace(
         "tests_policy: authoring",
         "tests_policy: authoring\noracle: golden/report.txt, reviewed by the maintainer"))
     lr4 = lint(p4)
@@ -585,7 +586,7 @@ autonomy: ask
     # under `authoring` a skip marker is a REVIEW, not a VIOLATION — repairing the
     # suite is the task, and check_scope.py downgrades it precisely there
     fixtures.write(repo, "tests/test_legacy.py",
-                   (pathlib.Path(repo) / "tests/test_legacy.py").read_text() + '''
+                   (pathlib.Path(repo) / "tests/test_legacy.py").read_text(encoding="utf-8") + '''
 
 class TestSkipped(unittest.TestCase):
     @unittest.skip("later")
@@ -1825,7 +1826,7 @@ def _(repo, c):
          f"--strict exited {r.returncode} on a base that matches the pin: {r.stdout}")
 
     fixtures.write(repo, "src/cart.py",
-                   (pathlib.Path(repo) / "src/cart.py").read_text() + "\n# later\n")
+                   (pathlib.Path(repo) / "src/cart.py").read_text(encoding="utf-8") + "\n# later\n")
     fixtures.git(repo, "add", "--", "src/cart.py")
     fixtures.git(repo, "commit", "-qm", "a second commit to point --base at")
     g2 = guard(p, "--base", fixtures.git(repo, "rev-parse", "HEAD").strip())
