@@ -43,6 +43,11 @@ import fixtures  # noqa: E402
 
 # Two things cp1252 has no code point for, in the two places they actually turn up: a
 # path git will report back to us, and prose a verdict quotes.
+#
+# `č` (U+010D) is load-bearing and not decorative. cp1252 *does* contain `ž š í á é ý`,
+# so a probe spelled with those encodes cleanly and passes with the bug still in place —
+# `vylepši` and `moderní` are both in the linter's own VAGUE list and both useless here.
+# The unencodable Czech letters are `č ď ě ň ř ť ů`. Any new case must use one.
 CZ_PATH = "src/účty.py"
 CZ_TEXT = "Opravit český účet"
 
@@ -101,6 +106,17 @@ def tool(name, *args):
     return [sys.executable, str(SKILL / name), *args]
 
 
+def denies(r, name):
+    """The Copilot adapter carries its refusal on stdout, never in the exit code."""
+    try:
+        decision = json.loads(r.stdout.decode("utf-8"))
+        ok(decision.get("permissionDecision") == "deny", f"{name}: decision is deny",
+           r.stdout.decode("utf-8", "backslashreplace"))
+    except Exception as e:
+        ok(False, f"{name}: decision is deny",
+           f"{type(e).__name__}: {e} ({len(r.stdout)} bytes of stdout)")
+
+
 # ---------------------------------------------------------------- briefs on disk only
 
 NO_ACCEPTANCE = """goal: Add a --json flag to the report CLI.
@@ -113,6 +129,23 @@ base_rev: 0123456789abcdef0123456789abcdef01234567
 CZECH_GOAL = f"""goal: {CZ_TEXT} v src/cli/report.py — jeden soubor, nic víc.
 scope: [src/cli/report.py]
 forbidden: [tests/**]
+acceptance:
+  - cmd: ruff check src/cli/report.py
+    expect: exit 0
+autonomy: ask
+base_rev: 0123456789abcdef0123456789abcdef01234567
+"""
+
+# A Czech *goal* is not enough to probe the linter: `--json` reports findings, and no
+# finding echoes the goal verbatim. `B3` does quote the vague term it matched and the
+# constraint it matched it in, so these two are the paths by which brief prose actually
+# reaches the linter's stdout. `vyčisti` and `rozumně` are both in VAGUE and both
+# unencodable.
+CZECH_VAGUE = """goal: Vyčisti a sprav modul src/cli/report.py.
+scope: [src/cli/report.py]
+forbidden: [tests/**]
+constraints:
+  - "dílče: nechej to rozumně malé"
 acceptance:
   - cmd: ruff check src/cli/report.py
     expect: exit 0
@@ -139,22 +172,29 @@ def brief_cases(tmp):
         p.write_text(body, encoding="utf-8")
         return p
 
-    # The em dash lives in the linter's *own* B4 message, so this case carries no
-    # non-ASCII input at all — the tool supplies the unencodable character itself.
+    # Surface one, and the subtler of the two: the em dash in the linter's own B4 message
+    # *is* in cp1252, at 0x97. So nothing raises, the exit code is the correct 1, and the
+    # only damage is that stdout is no longer UTF-8 — which is invisible until a caller
+    # decodes it strictly, and is exactly the shape that broke CI. No non-ASCII input is
+    # needed to trigger it; the tool supplies the character itself.
+    #
+    # In text mode the same brief additionally hits the `→` of the fix line (U+2192),
+    # which is *not* in cp1252, so that variant crashes as well. Both are asserted.
     emits_utf8("lint/em-dash-in-its-own-message",
                tool("lint_brief.py", put("plain", NO_ACCEPTANCE), "--json"),
                json_mode=True)
     emits_utf8("lint/em-dash-in-its-own-message-text",
                tool("lint_brief.py", put("plain2", NO_ACCEPTANCE)))
 
-    emits_utf8("lint/czech-goal-json",
-               tool("lint_brief.py", put("goal", CZECH_GOAL), "--json"), json_mode=True)
-    emits_utf8("lint/czech-goal-text",
-               tool("lint_brief.py", put("goal2", CZECH_GOAL)))
+    emits_utf8("lint/czech-vague-goal-json",
+               tool("lint_brief.py", put("vague", CZECH_VAGUE), "--json"), json_mode=True)
+    emits_utf8("lint/czech-vague-goal-text",
+               tool("lint_brief.py", put("vague2", CZECH_VAGUE)))
 
-    # The inversion worth the most: an unknown Czech key is quoted back in the finding,
-    # so the tool dies while reporting and exits 1 — the code for "found a finding" —
-    # after printing nothing at all.
+    # Surface two, and the inversion worth the most: `č` has no cp1252 code point at all,
+    # so quoting an unknown Czech key back raises `UnicodeEncodeError`. The tool dies while
+    # reporting, prints zero bytes, and exits 1 — the code for "found a finding". A crash
+    # is then indistinguishable from a verdict, which no exit-code assertion can catch.
     emits_utf8("lint/czech-unknown-key-json",
                tool("lint_brief.py", put("key", CZECH_KEY), "--json"), json_mode=True)
     emits_utf8("lint/czech-unknown-key-text",
@@ -269,14 +309,31 @@ base_rev: {head}
                       "toolArgs": {"path": blocked}}).encode("utf-8")
     r = emits_utf8("hook-copilot-guard/czech-path-denies-on-stdout",
                    tool("hook_copilot_guard.py"), stdin=cop, cwd=root, expect_exit=0)
-    try:
-        decision = json.loads(r.stdout.decode("utf-8"))
-        ok(decision.get("permissionDecision") == "deny",
-           "hook-copilot-guard/czech-path-denies-on-stdout: decision is deny",
-           r.stdout.decode("utf-8", "backslashreplace"))
-    except Exception as e:
-        ok(False, "hook-copilot-guard/czech-path-denies-on-stdout: decision is deny",
-           f"{type(e).__name__}: {e} ({len(r.stdout)} bytes)")
+    denies(r, "hook-copilot-guard/czech-path-denies-on-stdout")
+
+    # The fail-closed landmine, pinned. Both adapters reach a `.prompire/ACTIVE` verdict in
+    # `hook_policy`'s PASS 1, *before* it imports `brief_common` — deliberately, because
+    # that protection is documented as unconditional and `brief_common` pulls in PyYAML.
+    # A module-scope import of the stdio helper in either adapter would move that failure
+    # ahead of the verdict: the Claude one would exit 1 and lose a block, and the Copilot
+    # one would exit 1, which Copilot reads as denying every file write on the machine.
+    # So both are run here with `import yaml` raising for real.
+    broken = pathlib.Path(tmp) / "noyaml"
+    broken.mkdir(exist_ok=True)
+    (broken / "yaml.py").write_text('raise ImportError("no yaml here")\n', encoding="utf-8")
+    no_yaml = {"PYTHONPATH": str(broken)}
+    pointer = str(root / ".prompire" / "ACTIVE")
+
+    emits_utf8("hook-scope-guard/blocks-pointer-write-without-pyyaml",
+               tool("hook_scope_guard.py"), cwd=root, expect_exit=2, env_extra=no_yaml,
+               stdin=json.dumps({"tool_name": "Write", "cwd": str(root),
+                                 "tool_input": {"file_path": pointer}}).encode("utf-8"))
+    r = emits_utf8("hook-copilot-guard/denies-pointer-write-without-pyyaml",
+                   tool("hook_copilot_guard.py"), cwd=root, expect_exit=0,
+                   env_extra=no_yaml,
+                   stdin=json.dumps({"toolName": "create", "cwd": str(root),
+                                     "toolArgs": {"path": pointer}}).encode("utf-8"))
+    denies(r, "hook-copilot-guard/denies-pointer-write-without-pyyaml")
 
 
 def runner_cases(tmp, root, head):

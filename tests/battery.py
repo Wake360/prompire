@@ -555,15 +555,42 @@ base_rev: "HEAD~1"
 ]
 
 
+def read_verdict(r):
+    """(findings, None) from a finished lint run, or (None, why) if none can be read.
+
+    Split out of `run()` so the `stdout is None` branch can be asserted directly, because
+    no test on this platform can reach it. A child whose output does not decode fails in
+    two different places depending on the OS, from one root cause:
+
+    - **POSIX**: the decode happens in the parent's `_communicate`, so `subprocess.run`
+      raises `UnicodeDecodeError` and `run()` catches it below.
+    - **Windows**: the decode happens in a reader thread, where the exception is
+      swallowed, and `stdout` arrives as **None**. That is the `TypeError` in the CI log —
+      `json.loads(None)` — and `cli-windows` runs this suite as its first step.
+
+    So the None branch is Windows-only in effect and is pinned by `self_checks()` instead.
+    `r.stdout or ""` on the exit-2 path is the same hazard: a refusal whose stdout did not
+    decode would otherwise raise `AttributeError` here, on Windows only.
+    """
+    if r.returncode == 2:
+        return None, ((r.stdout or "").strip() or (r.stderr or "").strip()
+                      or "the linter refused (exit 2) and printed nothing readable")
+    if r.stdout is None:
+        return None, "the linter's stdout could not be read at all (not decodable?)"
+    try:
+        return json.loads(r.stdout), None
+    except ValueError as e:
+        return None, (f"exit {r.returncode} but stdout is not json ({e}): "
+                      f"{(r.stderr or '').strip()}")
+
+
 def run(name, body):
     """The linter's JSON, or (None, why) if this suite could not read a verdict at all.
 
     The decode is strict on purpose — the linter's stdout is a wire format and UTF-8 is
     the contract `tests/encoding.py` pins — but a child that broke it must surface as a
     named case failure, not as a `UnicodeDecodeError` out of `subprocess.run` that stops
-    the suite on its first case and says nothing about the other sixty. `stdout` is also
-    checked for None: nothing sets it today, and a future `run` shape that does must not
-    turn into a `TypeError` inside `json.loads`.
+    the suite on its first case and says nothing about the other forty-four.
     """
     p = TMP / f"{name}.yaml"
     p.write_text(body.lstrip(), encoding="utf-8")
@@ -572,17 +599,45 @@ def run(name, body):
                            capture_output=True, text=True, encoding="utf-8")
     except UnicodeDecodeError as e:
         return None, f"the linter's stdout is not utf-8: {e}"
-    if r.returncode == 2:
-        return None, r.stdout.strip() or r.stderr.strip()
-    if r.stdout is None:
-        return None, "the linter's stdout could not be read at all"
-    try:
-        return json.loads(r.stdout), None
-    except ValueError as e:
-        return None, f"exit {r.returncode} but stdout is not json ({e}): {r.stderr.strip()}"
+    return read_verdict(r)
+
+
+class _Finished:
+    """The three fields `read_verdict` reads off a `CompletedProcess`."""
+
+    def __init__(self, returncode, stdout, stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def self_checks():
+    """`read_verdict`'s unreachable-on-POSIX branches, asserted directly.
+
+    Every one of these is a real Windows shape (see `read_verdict`). The contract is
+    identical in all of them: return a reason, never raise, and never hand a None to
+    `json.loads`.
+    """
+    cases = (
+        ("exit 0 with stdout None", _Finished(0, None)),
+        ("exit 1 with stdout None", _Finished(1, None)),
+        ("exit 2 with stdout None", _Finished(2, None, None)),
+        ("exit 1 with non-json stdout", _Finished(1, "not json at all")),
+    )
+    fails = 0
+    for label, r in cases:
+        try:
+            data, why = read_verdict(r)
+            ok = data is None and bool(why)
+            detail = "" if ok else f"returned {data!r}, {why!r}"
+        except Exception as e:
+            ok, detail = False, f"raised {type(e).__name__}: {e}"
+        fails += 0 if ok else 1
+        print(f"{'pass' if ok else 'FAIL'}  {label:44s} {detail}")
+    return fails
 
 
 def main():
+    # Counted apart from CASES so the tally below stays a count of linter cases.
+    probe_fails = self_checks()
     fails = 0
     for name, body, must_err, must_warn, must_not in CASES:
         data, error = run(name, body)
@@ -608,7 +663,7 @@ def main():
             print(f"        false positive(s): {spurious}")
 
     print(f"\n{len(CASES) - fails}/{len(CASES)} cases pass")
-    return 1 if fails else 0
+    return 1 if fails or probe_fails else 0
 
 
 if __name__ == "__main__":
