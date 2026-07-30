@@ -290,12 +290,19 @@ def _emit(out):
     and it is lazy and swallowed for the same reasons as `hook_scope_guard.block()`: a
     module-scope `brief_common` import would drag in PyYAML and make
     `hook_policy`'s unconditional `.prompire/ACTIVE` verdicts depend on it.
+
+    It is also behind `if out:` rather than run unconditionally. This function is called on
+    the neutral path too — with `out == ""`, on every file write in every Copilot session —
+    and importing `brief_common` there would pay for PyYAML exactly where `hook_policy`
+    goes out of its way not to. Nothing is printed on that path, so there is nothing to
+    reconfigure for.
     """
-    try:
-        from brief_common import utf8_stdio
-        utf8_stdio()
-    except Exception:
-        pass
+    if out:
+        try:
+            from brief_common import utf8_stdio
+            utf8_stdio()
+        except Exception:
+            pass
     try:
         if out:
             sys.stdout.write(out + "\n")
