@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 
-from brief_common import tolerant_stdio
+from brief_common import utf8_stdio
 from check_scope import RepoError, active_brief, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -555,8 +555,8 @@ def build_parser():
 def main(argv=None):
     # This layer re-emits the children's JSON with `ensure_ascii=False`, so a path
     # check_scope.py escaped for its own stdout arrives back here as a real surrogate and
-    # has to be printed again — see brief_common.tolerant_stdio.
-    tolerant_stdio()
+    # has to be printed again — see brief_common.utf8_stdio.
+    utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in LOW_LEVEL_COMMANDS:
         return emit_process(run_tool(argv[0], *argv[1:]))

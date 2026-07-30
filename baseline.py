@@ -41,7 +41,7 @@ from brief_common import (
     matches_any,
     norm_cmd,
     norm_cwd,
-    tolerant_stdio,
+    utf8_stdio,
 )
 
 DESTRUCTIVE = re.compile(
@@ -201,7 +201,7 @@ def render_block(results, head):
 
 def main(argv):
     # `dirty()` names working-tree paths straight out of git — see check_scope.py's main.
-    tolerant_stdio()
+    utf8_stdio()
     args = [a for a in argv[1:] if not a.startswith("--")]
     if not args:
         print(__doc__.strip())
