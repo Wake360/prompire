@@ -557,9 +557,9 @@ base_rev: "HEAD~1"
 
 def run(name, body):
     p = TMP / f"{name}.yaml"
-    p.write_text(body.lstrip())
+    p.write_text(body.lstrip(), encoding="utf-8")
     r = subprocess.run([sys.executable, str(LINT), str(p), "--json"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     if r.returncode == 2:
         return None, r.stdout.strip() or r.stderr.strip()
     return json.loads(r.stdout), None

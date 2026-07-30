@@ -192,6 +192,27 @@ def _(repo, checks):
               "prepare must print the next verification command")
 
 
+@case("prepare survives a non-ASCII goal end to end")
+def _(repo, checks):
+    # Regression: write_text()/read_text() default to the locale encoding when
+    # `encoding=` is omitted — cp1252 on Windows, which raises on this Czech text.
+    # baseline.py writes the measured `baseline:` block back into the brief
+    # (baseline.py --write), so a non-ASCII `goal` must survive that round trip.
+    path = brief(repo, extra="")
+    text = path.read_text(encoding="utf-8").replace(
+        "goal: Add a count helper to src/cart.py.",
+        "goal: Přidej validaci IČO do src/cart.py.")
+    path.write_text(text, encoding="utf-8")
+    result = run("prepare", path)
+    checks.equal(result.returncode, 0,
+                 f"prepare on a non-ASCII goal: {result.stdout}{result.stderr}")
+    after = path.read_text(encoding="utf-8")
+    checks.ok("Přidej validaci IČO" in after,
+              "the non-ASCII goal must survive baseline.py's write-back")
+    active = pathlib.Path(repo) / ".prompire" / "ACTIVE"
+    checks.ok(active.is_file(), "prepare must still arm the guard")
+
+
 @case("prepare does not arm when baseline fails")
 def _(repo, checks):
     path = brief(repo, extra="    expect: unexpected outcome\n")
@@ -462,7 +483,7 @@ def _(repo, checks):
     tombstone = pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones"
     checks.equal(result.returncode, 0, "close exit")
     checks.ok(not active.exists(), "close must remove the active pointer")
-    checks.ok(tombstone.is_file() and ".prompire/task.yaml" in tombstone.read_text(),
+    checks.ok(tombstone.is_file() and ".prompire/task.yaml" in tombstone.read_text(encoding="utf-8"),
               "close must retain a tombstone")
 
 

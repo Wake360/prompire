@@ -11,8 +11,10 @@ exists only in the linter, is exactly the kind of thing nothing else notices.
 import json
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
+import tokenize
 import tomllib
 
 import yaml
@@ -440,6 +442,73 @@ def overclaim_problems():
     return out
 
 
+BINARY_MODES = {"rb", "wb", "ab", "rb+", "wb+", "ab+", "r+b", "w+b", "a+b", "xb", "x+b"}
+
+
+def encoding_problems():
+    """No tracked `*.py` file may do text I/O without an explicit `encoding=`.
+
+    `write_text()`/`read_text()`/`open()` fall back to the *locale* encoding when
+    `encoding=` is omitted — cp1252 on Windows, which raises on any non-ASCII text
+    (Czech goals in the fixtures, non-ASCII repo paths, ...). This is a source scan
+    rather than a run under `-X warn_default_encoding` because the bug is a missing
+    keyword argument, not a runtime code path — a scan catches every call regardless
+    of whether a test happens to exercise it with non-ASCII bytes. Tokenizing (rather
+    than a line-based regex) is what keeps this from firing on a comment or docstring
+    that merely mentions `write_text()`, or on a YAML fixture string containing
+    `python -c "...write_text('x')..."` as command text a test runs.
+    """
+    tracked = subprocess.run(
+        ["git", "-C", str(SKILL), "ls-files", "*.py"],
+        capture_output=True, text=True, check=True).stdout.splitlines()
+
+    problems = []
+    for rel in tracked:
+        path = SKILL / rel
+        with open(path, "rb") as f:
+            tokens = list(tokenize.tokenize(f.readline))
+
+        call_names = {"write_text", "read_text", "open"}
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if (tok.type == tokenize.NAME and tok.string in call_names
+                    and i + 1 < len(tokens)
+                    and tokens[i + 1].type == tokenize.OP
+                    and tokens[i + 1].string == "("):
+                # skip os.open(...) — flags-based, not text-mode I/O
+                if (tok.string == "open" and i >= 2
+                        and tokens[i - 1].type == tokenize.OP and tokens[i - 1].string == "."
+                        and tokens[i - 2].type == tokenize.NAME and tokens[i - 2].string == "os"):
+                    i += 1
+                    continue
+                depth = 0
+                j = i + 1
+                has_encoding = False
+                has_binary_mode = False
+                while j < len(tokens):
+                    t = tokens[j]
+                    if t.type == tokenize.OP and t.string == "(":
+                        depth += 1
+                    elif t.type == tokenize.OP and t.string == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    elif depth == 1 and t.type == tokenize.NAME and t.string == "encoding":
+                        has_encoding = True
+                    elif (depth == 1 and t.type == tokenize.STRING
+                          and t.string.strip("'\"") in BINARY_MODES):
+                        has_binary_mode = True
+                    j += 1
+                if not has_encoding and not has_binary_mode:
+                    problems.append(f"{rel}:{tok.start[0]}: `{tok.string}(...)` has no "
+                                    "`encoding=` — defaults to the locale encoding, "
+                                    "which is not UTF-8 on Windows")
+                i = j
+            i += 1
+    return problems
+
+
 def main():
     problems = []
     rules = enforced_rule_ids()
@@ -518,6 +587,7 @@ def main():
     problems += host_problems()
     problems += hook_config_problems()
     problems += overclaim_problems()
+    problems += encoding_problems()
 
     skill_md = read("SKILL.md")
     for rel, name in (("README.md", "hook_copilot_guard.py"),
