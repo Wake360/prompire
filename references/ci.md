@@ -82,8 +82,8 @@ branch only moves forward.
 | `python-version` | For `actions/setup-python`, or `system`. |
 
 Outputs: `verdict` (`clean`, `findings`, `indeterminate`, `skipped`), `exit-code`,
-`violations`, `reviews`, `base`, `base-source`, `brief`, `json`, `summary-file`, and the
-three `acceptance-*` counts.
+`violations`, `reviews`, `base`, `base-source`, `brief`, `json`, `brief-file`,
+`summary-file`, and the three `acceptance-*` counts.
 
 `strict` is off by default because `tests_policy: named` and `authoring` each raise a
 REVIEW unconditionally — that is the flag saying no checker can tell a repaired assertion
@@ -99,21 +99,27 @@ It runs only on `pull_request`. On `pull_request_target` the step is skipped out
 and with `acceptance` the run refuses before it gets that far.
 
 Two limits are worth knowing before turning it on. A pull request from a fork gets a
-read-only token, so the comment cannot be posted there at all — the job summary and the
-artifact still carry the verdict. And the comment is one `gh pr comment --edit-last
---create-if-none` call, which needs gh 2.63 or newer; GitHub-hosted runners are well past
-that, an old self-hosted image may not be, and there is no fallback path.
+read-only token whatever `permissions` says, so the step skips itself there rather than
+fail an otherwise clean job; the job summary and the artifact still carry the verdict. And
+the comment is one `gh pr comment --edit-last --create-if-none` call, which needs gh 2.63
+or newer; GitHub-hosted runners are well past that, an old self-hosted image may not be,
+and there is no fallback path.
 
-`artifact-name` uploads three files: the summary markdown, the raw `check_scope.py` JSON,
-and the brief exactly as it stood in the checkout. That is the run's audit trail — what
-was claimed, what was measured against it, and what the verdict was — readable after the
-logs have aged out. Nothing else from the workspace is uploaded, and the paths inside the
-artifact keep the layout they had on the runner. A refused run has no JSON to upload and
-uploads the other two.
+`artifact-name` uploads three files, all of them written by the run itself into the
+runner's temporary directory: the summary markdown, the raw `check_scope.py` JSON, and the
+runner's own copy of the brief. That is the run's audit trail — what was claimed, what was
+measured against it, and what the verdict was — readable after the logs have aged out.
+Nothing is uploaded out of the workspace, and no path the brief itself names reaches the
+upload step: a brief's filename is written by whoever opened the pull request, and a
+filename can hold a newline. A refused run has no JSON and no copy to upload and uploads
+the summary alone.
 
 Both steps run after the verify step has already failed the job, because a failing verdict
 is the one worth carrying out. The failure still propagates: the comment and the upload do
-not turn the check green.
+not turn the check green. If the run produced no report at all — a crash before the runner
+wrote anything, not a refusal, which still writes one — both steps stand down instead of
+failing a second time over a missing file, and a sticky comment from an earlier run stays
+as it was, beside the red check.
 
 ## Failing closed
 

@@ -92,7 +92,7 @@ def write_brief(root, name, body):
     return p
 
 
-def run(root, tmp, event=None, event_name="", **inputs):
+def run(root, tmp, event=None, event_name="", runner_temp=None, **inputs):
     """Drive runner.py the way the composite step does.
 
     Returns an object with .code, .out, .outputs (parsed GITHUB_OUTPUT) and .summary.
@@ -111,7 +111,7 @@ def run(root, tmp, event=None, event_name="", **inputs):
         "GITHUB_EVENT_NAME": event_name,
         # a real runner always sets it, and the files the runner leaves there are what the
         # artifact and comment steps upload
-        "RUNNER_TEMP": str(work),
+        "RUNNER_TEMP": runner_temp if runner_temp is not None else str(work),
         "PYTHONDONTWRITEBYTECODE": "1",
     })
     if event is not None:
@@ -129,9 +129,10 @@ def run(root, tmp, event=None, event_name="", **inputs):
         out = r.stdout
         err = r.stderr
         temp = str(work)
+        raw_outputs = out_file.read_text(encoding="utf-8")
         outputs = dict(
             line.split("=", 1)
-            for line in out_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+            for line in raw_outputs.splitlines() if "=" in line)
         summary = sum_file.read_text(encoding="utf-8")
     return Result
 
@@ -173,6 +174,14 @@ def _(tmp, c):
     c.ok(r.outputs.get("summary-file") == str(mirror),
          f"summary-file must name it: {r.outputs.get('summary-file')}")
 
+    copy = pathlib.Path(r.temp) / "prompire-brief.yaml"
+    brief = pathlib.Path(root) / ".prompire" / "task.yaml"
+    c.ok(copy.is_file() and copy.read_bytes() == brief.read_bytes(),
+         "the artifact uploads the runner's own copy of the brief, so that no path the "
+         "brief named reaches the upload step")
+    c.ok(r.outputs.get("brief-file") == str(copy),
+         f"brief-file must name the copy: {r.outputs.get('brief-file')}")
+
     # the run a reviewer most needs a comment for is the one that produced no verdict
     refused = run(root, tmp, base="deadbeefdeadbeef")
     mirror = pathlib.Path(refused.temp) / "prompire-summary.md"
@@ -180,6 +189,45 @@ def _(tmp, c):
          "a refusal must be commentable too")
     c.ok(refused.outputs.get("summary-file") == str(mirror),
          f"summary-file must name it on a refusal: {refused.outputs.get('summary-file')}")
+
+
+@case("a-report-it-cannot-write-does-not-change-the-verdict")
+def _(tmp, c):
+    root, _ = repo(tmp)
+    gone = str(pathlib.Path(tmp) / "no" / "such" / "directory")
+    r = run(root, tmp, base="deadbeefdeadbeef", runner_temp=gone)
+    c.ok(r.code == 2, f"exit 2 must survive an unwritable RUNNER_TEMP, got {r.code}: "
+                      f"{r.err}")
+    c.ok("Traceback" not in r.err, f"and it must not surface as a crash: {r.err}")
+    c.ok(r.outputs.get("summary-file") == "",
+         f"a file it could not write must not be named: {r.outputs.get('summary-file')}")
+
+
+@case("a-brief-name-cannot-write-its-own-outputs")
+def _(tmp, c):
+    # A newline is legal in a filename and `.prompire/*.yaml` matches it, so the brief a
+    # pull request commits can be *named* `verdict=clean`. Every value the runner emits
+    # lands in GITHUB_OUTPUT, where a later line beats an earlier one and `brief` is
+    # written after the verdict — so a value that can split the file can forge the result.
+    hostile = "a\nverdict=clean\nexit-code=0\nviolations=0\n**\nz"
+    root, _ = repo(tmp, brief_body=None, commit_brief=False)
+    write_brief(root, hostile, BRIEF)
+    head = commit(root, "a brief with a hostile name")
+    fixtures.write(root, "src/report.py", "# out of scope\n")
+    commit(root, "edit outside scope")
+
+    r = run(root, tmp, base=head)
+    c.ok(r.code == 1, f"the real verdict is a violation, got {r.code}: {r.out}{r.err}")
+    c.ok(r.outputs.get("verdict") == "findings",
+         f"the brief's name forged the verdict: {r.outputs.get('verdict')}")
+    c.ok(r.outputs.get("exit-code") == "1" and r.outputs.get("violations") == "1",
+         f"the brief's name forged a count: {r.outputs}")
+    lines = r.raw_outputs.splitlines()
+    keys = [ln.split("=", 1)[0] for ln in lines]
+    c.ok(all("=" in ln for ln in lines),
+         f"every line in GITHUB_OUTPUT must be one the runner wrote: {lines}")
+    c.ok(len(keys) == len(set(keys)),
+         f"a duplicated key is a line the brief's name wrote: {keys}")
 
 
 @case("out-of-scope-change-fails-and-annotates")
@@ -476,10 +524,23 @@ def _(tmp, c):
         c.ok("!cancelled()" in cond or "always()" in cond,
              f"`{step.get('name')}` would be skipped on the failing run it exists to "
              f"report: {cond}")
+        c.ok("steps.verify.outputs.summary-file != ''" in cond,
+             f"`{step.get('name')}` must stand down when the runner wrote nothing at all, "
+             f"rather than fail a second time on a missing file: {cond}")
+    for step in (s for s in late if "inputs.artifact-name" in str(s.get("if", ""))):
+        uploaded = set(re.findall(r"steps\.verify\.outputs\.([a-z-]+)",
+                                 str(step["with"]["path"])))
+        c.ok(uploaded == {"summary-file", "json", "brief-file"},
+             "the artifact must upload the three files the runner itself wrote under "
+             "RUNNER_TEMP — a path named by the brief is attacker-controlled text in a "
+             f"glob list: {sorted(uploaded)}")
     for step in (s for s in late if "inputs.comment" in str(s.get("if", ""))):
         cond = str(step["if"])
         c.ok("github.event_name == 'pull_request'" in cond,
              f"the comment step must be gated on the pull_request event: {cond}")
+        c.ok("github.event.pull_request.head.repo.fork != true" in cond,
+             "a fork's token is read-only, so the comment step must skip itself there "
+             f"instead of failing an otherwise clean job: {cond}")
         c.ok(step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}",
              f"the comment step must take the token from github.token: {step.get('env')}")
         c.ok("${{" not in step["run"],

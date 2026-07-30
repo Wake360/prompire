@@ -62,6 +62,9 @@ outputs:
   json:
     description: "Path to the raw check_scope.py JSON, when RUNNER_TEMP is set"
     value: ${{ steps.verify.outputs.json }}
+  brief-file:
+    description: "Path to the runner's own copy of the brief, when RUNNER_TEMP is set"
+    value: ${{ steps.verify.outputs.brief-file }}
   summary-file:
     description: "Path to the job summary as markdown, when RUNNER_TEMP is set"
     value: ${{ steps.verify.outputs.summary-file }}
@@ -99,19 +102,26 @@ runs:
       run: python3 "$GITHUB_ACTION_PATH/runner.py"
     # Both of these carry a failing verdict out of the job, so they run after the verify
     # step has already failed it. `!cancelled()` and not `always()`: a cancelled run has
-    # nothing to report.
+    # nothing to report. A summary-file the runner never wrote means it produced no report
+    # at all, and neither step has anything to do but fail a second time.
+    #
+    # Every path uploaded here was written by the runner into RUNNER_TEMP. The brief's own
+    # path is named by whoever opened the pull request, so it never appears in this glob
+    # list — `prompire-brief.yaml` is the runner's copy.
     - name: Upload the verdict as an artifact
-      if: ${{ !cancelled() && inputs.artifact-name != '' }}
+      if: ${{ !cancelled() && inputs.artifact-name != '' && steps.verify.outputs.summary-file != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.artifact-name }}
         path: |
           ${{ steps.verify.outputs.summary-file }}
           ${{ steps.verify.outputs.json }}
-          ${{ steps.verify.outputs.brief }}
+          ${{ steps.verify.outputs.brief-file }}
         if-no-files-found: warn
+    # A fork's GITHUB_TOKEN is read-only whatever `permissions` says, so on a fork this
+    # step would fail an otherwise clean job. It stands down instead.
     - name: Comment the verdict on the pull request
-      if: ${{ !cancelled() && inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      if: ${{ !cancelled() && inputs.comment == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && steps.verify.outputs.summary-file != '' }}
       shell: bash
       # Every value arrives as env. A pull request's title and branch name are written by
       # whoever opened it, and this step must stay uninteresting to them.
