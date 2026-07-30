@@ -162,6 +162,15 @@ reviewer's, not the agent's. The primary CLI lifecycle performs those stages thr
 
 Remove it by deleting the `PreToolUse` entry.
 
+The hook is optional and machine-wide: once installed it runs on every `Write`/`Edit` in
+every project, and does nothing at all in a repository with no armed brief.
+
+**Cost**: about 75 ms per watched write, dominated by Python interpreter startup, paid on
+every `Write`/`Edit`/`MultiEdit`/`NotebookEdit` on the machine whether or not any brief
+is armed. Measured on an Intel MacBook, median of 12 runs: 74 ms in a repository with
+nothing armed, 85 ms in one with a brief armed and the boundary actually evaluated.
+Nothing is paid on reads, searches, or `Bash`.
+
 ## Installing the hook — GitHub Copilot CLI
 
 Copilot uses a different file, a different schema, and a different way of saying no.
@@ -364,10 +373,10 @@ allowed, and an operation the adapter does not recognise is not reported as chec
 `bash` and `powershell` are deliberately not matched, and must not be. A shell write
 bypasses the early guard entirely; `check_scope.py` on the real git diff is what sees it
 afterwards, because git sees the write whatever tool made it. This is the two-layer
-design, not an oversight — see the limitations table in `README.md`, which applies
-unchanged to Copilot. Inspecting a command line for the files it will touch is a much
-weaker claim than reading a diff, and a guard that made it would be worse than one with a
-stated hole.
+design, not an oversight — see the limitations table in `references/threat-model.md`,
+which applies unchanged to Copilot. Inspecting a command line for the files it will touch
+is a much weaker claim than reading a diff, and a guard that made it would be worse than
+one with a stated hole.
 
 The hook is not a sandbox and not a permission system. Nothing here binds an agent with
 shell access. The reviewer still runs `check_scope.py BRIEF --strict` after the agent

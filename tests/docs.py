@@ -423,9 +423,10 @@ def hook_config_problems():
 def overclaim_problems():
     """The project's own stance, enforced against the project's own prose.
 
-    README.md spends a whole paragraph saying what the guarantee is *not*, and the
-    limitations table exists so the claim stops where the evidence does. One confident
-    adjective in a later edit undoes that, and nothing else in this suite would notice.
+    README.md spends a whole paragraph saying what the guarantee is *not*, and
+    references/threat-model.md carries the limitations table so the claim stops where
+    the evidence does. One confident adjective in a later edit undoes that, and nothing
+    else in this suite would notice.
     """
     out = []
     for rel in PROSE:
