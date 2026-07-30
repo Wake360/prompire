@@ -279,20 +279,29 @@ def demo_verdict(result):
           else f"     caught (exit {result.returncode})")
 
 
-def _clear_readonly_and_retry(func, path, exc_info):
-    """`shutil.rmtree`'s onerror hook. Every object git writes under `.git/objects`
-    is created read-only, and unlike POSIX (where deletion is a directory-permission
-    question, so the file's own read-only bit doesn't matter), Windows refuses to
-    unlink a read-only file. Clear the attribute and retry once."""
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
+def _make_tree_writable(root):
+    """Every object git writes under `.git/objects` is created read-only, and unlike
+    POSIX (where deletion is a directory-permission question, so a file's own
+    read-only bit doesn't matter), Windows refuses to unlink a read-only file. Clear
+    the attribute on everything before removal is attempted, rather than reacting to
+    the failure (`shutil.rmtree`'s `onerror=` hook is deprecated as of Python 3.12,
+    and this repo supports 3.11 through 3.13)."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+            except OSError:
+                pass
+    try:
+        os.chmod(root, os.stat(root).st_mode | stat.S_IWRITE)
+    except OSError:
+        pass
 
 
 def _rmtree(root):
-    try:
-        shutil.rmtree(root, onerror=_clear_readonly_and_retry)
-    except OSError:
-        pass
+    _make_tree_writable(root)
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def demo(args, extra):
