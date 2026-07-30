@@ -44,9 +44,10 @@ class Checks:
         self.ok(got == want, f"{message}: got {got!r}, want {want!r}")
 
 
-def run(*args):
+def run(*args, cwd=None):
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
-                          capture_output=True, text=True, env=ENV)
+                          capture_output=True, text=True, env=ENV,
+                          cwd=None if cwd is None else str(cwd))
 
 
 def run_with_replaced_tools(args, replacements):
@@ -90,6 +91,68 @@ def json_out(result):
         return json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise AssertionError(f"stdout is not one JSON object: {result.stdout!r}") from error
+
+
+@case("draft writes an unconfirmed brief and prepare refuses it as-is")
+def _(repo, checks):
+    result = run("draft", "Add a health endpoint", "--out", ".prompire/task.yaml", cwd=repo)
+    checks.equal(result.returncode, 0, "draft exit")
+    path = pathlib.Path(repo) / ".prompire" / "task.yaml"
+    text = path.read_text(encoding="utf-8")
+    checks.ok("Add a health endpoint" in text, "the sentence must become the goal")
+    checks.ok("prompire:unconfirmed" in text, "open items must be visibly unconfirmed")
+    blocked = run("prepare", path)
+    checks.equal(blocked.returncode, 2, "prepare must refuse an unconfirmed draft")
+    confirmed = text.replace("# prompire:unconfirmed", "# confirmed")
+    path.write_text(confirmed, encoding="utf-8")
+    # scope [] and an empty acceptance still fall over on lint — but with lint's own
+    # verdict, not a draft refusal; the gate must not eat the lint result
+    after = run("prepare", path)
+    checks.ok("draft not confirmed" not in after.stdout + after.stderr,
+              "removing the markers must clear the draft gate")
+
+
+@case("draft proposes only commands the repo evidences")
+def _(repo, checks):
+    (pathlib.Path(repo) / "package.json").write_text(
+        '{"scripts": {"test": "node test.js"}}', encoding="utf-8")
+    run("draft", "Tighten input validation", "--out", ".prompire/task.yaml", cwd=repo)
+    text = (pathlib.Path(repo) / ".prompire" / "task.yaml").read_text(encoding="utf-8")
+    checks.ok("npm test" in text, "the detected script must be proposed")
+    checks.ok("detected from package.json scripts.test" in text,
+              "every proposal must carry its evidence")
+
+
+@case("draft invents nothing when the repo evidences nothing")
+def _(repo, checks):
+    run("draft", "Do the thing", "--out", ".prompire/task.yaml", cwd=repo)
+    text = (pathlib.Path(repo) / ".prompire" / "task.yaml").read_text(encoding="utf-8")
+    checks.ok("no test command detected" in text, "absence must be stated, not filled")
+    checks.ok("npm test" not in text and "pytest" not in text,
+              "no invented acceptance commands")
+
+
+@case("draft refuses to overwrite an existing brief")
+def _(repo, checks):
+    path = brief(repo)
+    before = path.read_bytes()
+    result = run("draft", "Another task", "--out", str(path), cwd=repo)
+    checks.equal(result.returncode, 2, "draft must not clobber an existing brief")
+    checks.equal(path.read_bytes(), before, "the existing brief must keep its bytes")
+    checks.ok("already exists" in result.stdout, "the refusal must name the collision")
+
+    planted = pathlib.Path(repo) / ".prompire" / "planted.yaml"
+    try:
+        planted.symlink_to(pathlib.Path(repo) / "src" / "cart.py")
+    except (NotImplementedError, OSError):
+        return
+    dangling = pathlib.Path(repo) / ".prompire" / "dangling.yaml"
+    dangling.symlink_to(pathlib.Path(repo) / "src" / "absent.py")
+    for target in (planted, dangling):
+        outcome = run("draft", "Another task", "--out", str(target), cwd=repo)
+        checks.equal(outcome.returncode, 2, f"draft must refuse the {target.name} symlink")
+    checks.ok(not (pathlib.Path(repo) / "src" / "absent.py").exists(),
+              "draft must not write through a dangling symlink")
 
 
 @case("prepare writes baseline, prompt, checklist, then ACTIVE")
