@@ -192,13 +192,10 @@ def annotate(root, findings):
         print(f"::{level} {','.join(props)}::{esc_data(message)}")
 
 
-def summary_file():
-    """Where the comment and artifact steps read this run's summary; empty off a runner."""
-    temp = env("RUNNER_TEMP")
-    return str(pathlib.Path(temp) / "prompire-summary.md") if temp else ""
-
-
 def summary(lines):
+    """Write the job summary. Returns the copy the comment and artifact steps read, or
+    `""` when there is none — a report that could not be written is a missing artifact,
+    never a changed verdict, so this is called from the refusal path too."""
     path = env("GITHUB_STEP_SUMMARY")
     text = "\n".join(lines) + "\n"
     if path:
@@ -206,16 +203,32 @@ def summary(lines):
             fh.write(text)
     else:
         print(text, end="")
-    mirror = summary_file()
-    if mirror:
+    temp = env("RUNNER_TEMP")
+    if not temp:
+        return ""
+    mirror = pathlib.Path(temp) / "prompire-summary.md"
+    try:
         # written, not appended: the job summary accumulates every step, a comment on the
         # pull request has to be this run's verdict alone
-        pathlib.Path(mirror).write_text(text, encoding="utf-8")
+        mirror.write_text(text, encoding="utf-8")
+    except OSError:
+        return ""
+    return str(mirror)
+
+
+def one_line(value):
+    r"""Flatten a value so it cannot write output lines of its own.
+
+    A newline is legal in a filename and `.prompire/*.yaml` matches it, so a pull request
+    can commit a brief named `a\nverdict=clean\n...yaml`. Every output goes through here
+    because `brief` is emitted after the verdict and the last line for a key wins.
+    """
+    return str(value).replace("\r", " ").replace("\n", " ")
 
 
 def outputs(pairs):
     path = env("GITHUB_OUTPUT")
-    text = "".join(f"{k}={v}\n" for k, v in pairs.items())
+    text = "".join(f"{k}={one_line(v)}\n" for k, v in pairs.items())
     if path:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(text)
@@ -272,12 +285,13 @@ def main():
     if brief is None:
         if env("PROMPIRE_ON_MISSING_BRIEF", "skip") == "fail":
             raise Refusal("no brief is committed under `.prompire/`.")
-        summary(["## Prompire", "",
-                 "No brief is committed under `.prompire/`, so nothing was checked. "
-                 "This is not a passing verdict — the repository made no claim to check."])
+        mirror = summary([
+            "## Prompire", "",
+            "No brief is committed under `.prompire/`, so nothing was checked. "
+            "This is not a passing verdict — the repository made no claim to check."])
         outputs({"verdict": "skipped", "exit-code": "0", "violations": "0",
                  "reviews": "0", "base": "", "base-source": "", "brief": "",
-                 "json": "", "summary-file": summary_file(),
+                 "json": "", "brief-file": "", "summary-file": mirror,
                  "acceptance-passed": "", "acceptance-failed": "",
                  "acceptance-not-run": ""})
         return 0
@@ -318,10 +332,19 @@ def main():
             bad = bad or bool(accepted.get("not_run"))
     verdict = "findings" if bad else "clean"
 
-    json_path = ""
+    json_path, brief_copy = "", ""
     if env("RUNNER_TEMP"):
-        json_path = str(pathlib.Path(env("RUNNER_TEMP")) / "prompire-scope.json")
+        temp = pathlib.Path(env("RUNNER_TEMP"))
+        json_path = str(temp / "prompire-scope.json")
         pathlib.Path(json_path).write_text(scope.stdout, encoding="utf-8")
+        brief_copy = str(temp / "prompire-brief.yaml")
+        try:
+            # the artifact uploads this copy rather than the brief where it sits: the
+            # brief's own path is named by whoever opened the pull request, and it has no
+            # business in the upload step's glob list
+            pathlib.Path(brief_copy).write_bytes(brief.read_bytes())
+        except OSError:
+            brief_copy = ""
 
     lines = [
         "## Prompire", "",
@@ -337,7 +360,7 @@ def main():
         lines += finding_rows(findings)
     else:
         lines += ["", "Every change is inside the declared boundary."]
-    summary(lines)
+    mirror = summary(lines)
 
     if flag("PROMPIRE_ANNOTATIONS", "true"):
         annotate(root, findings)
@@ -352,7 +375,8 @@ def main():
         "base-source": str(data.get("base_source") or "uncorroborated"),
         "brief": rel_brief,
         "json": json_path,
-        "summary-file": summary_file(),
+        "brief-file": brief_copy,
+        "summary-file": mirror,
         "acceptance-passed": str(accepted.get("passed", 0)) if accepted else "",
         "acceptance-failed": str(accepted.get("failed", 0)) if accepted else "",
         "acceptance-not-run": str(accepted.get("not_run", 0)) if accepted else "",
@@ -364,12 +388,13 @@ def entrypoint():
     try:
         code = main()
     except Refusal as exc:
-        summary(["## Prompire", "",
-                 "**no verdict** — the check could not establish what it was checking.",
-                 "", "```", str(exc), "```"])
+        mirror = summary([
+            "## Prompire", "",
+            "**no verdict** — the check could not establish what it was checking.",
+            "", "```", str(exc), "```"])
         outputs({"verdict": "indeterminate", "exit-code": "2", "violations": "0",
                  "reviews": "0", "base": "", "base-source": "", "brief": "",
-                 "json": "", "summary-file": summary_file(),
+                 "json": "", "brief-file": "", "summary-file": mirror,
                  "acceptance-passed": "", "acceptance-failed": "",
                  "acceptance-not-run": ""})
         print(f"::error title=Prompire::{esc_data(exc)}")
