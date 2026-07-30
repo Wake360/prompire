@@ -24,6 +24,7 @@ python3 tests/e2e.py --verbose      # keeps the temp repos so a failing diff is 
 python3 tests/examples.py           # examples/ lint clean and reproduce their baselines
 python3 tests/golden.py             # renderer snapshots + wording rules
 python3 tests/hook.py               # PreToolUse guard: blocked (exit 2) vs allowed (exit 0)
+python3 tests/encoding.py           # every tool's stdout is utf-8 under a cp1252 console
 python3 tests/docs.py               # rule ids, schema keys and prose still agree
 ```
 

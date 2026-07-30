@@ -15,6 +15,7 @@ SUITES = (
     "golden.py",
     "docs.py",
     "hook.py",
+    "encoding.py",
     "verify.py",
     "cli.py",
     "package.py",

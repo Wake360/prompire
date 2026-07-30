@@ -54,6 +54,7 @@ python3 tests/e2e.py           end-to-end workflows and attacks (builds temp git
 python3 tests/examples.py      examples lint clean and reproduce their baselines
 python3 tests/golden.py        renderer snapshots
 python3 tests/hook.py          both hook adapters: blocked vs allowed vs neutral
+python3 tests/encoding.py      every tool's stdout is utf-8 under a cp1252 console
 python3 tests/verify.py        acceptance verifier integration cases
 python3 tests/cli.py           prepare, verify, and close integration cases
 python3 tests/package.py       installed CLI packaging checks

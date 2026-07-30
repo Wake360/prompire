@@ -54,6 +54,21 @@ def target_of(tool_input, cwd):
 
 
 def block(rel, rule, message, fix):
+    # This message names a path and is the only thing the agent gets told. stderr defaults
+    # to `backslashreplace`, so a cp1252 console does not crash here — it silently spells
+    # a Czech path as mojibake, telling the agent to revert a file it cannot then find.
+    #
+    # Imported here and not at module scope because `brief_common` pulls in PyYAML, and
+    # `hook_policy.verdict_for` deliberately reaches its `.prompire/ACTIVE` verdicts
+    # *before* that import can fail — those are documented as unconditional, and a
+    # module-scope import here would quietly make them conditional on PyYAML.
+    # Swallowed for the same reason: a stream this cannot reconfigure must cost the
+    # spelling of the path, never the block itself, so the write below happens regardless.
+    try:
+        from brief_common import utf8_stdio
+        utf8_stdio()
+    except Exception:
+        pass
     sys.stderr.write(f"BLOCKED by Prompire scope guard [{rule}]: {rel}\n{message}\n")
     if fix:
         sys.stderr.write(f"-> {fix}\n")
