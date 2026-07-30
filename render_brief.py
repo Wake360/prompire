@@ -148,9 +148,12 @@ def render_prompt(brief, brief_path, flavour):
         lines += ["Done when all of these hold:"]
     lines += numbered(brief)
     lines.append("")
-    if flavour == "copilot":
-        manual = [str(m) for m in as_list(brief.get("manual_checks"))]
-        lines += _bullets("No command covers these; a human confirms them:", manual)
+    manual = [str(m) for m in as_list(brief.get("manual_checks"))]
+    if flavour == "codex":
+        lines += _bullets("## Human review — no command covers these", manual)
+    else:
+        lines += _bullets("Human review — no command covers these; a human confirms "
+                          "them:", manual)
     ts = tests_sentence(brief)
     if ts:
         lines += [ts, ""]

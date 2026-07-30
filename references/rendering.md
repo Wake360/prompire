@@ -19,32 +19,31 @@ These hold for every target and are asserted in `tests/golden.py`:
 3. **Prompts stay under 250 words.** Over budget is exit 1, not a warning.
 4. **No role-play, no motivation, no restated field.** "You are a senior engineer" buys
    nothing and costs words.
-5. **Manual checks appear as manual.** Never mixed into the numbered command list.
+5. **Manual checks appear as manual, in every prompt target.** Rendered under a Human
+   review section, never mixed into the numbered command list.
 6. **Every prompt names the external check.** The agent should know the diff is checked
    from outside by `check_scope.py` after it stops.
 
 ## The targets
 
 **`claude` / `generic`** — one prose block: goal, the paths, `Never touch:`,
-`Keep true:`, the numbered criteria with their state, the tests sentence, the autonomy
-sentence, the external-check sentence, then `context` if present. `claude` names the
-brief file in the external-check sentence; `generic` says "the brief". That is the only
-difference between them.
+`Keep true:`, the numbered criteria with their state, the Human review section when
+`manual_checks` exist, the tests sentence, the autonomy sentence, the external-check
+sentence, then `context` if present. `claude` names the brief file in the
+external-check sentence; `generic` says "the brief". That is the only difference
+between them.
 
 **`codex`** — the same content as markdown sections: `## Task`, `## Files you may edit`,
-`## Never touch`, `## Keep true`, `## Verify`. Forbidden paths and constraints stay in
-separate sections: a path you must not touch and an invariant you must preserve are
-different instructions.
+`## Never touch`, `## Keep true`, `## Verify`, `## Human review`. Forbidden paths and
+constraints stay in separate sections: a path you must not touch and an invariant you
+must preserve are different instructions.
 
-**`copilot`** — the same prose block as `claude` (it names the brief file too), with two
-differences. First, `manual_checks` appear right after the numbered criteria, under
-*"No command covers these; a human confirms them:"*, one bullet per entry, never mixed
-into the numbered list — no other prompt target renders `manual_checks` at all. Second,
-the external-check sentence grows two more: a preToolUse hook may catch an out-of-scope
-write before it lands but cannot see shell commands, `check_scope.py` is what checks the
-real diff afterwards, and the agent must not edit the brief or Prompire's state files.
-That warning exists because Copilot-style hosts commonly run shell tools the hook cannot
-observe.
+**`copilot`** — the same prose block as `claude` (it names the brief file too), with one
+difference: the external-check sentence grows two more: a preToolUse hook may catch an
+out-of-scope write before it lands but cannot see shell commands, `check_scope.py` is
+what checks the real diff afterwards, and the agent must not edit the brief or
+Prompire's state files. That warning exists because Copilot-style hosts commonly run
+shell tools the hook cannot observe.
 
 **`agents.md`** and **`claude.md`** — the durable half only: `## Never touch`,
 `## Keep true`, `## Tests`, `## Verify`. No goal, no scope, no autonomy, no baseline,

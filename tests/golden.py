@@ -66,6 +66,9 @@ def wording_checks(name, target, text):
             problems.append("no mention of the external scope check")
         if "revised brief" not in text:
             problems.append("does not say a wider scope needs a revised brief")
+    if target in PROMPTS and name in ("02-must-flip", "worked-example"):
+        if "human review" not in low:
+            problems.append("manual_checks must reach every prompt target")
     if target in ("agents.md", "claude.md"):
         for leaked in ("## Task", "autonomy", "baseline:", "Files you may edit"):
             if leaked.lower() in low:
