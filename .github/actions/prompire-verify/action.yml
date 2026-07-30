@@ -118,12 +118,13 @@ runs:
           ${{ steps.verify.outputs.json }}
           ${{ steps.verify.outputs.brief-file }}
         if-no-files-found: warn
-    # A fork's GITHUB_TOKEN is read-only whatever `permissions` says, so on a fork this
-    # step would fail an otherwise clean job. It stands down instead. `== false` and not
-    # `!= true`: a fork deleted while its pull request is open leaves `head.repo` null, and
-    # `null.fork != true` is also true — which would run the step on a read-only token.
+    # This needs a write-scoped token, so it runs only when the head branch is in this
+    # repository — a positive identity match, not a negated `fork` test. A fork's token is
+    # read-only whatever `permissions` says, and a fork deleted while its pull request is
+    # open leaves no `head.repo` at all to carry `fork: true`; both must stand down rather
+    # than fail an otherwise clean job.
     - name: Comment the verdict on the pull request
-      if: ${{ !cancelled() && inputs.comment == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && steps.verify.outputs.summary-file != '' }}
+      if: ${{ !cancelled() && inputs.comment == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.verify.outputs.summary-file != '' }}
       shell: bash
       # Every value arrives as env. A pull request's title and branch name are written by
       # whoever opened it, and this step must stay uninteresting to them.
