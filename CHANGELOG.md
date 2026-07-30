@@ -3,6 +3,60 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.8.0 — 2026-07-30
+
+**The brief now enforces its own scope at write time, and supports live demonstration.**
+
+### Added
+
+- `prompire draft`, which proposes a brief skeleton from repository evidence. It runs a
+  deterministic heuristic to find test commands: `package.json` scripts, pytest config,
+  Makefile, Cargo.toml, and go.mod are scanned; only commands the repository evidences
+  are proposed. Every proposed acceptance criterion and boundary path is marked
+  `# prompire:unconfirmed` until manually edited. Documented in README as step 0 of the
+  primary workflow.
+- `prompire prepare` now refuses (exit 2) any brief carrying an `# prompire:unconfirmed`
+  marker, before any baseline, lint, render or arm side effect can run.
+- `prompire demo`, which creates a temporary git repository and walks through the full
+  workflow: building a brief, running `prepare`, validating an in-scope edit, catching
+  an out-of-scope write from the real diff, then cleaning up. An optional `--keep` flag
+  preserves the repository for inspection. Documented in README under "What a catch
+  looks like".
+- `manual_checks` entries now render in the four prompt targets (claude, generic, codex,
+  copilot) and the checklist under a Human review section, not only in the `copilot`
+  target. The durable targets `agents.md` and `claude.md` deliberately exclude task-
+  specific content — a stale task in a repo-durable file is worse than no file.
+
+### Changed
+
+- A brief's `context` now renders under a Reference context heading, wrapped in
+  `<context>…</context>` delimiters. This reorganization treats context as labelled data
+  rather than executable instructions, improving readability in prompted renderings.
+- README reorganized: the central guarantee and threat model now live in
+  `references/threat-model.md`, and the main README leads with value and workflow.
+- The GitHub Action `.github/actions/prompire-verify` gained two optional inputs:
+  `comment` (whether to post a sticky PR comment with findings; skipped on fork PRs) and
+  `artifact-name` (uploads the summary, the JSON verdict, and the brief itself to run
+  artifacts). Both are opt-in; the default behavior is unchanged. Brief filenames and
+  finding paths are made inert before entering the summary markdown, preventing a
+  crafted brief filename from forging action outputs or injecting markdown into the
+  sticky comment.
+
+- `prompire draft` only proposes standard test-runner configurations. A build system not
+  listed (Bazel, SCons, Nix) or a non-standard shell script will not be detected; in
+  such cases, the acceptance criteria are left empty and must be filled manually.
+- The `context` delimiter change is a rendering change only; the schema and structure of
+  the `context` field are unchanged.
+- The GitHub Action's `comment` input is silently skipped on pull requests from forks,
+  since fork runners do not have permission to post comments to the upstream pull request.
+- The Action summary markdown is defended against structural forgery via filename
+  sanitization; a filename cannot be ugly enough to break the output format.
+
+### Clarifications
+
+- `references/grounding.md` now acknowledges that rules B11 and B12 are explicit
+  internal inferences rather than requirements traced to external reference.
+
 ## 0.7.0 — 2026-07-30
 
 **The verdict now runs where the author of the change is not the one running it.**
