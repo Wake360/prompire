@@ -55,7 +55,7 @@ from brief_common import (
     norm_path,
     tests_policy_of,
     tests_verdict,
-    tolerant_stdio,
+    utf8_stdio,
 )
 
 
@@ -705,7 +705,7 @@ def main(argv):
     # Before anything can be reported: a path this tool has to name may be unspellable in
     # this process's output encoding, and a verdict nobody can print is a traceback where
     # an exit code belongs.
-    tolerant_stdio()
+    utf8_stdio()
     args = [a for a in argv[1:] if not a.startswith("--")]
 
     if "--deactivate" in argv:

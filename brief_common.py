@@ -132,25 +132,36 @@ def fs_fold(root):
 NO_FOLD = (False, False)
 
 
-def tolerant_stdio():
-    """Let a path print even when this process's output encoding cannot spell it.
+def utf8_stdio():
+    """Make this tool's own output UTF-8, whatever the platform thinks the locale is.
 
-    The tools decode git's output with `errors="surrogateescape"`, so a path git reported
-    in bytes that are not valid UTF-8 arrives as lone surrogates — which no codec will
-    encode back out, and `print()` on one raises `UnicodeEncodeError`. On Windows the
-    plainer version of the same problem needs no odd bytes at all: a redirected stdout is
-    the ANSI code page, and a perfectly ordinary Czech path is simply not in cp1252.
+    Every tool here is read by another program — the JSON is parsed by `prompire.py`, by
+    the GitHub Action's runner, by the test suites — so the encoding of its stdout is a
+    *wire format*, and a wire format that depends on the caller's console code page is
+    the bug rather than a symptom of it. A redirected or piped stream on Windows is the
+    ANSI code page, normally cp1252, and cp1252 cannot spell `č`; a Windows *console*
+    stream has been UTF-8 through the console API since 3.6, so it is exactly the
+    redirected case — which is how every caller actually runs these tools — that breaks.
+    Hence UTF-8 is asserted here and not assumed.
 
-    Either way the failure lands at the moment of *reporting* a verdict already reached,
-    turning exit 0/1/2 into a traceback. `backslashreplace` spells the unencodable
-    characters instead, so the reader gets an escaped path and the exit code survives; it
-    cannot change any output that already encoded, so no verdict and no snapshot moves.
-    Best-effort by construction — a stream that cannot be reconfigured is not a reason to
-    fail, which is the whole point of the function.
+    `backslashreplace` stays for a second, narrower reason: the tools decode git's output
+    with `errors="surrogateescape"`, so a path git reported in bytes that are not valid
+    UTF-8 arrives as lone surrogates, which *no* codec will encode back out.
+
+    Both failures land at the moment of *reporting* a verdict already reached. Left alone
+    they turn exit 0/1/2 into a traceback, and — worse in this repo, whose exit codes are
+    load-bearing — a crash while printing exits 1, which is the code for "found a
+    finding": a tool that died is then indistinguishable from a tool that decided. The
+    escape spells what it cannot encode instead, and it cannot touch any character that
+    already encoded, so no verdict and no golden snapshot moves.
+
+    Best-effort by construction. A stream that cannot be reconfigured must never be a
+    reason to fail — the two hooks call this and both must keep degrading toward not
+    enforcing.
     """
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="backslashreplace")
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
         except Exception:
             pass
 
