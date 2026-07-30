@@ -69,6 +69,9 @@ def wording_checks(name, target, text):
     if target in PROMPTS and name in ("02-must-flip", "worked-example"):
         if "human review" not in low:
             problems.append("manual_checks must reach every prompt target")
+    if target in PROMPTS and name == "worked-example":
+        if "<context>" not in text or "</context>" not in text:
+            problems.append("context must be delimited as data, not instructions")
     if target in ("agents.md", "claude.md"):
         for leaked in ("## Task", "autonomy", "baseline:", "Files you may edit"):
             if leaked.lower() in low:
