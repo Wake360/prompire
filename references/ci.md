@@ -17,7 +17,7 @@ jobs:
       contents: read
       pull-requests: write    # only needed for `comment: true`
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
