@@ -41,6 +41,7 @@ from brief_common import (
     matches_any,
     norm_cmd,
     norm_cwd,
+    tolerant_stdio,
 )
 
 DESTRUCTIVE = re.compile(
@@ -109,8 +110,12 @@ def run_one(root, entry):
                 "does not exist"}
     t0 = time.time()
     try:
+        # A test suite's own output, so UTF-8 with `replace`: the goals and assertions in
+        # this repo's fixtures are Czech, the locale default would decode them as cp1252
+        # on Windows, and a suite that prints a byte nobody can decode must still be
+        # measurable — `evidence` is a line count and an exit code, not a transcript.
         r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True,
-                           text=True, timeout=timeout)
+                           encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"status": "not_runnable",
                 "reason": f"timed out after {timeout}s"}
@@ -144,7 +149,8 @@ def dirty(root, ignored):
     """
     out = []
     r = subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1",
-                        "--untracked-files=all"], capture_output=True, text=True)
+                        "--untracked-files=all"], capture_output=True,
+                       encoding="utf-8", errors="surrogateescape")
     for line in r.stdout.splitlines():
         p = line[3:].split(" -> ")[-1].strip()
         if p and p not in ignored and not matches_any(ALWAYS_ALLOWED, p):
@@ -194,6 +200,8 @@ def render_block(results, head):
 
 
 def main(argv):
+    # `dirty()` names working-tree paths straight out of git — see check_scope.py's main.
+    tolerant_stdio()
     args = [a for a in argv[1:] if not a.startswith("--")]
     if not args:
         print(__doc__.strip())
@@ -205,13 +213,13 @@ def main(argv):
         print(str(e))
         return 2
     r = subprocess.run(["git", "-C", str(path.resolve().parent), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="utf-8", errors="surrogateescape")
     if r.returncode != 0:
         print(f"{path} is not inside a git repository")
         return 2
     root = pathlib.Path(r.stdout.strip())
     h = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="utf-8", errors="surrogateescape")
     if h.returncode != 0 or not h.stdout.strip():
         # Before the first commit there is no HEAD to name. Falling back to the literal
         # string "HEAD" used to write a base_rev that is a moving ref by construction —

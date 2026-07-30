@@ -43,7 +43,7 @@ def render(example, target):
     # relative path, run from the skill dir: a snapshot must not pin one machine's home
     r = subprocess.run([sys.executable, "render_brief.py",
                         f"examples/{pathlib.Path(example).name}", "--target", target],
-                       capture_output=True, text=True, cwd=str(SKILL))
+                       capture_output=True, text=True, encoding="utf-8", cwd=str(SKILL))
     if r.returncode == 2:
         raise AssertionError(f"render failed: {r.stdout}{r.stderr}")
     # the checklist names the guard by its install path, and the skill has two homes

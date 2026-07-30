@@ -103,7 +103,7 @@ ENV = dict(os.environ, GIT_AUTHOR_DATE="2026-01-01T00:00:00+00:00",
 
 def git(root, *args):
     r = subprocess.run(["git", "-C", str(root), *args],
-                       capture_output=True, text=True, env=ENV)
+                       capture_output=True, text=True, encoding="utf-8", env=ENV)
     if r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()}")
     return r.stdout

@@ -34,7 +34,8 @@ def brief(repo, name, body):
 
 def run_cli(path, *args):
     return subprocess.run([sys.executable, str(SKILL / "verify_acceptance.py"),
-                           str(path), *args], capture_output=True, text=True, env=ENV)
+                           str(path), *args], capture_output=True, text=True,
+                          encoding="utf-8", env=ENV)
 
 
 def green_brief():
@@ -162,7 +163,7 @@ def test_unreadable_brief_returns_exit_2():
             run_cli(invalid_utf8, "--json"),
             subprocess.run(
                 [sys.executable, str(SKILL / "verify_acceptance.py"), "--json"],
-                capture_output=True, text=True, env=ENV,
+                capture_output=True, text=True, encoding="utf-8", env=ENV,
             ),
         )
         for result in json_results:

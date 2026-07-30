@@ -10,6 +10,7 @@ import functools
 import os
 import pathlib
 import re
+import sys
 import unicodedata
 import uuid
 
@@ -129,6 +130,29 @@ def fs_fold(root):
 
 
 NO_FOLD = (False, False)
+
+
+def tolerant_stdio():
+    """Let a path print even when this process's output encoding cannot spell it.
+
+    The tools decode git's output with `errors="surrogateescape"`, so a path git reported
+    in bytes that are not valid UTF-8 arrives as lone surrogates — which no codec will
+    encode back out, and `print()` on one raises `UnicodeEncodeError`. On Windows the
+    plainer version of the same problem needs no odd bytes at all: a redirected stdout is
+    the ANSI code page, and a perfectly ordinary Czech path is simply not in cp1252.
+
+    Either way the failure lands at the moment of *reporting* a verdict already reached,
+    turning exit 0/1/2 into a traceback. `backslashreplace` spells the unencodable
+    characters instead, so the reader gets an escaped path and the exit code survives; it
+    cannot change any output that already encoded, so no verdict and no snapshot moves.
+    Best-effort by construction — a stream that cannot be reconfigured is not a reason to
+    fail, which is the whole point of the function.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except Exception:
+            pass
 
 
 class BriefError(Exception):

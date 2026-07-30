@@ -127,7 +127,7 @@ def run_hook(repo, tool, file_path, cwd_rel, raw=None):
                        else {"file_path": fp}),
     })
     r = subprocess.run([sys.executable, HOOK], input=payload,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     return r.returncode, r.stderr
 
 
@@ -170,7 +170,7 @@ def main():
         fixtures.write(repo, ".prompire/spec.yaml",
                        BRIEF.format(policy=policy, editable=editable))
         subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                       cwd=str(repo), capture_output=True, text=True)
+                       cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
         rc, err = run_hook(repo, tool, fp, cwd_rel)
         why = ""
         if rc != want_rc:
@@ -185,7 +185,7 @@ def main():
     repo = fixtures.build(tmp / "failopen")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     open_cases = [
         ("malformed-stdin", lambda: run_hook(repo, "Write", "src/other.py", ".", raw="not json")),
         ("no-active-brief", lambda: (_deactivate(repo),
@@ -212,7 +212,7 @@ def main():
     repo = fixtures.build(tmp / "cwd-armed-target-unarmed")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     extra_cases.append(("cwd-armed-target-unarmed",
                         run_hook(repo, "Write", str(unarmed / "x.txt"), "."),
                         2, "outside the repository"))
@@ -226,13 +226,13 @@ def main():
     repo_a = fixtures.build(tmp / "cross-repo-a")
     fixtures.write(repo_a, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo_a), capture_output=True, text=True)
+                   cwd=str(repo_a), capture_output=True, text=True, encoding="utf-8")
     repo_b = fixtures.build(tmp / "cross-repo-b")
     fixtures.write(repo_b, ".prompire/spec.yaml",
                    "goal: wide open\nscope:\n  - '**'\ntests_policy: immutable\nacceptance:\n"
                    "  - cmd: \"true\"\n    expect: exit 0\nautonomy: auto\n")
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo_b), capture_output=True, text=True)
+                   cwd=str(repo_b), capture_output=True, text=True, encoding="utf-8")
     extra_cases.append(("cross-repo-escape",
                         run_hook(repo_a, "Write", str(repo_b / "anything.md"), "."),
                         2, "outside the repository"))
@@ -247,7 +247,7 @@ def main():
     fixtures.write(repo, ".prompire/spec.yaml",
                    BRIEF.format(policy="immutable", editable="") + f"base_rev: {head}\n")
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     assert f"base_rev {head}" in (repo / ".prompire" / "ACTIVE").read_text(
         encoding="utf-8"), "sanity: --activate wrote no pin, so this case proves nothing"
     extra_cases.append(("pinned-pointer-still-blocks",
@@ -264,7 +264,7 @@ def main():
     repo = fixtures.build(tmp / "walk-on-shadow")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     fixtures.write(repo, "src/.prompire/ACTIVE", "nope/missing.yaml\n")
     # cwd is INSIDE src/ too, not just the target — matching the actual adversarial
     # shape (a session cd'ed into the shadowed subtree). With cwd left at repo root, the
@@ -283,7 +283,7 @@ def main():
     repo = fixtures.build(tmp / "walk-on-non-utf8-pointer")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     nested_dir = repo / "src" / ".prompire"
     nested_dir.mkdir(parents=True, exist_ok=True)
     (nested_dir / "ACTIVE").write_bytes(b"\xff\xfe\x00garbage")
@@ -294,7 +294,7 @@ def main():
     repo = fixtures.build(tmp / "walk-on-chmod000-pointer")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     nested_dir = repo / "src" / ".prompire"
     nested_dir.mkdir(parents=True, exist_ok=True)
     nested_pointer = nested_dir / "ACTIVE"
@@ -314,7 +314,7 @@ def main():
     repo = fixtures.build(tmp / "symlink-dotdot-brief")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     (repo / "flink").symlink_to(repo / "src" / "cart.py")
     extra_cases.append(("symlink-dotdot-onto-brief",
                         run_hook(repo, "Write", "flink/../.prompire/spec.yaml", "."),
@@ -325,7 +325,7 @@ def main():
     repo = fixtures.build(tmp / "symlink-dotdot-forbidden")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     (repo / "docs" / "sub").mkdir(parents=True, exist_ok=True)
     (repo / "dclink").symlink_to(repo / "docs" / "sub")
     extra_cases.append(("symlink-dotdot-into-forbidden",
@@ -341,7 +341,7 @@ def main():
     repo = fixtures.build(tmp / "symlink-target")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     outside = pathlib.Path(tempfile.mkdtemp(prefix="prompire-hook-outside-"))
     (outside / "link.py").symlink_to(repo / "src" / "other.py")
     extra_cases.append(("symlink-target-into-armed-repo",
@@ -360,7 +360,7 @@ def main():
     assert nfc_name != nfd_name, "sanity: these must be different byte spellings"
     fixtures.write(repo, f".prompire/{nfc_name}", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, f".prompire/{nfc_name}", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     # Same platform caveat as case-variant-brief: on a normalisation-preserving volume
     # the NFD spelling is a different file and 0 is correct.
     nfd_want = 2 if _fs_folds(tmp, nfc_name, nfd_name) else 0
@@ -375,7 +375,7 @@ def main():
     repo = fixtures.build(tmp / "nul-path")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     extra_cases.append(("nul-in-dirname",
                         run_hook(repo, "Write", "no\x00pe/x.py", "."), 2, "unnameable-path"))
     extra_cases.append(("nul-in-filename",
@@ -399,7 +399,7 @@ def main():
     repo = fixtures.build(tmp / "forbidden-case-variant")
     fixtures.write(repo, ".prompire/spec.yaml", fold_brief)
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     case_want = (2, "forbidden") if case_folds else (0, "")
     extra_cases.append(("forbidden-case-variant",
                         run_hook(repo, "Write", "src/GOLDEN/x.txt", "."), *case_want))
@@ -420,7 +420,7 @@ def main():
     repo = fixtures.build(tmp / "forbidden-norm-variant")
     fixtures.write(repo, ".prompire/spec.yaml", norm_fold_brief)
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     norm_want = (2, "forbidden") if norm_folds else (0, "")
     extra_cases.append(("forbidden-normalization-variant",
                         run_hook(repo, "Write", f"docs/{nfd_dir}/x.txt", "."), *norm_want))
@@ -581,7 +581,7 @@ def main():
     repo = fixtures.build(tmp / "log-disarmed")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     (repo / ".prompire" / "ACTIVE").write_text("nope/missing.yaml\n", encoding="utf-8")
     run_hook(repo, "Write", "golden/x.txt", ".")
     disarmed_log = repo / ".prompire" / "hook-errors.log"
@@ -596,7 +596,7 @@ def main():
     repo = fixtures.build(tmp / "log-disarmed-farthest")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     (repo / ".prompire" / "ACTIVE").write_text("nope/missing.yaml\n", encoding="utf-8")
     fixtures.write(repo, "src/.prompire/ACTIVE", "nope/missing.yaml\n")
     run_hook(repo, "Write", "other.py", "src")
@@ -607,7 +607,7 @@ def main():
     repo = fixtures.build(tmp / "log-cap")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     (repo / ".prompire" / "ACTIVE").write_text("nope/missing.yaml\n", encoding="utf-8")
     big_log = repo / ".prompire" / "hook-errors.log"
     big_log.write_text("X" * 1_100_000, encoding="utf-8")
@@ -649,7 +649,7 @@ def _armed(tmp, name, policy="immutable", editable="", body=None):
                    body if body is not None else BRIEF.format(policy=policy,
                                                               editable=editable))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
-                   cwd=str(repo), capture_output=True, text=True)
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     return repo
 
 
@@ -674,7 +674,7 @@ def pascal(tool, args, cwd, **extra):
 
 def run_copilot(payload, env=None):
     r = subprocess.run([sys.executable, COPILOT_HOOK], input=payload,
-                       capture_output=True, text=True,
+                       capture_output=True, text=True, encoding="utf-8",
                        env=dict(os.environ, **env) if env else None)
     return r.returncode, r.stdout, r.stderr
 
@@ -991,7 +991,7 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
     bare = pathlib.Path(tempfile.mkdtemp(prefix="prompire-cp-bare-"))
     disarmed = _armed(tmp, "cp-disarmed")
     subprocess.run([sys.executable, GUARD, "--deactivate"], cwd=str(disarmed),
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, encoding="utf-8")
     broken = _armed(tmp, "cp-broken-pointer")
     (broken / ".prompire" / "ACTIVE").write_text("nope/missing.yaml\n", encoding="utf-8")
     unreadable = _armed(tmp, "cp-unreadable-pointer")
@@ -1159,7 +1159,8 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
     # Sanity first: the shim really does break the import, so nothing below passes
     # merely because nothing went wrong.
     probe = subprocess.run([sys.executable, "-c", "import yaml"],
-                           capture_output=True, text=True, env=dict(os.environ, **boom))
+                           capture_output=True, text=True, encoding="utf-8",
+                           env=dict(os.environ, **boom))
     extra.append(("broken-import-shim-actually-breaks-yaml", probe.returncode != 0,
                   "the PYTHONPATH shim did not break `import yaml`, so every case below "
                   "proves nothing"))
@@ -1169,7 +1170,8 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
             [sys.executable, HOOK],
             input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Write",
                               "cwd": str(repo), "tool_input": {"file_path": rel}}),
-            capture_output=True, text=True, env=dict(os.environ, **boom)).returncode
+            capture_output=True, text=True, encoding="utf-8",
+            env=dict(os.environ, **boom)).returncode
 
     # (name, path, claude_exit, copilot_wants_denial)
     BROKEN_IMPORT = [
@@ -1206,7 +1208,8 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
     # 120, and the tool call is refused for a reason the brief never gave. Reproduced by
     # closing the read end before the hook writes its decision.
     proc = subprocess.Popen([sys.executable, COPILOT_HOOK], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8")
     proc.stdout.close()
     try:
         proc.stdin.write(camel("create", {"path": "golden/report.txt"}, repo))
@@ -1232,7 +1235,7 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
         closed = subprocess.run(
             [sys.executable, COPILOT_HOOK],
             input=camel("create", {"path": rel}, repo),
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8",
             preexec_fn=lambda: os.close(1))
         extra.append((f"cp-closed-stdout-fd-is-not-a-denial-{label}",
                       closed.returncode == 0 and not (closed.stderr or "").strip(),
@@ -1260,7 +1263,7 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
 
 def _deactivate(repo):
     subprocess.run([sys.executable, GUARD, "--deactivate"], cwd=str(repo),
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, encoding="utf-8")
 
 
 def _point_at_nothing(repo):
