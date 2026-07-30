@@ -22,10 +22,12 @@ lints clean today can fail on the next minor, and this file is where that is rec
   an out-of-scope write from the real diff, then cleaning up. An optional `--keep` flag
   preserves the repository for inspection. Documented in README under "What a catch
   looks like".
-- `manual_checks` entries now render in the four prompt targets (claude, generic, codex,
-  copilot) and the checklist under a Human review section, not only in the `copilot`
-  target. The durable targets `agents.md` and `claude.md` deliberately exclude task-
-  specific content — a stale task in a repo-durable file is worse than no file.
+- `manual_checks` entries now render in all four prompt targets (`claude`, `generic`,
+  `codex`, `copilot`) under a `Human review — no command covers these` section, where
+  before only `copilot` carried them. The `checklist` target already rendered them, under
+  its own `Manual — no command covers these:` heading, and is unchanged. The durable
+  targets `agents.md` and `claude.md` still exclude them deliberately — a stale task in a
+  repo-durable file is worse than no file.
 
 ### Changed
 
@@ -42,15 +44,18 @@ lints clean today can fail on the next minor, and this file is where that is rec
   crafted brief filename from forging action outputs or injecting markdown into the
   sticky comment.
 
+### Limits
+
 - `prompire draft` only proposes standard test-runner configurations. A build system not
   listed (Bazel, SCons, Nix) or a non-standard shell script will not be detected; in
   such cases, the acceptance criteria are left empty and must be filled manually.
 - The `context` delimiter change is a rendering change only; the schema and structure of
   the `context` field are unchanged.
-- The GitHub Action's `comment` input is silently skipped on pull requests from forks,
-  since fork runners do not have permission to post comments to the upstream pull request.
-- The Action summary markdown is defended against structural forgery via filename
-  sanitization; a filename cannot be ugly enough to break the output format.
+- Making filenames and finding paths inert prevents two specific forgeries, and only
+  those two: a crafted name cannot open a row, a cell or a comment of its own in the
+  summary table, and cannot write a second `key=value` line into `GITHUB_OUTPUT` to
+  overwrite the verdict. `tests/ci.py` pins both. It says nothing about how the text
+  reads — a filename is still free to be confusing, and the summary reproduces it.
 
 ### Clarifications
 
