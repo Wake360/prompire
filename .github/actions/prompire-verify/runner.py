@@ -25,9 +25,13 @@ HOME = pathlib.Path(os.environ.get("PROMPIRE_HOME")
 sys.path.insert(0, str(HOME))
 
 try:
+    from brief_common import utf8_stdio
     from check_scope import BASE_SOURCE
 except ImportError:  # a rename upstream should fail loudly, not silently degrade
     BASE_SOURCE = {}
+
+    def utf8_stdio():
+        """No-op stand-in: a missing import must not stop the runner from reporting."""
 
 ZERO_SHA = "0" * 40
 MAX_ANNOTATIONS = 10
@@ -410,6 +414,10 @@ def main():
 
 
 def entrypoint():
+    # Annotations and the `::error` line carry paths straight out of the diff. Before the
+    # `try`, so the Refusal handler's own output is covered too — a runner that cannot
+    # print its refusal reports no verdict at all.
+    utf8_stdio()
     try:
         code = main()
     except Refusal as exc:

@@ -27,6 +27,7 @@ from brief_common import (
     norm_cmd,
     norm_cwd,
     tests_policy_of,
+    utf8_stdio,
 )
 
 TARGETS = ("claude", "generic", "codex", "copilot", "agents.md", "claude.md", "checklist")
@@ -249,6 +250,11 @@ def render(brief, brief_path, target):
 
 
 def main(argv):
+    # A rendered prompt is the brief's own prose — goal, scope, acceptance — so whatever
+    # language the brief is written in ends up on this stdout, and the renderers add their
+    # own arrows on top. This output is usually redirected into a file that another agent
+    # reads, which is exactly the stream Windows encodes with the code page.
+    utf8_stdio()
     args = [a for a in argv[1:] if not a.startswith("--")]
     if not args:
         print(__doc__.strip())

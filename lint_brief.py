@@ -32,6 +32,7 @@ from brief_common import (
     load_brief,
     norm_cmd,
     tests_policy_of,
+    utf8_stdio,
 )
 
 VAGUE = [
@@ -525,6 +526,10 @@ def check(b):
 
 
 def main():
+    # Findings quote the brief back — an unknown key, a vague phrase — and the messages
+    # themselves are written with em dashes, so this tool cannot print at all under a
+    # cp1252 stdout. Before the first `print`, because that is the one it would die on.
+    utf8_stdio()
     if len(sys.argv) < 2:
         print(__doc__.strip())
         return 2

@@ -556,13 +556,30 @@ base_rev: "HEAD~1"
 
 
 def run(name, body):
+    """The linter's JSON, or (None, why) if this suite could not read a verdict at all.
+
+    The decode is strict on purpose — the linter's stdout is a wire format and UTF-8 is
+    the contract `tests/encoding.py` pins — but a child that broke it must surface as a
+    named case failure, not as a `UnicodeDecodeError` out of `subprocess.run` that stops
+    the suite on its first case and says nothing about the other sixty. `stdout` is also
+    checked for None: nothing sets it today, and a future `run` shape that does must not
+    turn into a `TypeError` inside `json.loads`.
+    """
     p = TMP / f"{name}.yaml"
     p.write_text(body.lstrip(), encoding="utf-8")
-    r = subprocess.run([sys.executable, str(LINT), str(p), "--json"],
-                       capture_output=True, text=True, encoding="utf-8")
+    try:
+        r = subprocess.run([sys.executable, str(LINT), str(p), "--json"],
+                           capture_output=True, text=True, encoding="utf-8")
+    except UnicodeDecodeError as e:
+        return None, f"the linter's stdout is not utf-8: {e}"
     if r.returncode == 2:
         return None, r.stdout.strip() or r.stderr.strip()
-    return json.loads(r.stdout), None
+    if r.stdout is None:
+        return None, "the linter's stdout could not be read at all"
+    try:
+        return json.loads(r.stdout), None
+    except ValueError as e:
+        return None, f"exit {r.returncode} but stdout is not json ({e}): {r.stderr.strip()}"
 
 
 def main():

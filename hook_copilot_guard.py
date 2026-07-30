@@ -283,7 +283,19 @@ def _emit(out):
     the interpreter flushes again on the way out, outside every `try` in this module — so
     on failure fd 1 is pointed at the null device, making that final flush a no-op it
     cannot fail.
+
+    `json.dumps` escapes non-ASCII, so today's decision is pure ASCII and encodes under
+    any code page. The reconfigure below is therefore defence for the next person who
+    reaches for `ensure_ascii=False` to make a path readable, not a fix for a live bug —
+    and it is lazy and swallowed for the same reasons as `hook_scope_guard.block()`: a
+    module-scope `brief_common` import would drag in PyYAML and make
+    `hook_policy`'s unconditional `.prompire/ACTIVE` verdicts depend on it.
     """
+    try:
+        from brief_common import utf8_stdio
+        utf8_stdio()
+    except Exception:
+        pass
     try:
         if out:
             sys.stdout.write(out + "\n")

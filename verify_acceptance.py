@@ -13,6 +13,7 @@ from brief_common import (
     entry_key,
     load_brief,
     norm_cmd,
+    utf8_stdio,
 )
 from check_scope import RepoError, repo_root
 
@@ -80,6 +81,9 @@ def report_error(message, json_mode):
 
 
 def main(argv: list[str]) -> int:
+    # Every acceptance command is echoed back next to its PASS/FAIL, so a command line
+    # naming a non-ASCII path or printing non-ASCII output reaches this stdout verbatim.
+    utf8_stdio()
     json_mode = "--json" in argv
     args = [arg for arg in argv[1:] if not arg.startswith("--")]
     if not args:
