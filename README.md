@@ -220,6 +220,33 @@ own trouble — is exit 0 with empty stdout, leaving the call in Copilot's norma
 permission flow rather than silently approving it. Full install locations, both payload
 shapes, and the complete failure-semantics table: `references/hosts.md`.
 
+## Continuous integration
+
+The local check has one weakness the tool cannot fix from the inside: it is run by the
+person who wants it to be green, and only when they remember. A GitHub Action runs the
+same verdict on every pull request, and takes the base from git instead of from the brief.
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}
+    fetch-depth: 0
+- uses: Wake360/prompire/.github/actions/prompire-verify@v0.7.0
+```
+
+The brief travels in the pull request, which means `.prompire/*.yaml` is tracked while
+the guard's state files stay ignored, and it means the person who wrote the change also
+wrote the boundary it is checked against. What CI fixes is the base: `git merge-base`
+decides it, so a re-stamped `base_rev` buys nothing. What it does not fix is everything
+else in that file. A wider `scope`, one `dirty_baseline` entry, or `tests_policy:
+authoring` each still produce a clean verdict, and a brief *added* by the pull request
+draws no flag at all. Read the brief in the diff.
+
+Unlike the hook, the Action fails closed: a base that will not resolve produces no
+verdict and a red check. Acceptance commands are off by default, because turning them on
+runs shell out of the pull request on the runner. Inputs, outputs, and the full list of
+what it does not do: `references/ci.md`.
+
 ## Limitations
 
 These are known, reproduced, and stated here rather than in a footnote. None is a
@@ -279,6 +306,8 @@ what was declared was pinned before the work began.
 - `SKILL.md` — the workflow, the brief shape, the hard rules.
 - `references/hosts.md` — running on Claude Code and GitHub Copilot CLI: install
   locations, hook configuration, the failure-semantics table.
+- `references/ci.md` — the GitHub Action: what the base means in CI, and what the
+  Action cannot check.
 - `references/schema.md` — every field, every edge case.
 - `references/rules.md` — the sixteen lint rules and what each can and cannot catch.
 - `references/grounding.md` — where each rule comes from.

@@ -1,0 +1,125 @@
+# Continuous integration
+
+The local check has one weakness no amount of care in the tool can fix: it is run by the
+person who wants it to be green, and only when they remember. The Action moves the same
+verdict to a place where the check runs whether or not anyone asks, and where the base it
+compares against is chosen by git rather than by a field in the brief.
+
+## What it does
+
+```yaml
+name: prompire
+on: [pull_request]
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: Wake360/prompire/.github/actions/prompire-verify@v0.7.0
+```
+
+It finds the brief committed under `.prompire/`, computes `git merge-base HEAD
+origin/<base branch>`, runs `check_scope.py` against that revision, writes a job summary
+and one annotation per finding, and fails the step when the verdict is not clean.
+
+Put it first, before anything installs dependencies or builds. `check_scope.py` reads
+untracked files as additions, so a build directory that is not in `.gitignore` becomes a
+change outside `scope`.
+
+## Committing the brief
+
+The Action reads the brief out of the checkout, so the brief has to be in the repository:
+
+```
+.prompire/*
+!.prompire/*.yaml
+```
+
+Briefs are tracked; `ACTIVE`, `ACTIVE.tombstones` and the rendered prompt and checklist
+are not. One brief per pull request — the Action refuses when it finds two, because it
+reads the whole difference between the merge-base and the head and cannot attribute that
+to more than one of them.
+
+## What the base means here
+
+Locally, `--activate` writes a pin outside the brief so that `base_rev` cannot be
+re-stamped after the fact. In CI that pin is unreachable: `.prompire/ACTIVE` is not
+committed, and a fresh checkout has none. It is not needed. The base comes from
+`git merge-base`, so `base_rev` is not consulted at all and re-stamping it buys nothing.
+Every run is labelled `base given on the command line`.
+
+`merge-base`, not `github.event.pull_request.base.sha`: the event's SHA is the base
+branch's tip when the webhook fired, so diffing against it reports every commit the base
+branch has gained since the branch point as a change belonging to this pull request, and
+gives a different answer on every re-run. The merge-base does not move while the base
+branch only moves forward.
+
+## Inputs
+
+| | |
+|---|---|
+| `brief` | Which brief. Empty discovers the single `.prompire/*.yaml`. |
+| `base` | A revision to diff against, when the event's is not the one you want. |
+| `strict` | Treat REVIEW findings as failures. Default off — see below. |
+| `acceptance` | Also run the brief's acceptance commands. Default off — see below. |
+| `acceptance-fail-on` | `failed`, or `any` to also fail when a command was refused. |
+| `on-missing-brief` | `skip` (default) or `fail`. |
+| `annotations` | Emit `::error`/`::warning` per finding. |
+| `fail` | Fail the step on a non-clean verdict. Turn off to read the outputs instead. |
+| `python-version` | For `actions/setup-python`, or `system`. |
+
+Outputs: `verdict` (`clean`, `findings`, `indeterminate`, `skipped`), `exit-code`,
+`violations`, `reviews`, `base`, `base-source`, `brief`, `json`, and the three
+`acceptance-*` counts.
+
+`strict` is off by default because `tests_policy: named` and `authoring` each raise a
+REVIEW unconditionally — that is the flag saying no checker can tell a repaired assertion
+from a weakened one. Under `strict` a brief with either policy can never go green, so
+turn it on only for briefs whose tests are `immutable`.
+
+## Failing closed
+
+The PreToolUse hook fails open. It runs on every write on the machine, and a guard that
+breaks unrelated sessions gets uninstalled. None of that reasoning transfers here: the
+Action runs only in a repository that installed it, only on pull requests, and its output
+is read as a verdict. So it fails closed. A base that will not resolve, a brief that will
+not parse, two briefs, an ambiguous merge-base — each produces no verdict and a red
+check, never a green one.
+
+The one case that is neither is a repository with no brief at all. That reports `skipped`
+and does not fail, because the repository made no claim; a green tick there would read as
+a diff that was checked.
+
+A shallow checkout is the common misconfiguration. The Action tries one `--unshallow`
+before giving up, and when that fails it says `fetch-depth: 0` in its own words —
+`git rev-parse --verify --quiet` returns nothing on stderr, so the refusal it would
+otherwise pass on is blank.
+
+## What it does not do
+
+The Action checks a pull request against a brief the pull request itself contains. It
+fixes one thing the local run cannot: the base comes from `git merge-base`, so
+re-stamping `base_rev` buys nothing. Everything else in the brief is still written by
+whoever wrote the change — a wider `scope`, one `dirty_baseline` entry, or
+`tests_policy: authoring` each produce a clean verdict, and a brief added by the pull
+request draws no flag at all, because the brief-changed REVIEW fires on a modification
+and not on an addition. Read the brief in the diff alongside the annotations.
+
+It checks the whole difference between the merge-base and the head, so it is right only
+when the pull request is one task. A branch carrying two tasks reports the second one's
+work as violations of the first one's brief, and every violation it prints is then
+somebody else's correct work. In a repository that squash-merges, a branch cut from a
+previously merged branch has its merge-base below the squash commit, which brings the
+earlier task's changes into range; nothing in the Action detects that.
+
+Acceptance commands are off by default and run through the shell as written. Turning them
+on runs code from the pull request on the runner, and the results are compared against
+the `baseline:` block in the same pull request's brief. Do not turn it on for pull
+requests from forks. On `pull_request_target` the Action refuses outright, because there
+the runner holds a write-scoped token and the repository's secrets.
+
+Findings are path-level. Annotations carry a file but no line, because the checker never
+established one.

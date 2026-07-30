@@ -18,6 +18,7 @@ SUITES = (
     "verify.py",
     "cli.py",
     "package.py",
+    "ci.py",
 )
 
 

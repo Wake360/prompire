@@ -3,6 +3,32 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.7.0 — 2026-07-30
+
+**The verdict now runs where the author of the change is not the one running it.**
+
+### Added
+
+- A composite GitHub Action, `.github/actions/prompire-verify`, which checks a pull
+  request's diff against the brief the pull request carries.
+- `references/ci.md`, and a `## Continuous integration` section in the README.
+- `tests/ci.py`, driving the Action's runner against real repositories.
+
+### Changed
+
+- `.gitignore` tracks `.prompire/*.yaml` and keeps ignoring the guard's state files. A
+  brief has to be in the repository for CI to read it.
+
+### Limits
+
+- The Action takes its base from `git merge-base`, so a re-stamped `base_rev` buys
+  nothing. It fixes nothing else in a brief written by the same pull request.
+- A brief *added* by a pull request draws no finding: `check_scope.py` flags the brief on
+  modification, rename and deletion, not on addition.
+- It reads the whole difference between the merge-base and the head, so it is correct
+  only for a pull request carrying one task.
+- Acceptance commands are off by default and refused outright on `pull_request_target`.
+
 ## 0.6.0 — 2026-07-29
 
 **Prompire now has a host-neutral, cross-platform command.**

@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 .ruff_cache/
-.prompire/
+build/
+*.egg-info/
+.prompire/*
+!.prompire/*.yaml
 .agent-brief/
 .worktrees/
