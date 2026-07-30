@@ -68,7 +68,27 @@ def run_agent(spec, prompt, repo, task):
             fixtures.write(repo, rel, body)
         return {"agent_exit": 0, "model": None, "turns": None,
                 "tokens_in": None, "tokens_out": None}
-    raise RuntimeError(f"unknown agent {spec!r} — scripted:<behavior>")
+    if spec == "claude":
+        # --setting-sources project: the user's global CLAUDE.md, behaviour
+        # profile and skills must not leak into a measured cell — the benchmark
+        # compares prompts, not one machine's personal instructions.
+        r = subprocess.run(["claude", "-p", "--output-format", "json",
+                            "--permission-mode", "acceptEdits",
+                            "--setting-sources", "project"],
+                           cwd=str(repo), input=prompt, capture_output=True,
+                           text=True, encoding="utf-8", timeout=900)
+        usage, turns, model = {}, None, None
+        try:
+            data = json.loads(r.stdout)
+            usage = data.get("usage") or {}
+            turns = data.get("num_turns")
+            model = data.get("model")
+        except ValueError:
+            pass
+        return {"agent_exit": r.returncode, "model": model, "turns": turns,
+                "tokens_in": usage.get("input_tokens"),
+                "tokens_out": usage.get("output_tokens")}
+    raise RuntimeError(f"unknown agent {spec!r} — scripted:<behavior> or claude")
 
 
 def measure(repo, base):
