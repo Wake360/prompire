@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,9 @@ TOOLS = {
 }
 PROMPT_TARGETS = ("generic", "claude", "codex", "copilot")
 LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
+# A draft is not a brief yet. Every line the heuristic could not settle carries this
+# marker, and `prepare` refuses while one remains — deleting it is the confirmation.
+DRAFT_MARKER = "prompire:unconfirmed"
 CHILD_JSON_KEYS = {
     "scope": {"violations", "reviews", "findings"},
     "acceptance": {"passed", "failed", "not_run", "results"},
@@ -162,10 +166,78 @@ def report_scope_preflight(scope, scope_data, json_mode):
     return 1
 
 
+def detect_acceptance(root):
+    """Deterministic candidates only — never a command the repo gives no evidence for."""
+    found = []
+    pkg = root / "package.json"
+    if pkg.is_file():
+        try:
+            scripts = json.loads(pkg.read_text(encoding="utf-8")).get("scripts") or {}
+        except ValueError:
+            scripts = {}
+        if "test" in scripts:
+            found.append(("npm test", "package.json scripts.test"))
+    py = root / "pyproject.toml"
+    if (root / "pytest.ini").is_file() or (
+            py.is_file()
+            and "[tool.pytest" in py.read_text(encoding="utf-8", errors="ignore")):
+        found.append(("python3 -m pytest", "pytest configuration"))
+    mk = root / "Makefile"
+    if mk.is_file() and re.search(
+            r"^test:", mk.read_text(encoding="utf-8", errors="ignore"), re.M):
+        found.append(("make test", "Makefile test target"))
+    if (root / "Cargo.toml").is_file():
+        found.append(("cargo test", "Cargo.toml"))
+    if (root / "go.mod").is_file():
+        found.append(("go test ./...", "go.mod"))
+    return found
+
+
+def draft_text(sentence, detected):
+    out = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker.",
+           "goal: |", f"  {sentence}",
+           f"scope: []  # {DRAFT_MARKER} — list the exact files the agent may edit",
+           "autonomy: ask"]
+    if detected:
+        out.append("acceptance:")
+        for cmd, src in detected:
+            out += [f"  - cmd: {cmd}  # {DRAFT_MARKER} — detected from {src}; confirm it",
+                    "    expect: exit 0"]
+    else:
+        out.append(f"acceptance: []  # {DRAFT_MARKER} — no test command detected; "
+                   "add one that exists in this repo")
+    return "\n".join(out) + "\n"
+
+
+def draft(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra))
+    try:
+        root = repo_root(pathlib.Path("."))
+    except RepoError as exc:
+        return report_refusal(str(exc))
+    out = pathlib.Path(args.out)
+    if os.path.lexists(out):  # a dangling symlink counts — never write through one
+        return report_refusal(f"`{out}` already exists; pick another --out")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(draft_text(args.sentence, detect_acceptance(root)), encoding="utf-8")
+    print(f"drafted {out}")
+    print(f"confirm every `# {DRAFT_MARKER}` line, then: prompire prepare {out}")
+    return 0
+
+
 def prepare(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
     brief = pathlib.Path(args.brief)
+    try:
+        raw = brief.read_text(encoding="utf-8") if brief.is_file() else ""
+    except (OSError, UnicodeDecodeError):
+        raw = ""  # let baseline report an unreadable brief; the gate only reads markers
+    if f"# {DRAFT_MARKER}" in raw:
+        return report_refusal(
+            f"draft not confirmed: fix and remove each `# {DRAFT_MARKER}` line first",
+            args.json)
     try:
         root = repo_root(brief.resolve().parent)
     except RepoError as exc:
@@ -294,6 +366,11 @@ def status(args, extra):
 def build_parser():
     parser = argparse.ArgumentParser(prog="prompire")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    drafted = commands.add_parser("draft")
+    drafted.add_argument("sentence")
+    drafted.add_argument("--out", default=".prompire/task.yaml")
+    drafted.set_defaults(handler=draft)
 
     prepared = commands.add_parser("prepare")
     prepared.add_argument("brief")

@@ -33,6 +33,14 @@ Prompire supports Python 3.11+ on macOS, Linux, and Windows.
 
 This workflow is host-neutral and works with any coding agent.
 
+Optional step 0: `prompire draft "one sentence"` writes a draft brief to
+`.prompire/task.yaml`. The heuristic is deterministic, not a model — it proposes an
+acceptance command only where the repo evidences one (`package.json` `scripts.test`, a
+pytest config, a `Makefile` `test:` target, `Cargo.toml`, `go.mod`), and states the
+absence rather than inventing a command. Read every `# prompire:unconfirmed` line, fix
+it, then delete the marker: `prompire prepare` refuses while one remains. Under Claude
+Code or Copilot CLI the host model fills this step instead, following `SKILL.md`.
+
 ### Prepare
 
 ```bash

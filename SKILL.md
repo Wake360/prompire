@@ -18,6 +18,11 @@ After writing `.prompire/<slug>.yaml`, prepare the handoff:
 prompire prepare .prompire/<slug>.yaml --target generic
 ```
 
+Write the brief yourself — that is this skill's job. `prompire draft "<one sentence>"`
+exists for callers without a model: it proposes only acceptance commands the repo
+evidences and marks everything else `# prompire:unconfirmed`, which `prepare` refuses
+until the line is fixed and the marker deleted.
+
 ### Hand off — Prompire does not launch the agent
 
 Hand the generated prompt to any coding agent.
