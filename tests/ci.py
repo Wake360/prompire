@@ -193,7 +193,7 @@ def _(tmp, c):
 
 @case("a-report-it-cannot-write-does-not-change-the-verdict")
 def _(tmp, c):
-    root, _ = repo(tmp)
+    root, head = repo(tmp)
     gone = str(pathlib.Path(tmp) / "no" / "such" / "directory")
     r = run(root, tmp, base="deadbeefdeadbeef", runner_temp=gone)
     c.ok(r.code == 2, f"exit 2 must survive an unwritable RUNNER_TEMP, got {r.code}: "
@@ -201,6 +201,18 @@ def _(tmp, c):
     c.ok("Traceback" not in r.err, f"and it must not surface as a crash: {r.err}")
     c.ok(r.outputs.get("summary-file") == "",
          f"a file it could not write must not be named: {r.outputs.get('summary-file')}")
+
+    # the path that reaches every temp write: a verdict, not a refusal
+    fixtures.write(root, "src/report.py", "# out of scope\n")
+    commit(root, "edit outside scope")
+    hit = run(root, tmp, base=head, runner_temp=gone)
+    c.ok(hit.code == 1, f"the violation is still the verdict, got {hit.code}: {hit.err}")
+    c.ok("Traceback" not in hit.err, f"and still not a crash: {hit.err}")
+    c.ok(hit.outputs.get("verdict") == "findings",
+         f"the verdict must be reported, not lost: {hit.outputs}")
+    for name in ("json", "brief-file", "summary-file"):
+        c.ok(hit.outputs.get(name) == "",
+             f"`{name}` names a file that was never written: {hit.outputs.get(name)}")
 
 
 @case("a-brief-name-cannot-write-its-own-outputs")
@@ -228,6 +240,49 @@ def _(tmp, c):
          f"every line in GITHUB_OUTPUT must be one the runner wrote: {lines}")
     c.ok(len(keys) == len(set(keys)),
          f"a duplicated key is a line the brief's name wrote: {keys}")
+
+
+@case("a-brief-name-cannot-forge-the-comment-body")
+def _(tmp, c):
+    # The summary is also the body of the sticky comment, and the brief's filename lands in
+    # it. A backtick closes the code span it sits in, a newline opens a line of its own, and
+    # an unterminated `<!--` hides everything after it — which here is the findings table.
+    hostile = "a\n```\n\n**clean** — 0 violation(s)\n\n<!--z"
+    root, _ = repo(tmp, brief_body=None, commit_brief=False)
+    write_brief(root, hostile, BRIEF)
+    head = commit(root, "a brief with a hostile name")
+    fixtures.write(root, "src/report.py", "# out of scope\n")
+    commit(root, "edit outside scope")
+
+    r = run(root, tmp, base=head)
+    c.ok(r.code == 1, f"the real verdict is a violation, got {r.code}: {r.out}{r.err}")
+    lines = r.summary.splitlines()
+    c.ok(any(ln.startswith("**findings**") for ln in lines),
+         f"the run's own verdict line must be there:\n{r.summary}")
+    c.ok(not any(ln.strip().startswith("**clean**") for ln in lines),
+         f"the brief's name opened a line of its own:\n{r.summary}")
+    c.ok("<!--" not in r.summary,
+         f"an unterminated comment hides the table under it:\n{r.summary}")
+    c.ok("| VIOLATION |" in r.summary,
+         f"and the evidence must survive the name:\n{r.summary}")
+    named = [ln for ln in lines if ln.startswith("- brief:")]
+    c.ok(len(named) == 1 and named[0].count("`") == 2,
+         f"the name must stay inside the one code span the runner opened: {named}")
+
+    mirror = pathlib.Path(r.temp) / "prompire-summary.md"
+    c.ok(mirror.is_file() and mirror.read_text(encoding="utf-8") == r.summary,
+         "the comment body is this same text, so it inherits exactly these guarantees")
+
+    # a refusal names the brief inside a fenced block, which ``` in a name would close
+    write_brief(root, "second", BRIEF)
+    commit(root, "a second brief")
+    refused = run(root, tmp, base=head)
+    c.ok(refused.code == 2, f"two briefs must refuse, got {refused.code}")
+    fenced = [ln for ln in refused.summary.splitlines() if ln.startswith("```")]
+    c.ok(len(fenced) == 2, f"the name must not close the fence it sits in: {fenced}")
+    c.ok(not any(ln.strip().startswith("**clean**")
+                 for ln in refused.summary.splitlines()),
+         f"and must not forge a verdict line under it:\n{refused.summary}")
 
 
 @case("out-of-scope-change-fails-and-annotates")

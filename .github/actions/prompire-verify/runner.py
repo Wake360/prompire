@@ -236,13 +236,31 @@ def outputs(pairs):
         sys.stderr.write(text)
 
 
+def inert(text):
+    """Text out of the diff or the brief, made unable to be markup.
+
+    The summary is also the body of the sticky comment, so this is the audit surface. A
+    newline in a path opens a line of its own — a forged `**clean**` paragraph — a `|`
+    splits a table cell, and an unterminated `<!--` hides every row below it. Filenames
+    are written by whoever opened the pull request and may hold all three.
+    """
+    flat = "".join(" " if ch < " " or ch == "\x7f" else ch for ch in str(text))
+    return flat.replace("<", "(").replace("|", "\\|")
+
+
+def inert_code(text):
+    """`inert`, for a value the summary wraps in a code span, which a backtick closes."""
+    return inert(text).replace("`", "'")
+
+
 def finding_rows(findings):
     rows = ["", "| | path | finding |", "|---|---|---|"]
     for f in findings[:MAX_SUMMARY_ROWS]:
-        message = f.get("message", "")
+        # `<br>` is the runner's own markup, so it goes in after the text is made inert
+        message = inert(f.get("message", ""))
         if f.get("fix"):
-            message = f"{message}<br>→ {f['fix']}"
-        path = str(f.get("path") or "")
+            message = f"{message}<br>→ {inert(f['fix'])}"
+        path = inert_code(f.get("path") or "")
         rows.append(f"| {f.get('kind', '')} | `{path}` | {message} |")
     if len(findings) > MAX_SUMMARY_ROWS:
         rows.append(f"| | | and {len(findings) - MAX_SUMMARY_ROWS} more |")
@@ -336,7 +354,10 @@ def main():
     if env("RUNNER_TEMP"):
         temp = pathlib.Path(env("RUNNER_TEMP"))
         json_path = str(temp / "prompire-scope.json")
-        pathlib.Path(json_path).write_text(scope.stdout, encoding="utf-8")
+        try:
+            pathlib.Path(json_path).write_text(scope.stdout, encoding="utf-8")
+        except OSError:
+            json_path = ""
         brief_copy = str(temp / "prompire-brief.yaml")
         try:
             # the artifact uploads this copy rather than the brief where it sits: the
@@ -349,7 +370,7 @@ def main():
     lines = [
         "## Prompire", "",
         f"**{verdict}** — {violations} violation(s), {reviews} review flag(s)", "",
-        f"- brief: `{rel_brief}`",
+        f"- brief: `{inert_code(rel_brief)}`",
         f"- base: `{base}` ({label}), from {how}",
     ]
     if accepted is not None:
@@ -391,7 +412,8 @@ def entrypoint():
         mirror = summary([
             "## Prompire", "",
             "**no verdict** — the check could not establish what it was checking.",
-            "", "```", str(exc), "```"])
+            # a refusal names the briefs it found, and ``` in a name closes this fence
+            "", "```", inert(exc), "```"])
         outputs({"verdict": "indeterminate", "exit-code": "2", "violations": "0",
                  "reviews": "0", "base": "", "base-source": "", "brief": "",
                  "json": "", "brief-file": "", "summary-file": mirror,
