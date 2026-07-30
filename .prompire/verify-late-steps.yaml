@@ -1,0 +1,13 @@
+# Throwaway brief. Its only job is to make the Action produce a non-clean verdict on a
+# live pull request, so the comment and artifact steps can be observed running after the
+# verify step has already failed the job. Delete the branch once that is seen.
+goal: Probe the Action's late steps against a non-clean verdict.
+scope:
+  - docs/late-step-probe.md
+forbidden:
+  - tests/**
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "print('probe')"
+    expect: exit 0
+autonomy: ask
