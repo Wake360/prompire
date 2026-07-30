@@ -26,6 +26,8 @@ python3 tests/golden.py             # renderer snapshots + wording rules
 python3 tests/hook.py               # PreToolUse guard: blocked (exit 2) vs allowed (exit 0)
 python3 tests/encoding.py           # every tool's stdout is utf-8 under a cp1252 console
 python3 tests/docs.py               # rule ids, schema keys and prose still agree
+python3 tests/bench.py              # bench harness against scripted agents (offline)
+python3 bench/run.py                # behavioural benchmark; --agents claude = live run
 ```
 
 There is no per-case filter — run the suite. Snapshot regeneration is deliberate and
@@ -79,6 +81,12 @@ depend on a brief being armed.
 
 Exit codes are load-bearing everywhere: 0 clean, 1 finding, 2 could-not-decide. A tool
 that cannot establish a base never falls back to HEAD.
+
+`bench/` is the behavioural benchmark (`references/benchmark.md`): task briefs
+run through prompt variants and agents in throwaway fixture repos, measured
+from outside by the same `verify_acceptance` + `check_scope` pair a human would
+run. `tests/bench.py` exercises it offline with scripted agents only; live
+agent cells are manual and never in CI.
 
 ## Working rules
 

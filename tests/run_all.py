@@ -17,6 +17,7 @@ SUITES = (
     "hook.py",
     "encoding.py",
     "verify.py",
+    "bench.py",
     "cli.py",
     "package.py",
     "ci.py",

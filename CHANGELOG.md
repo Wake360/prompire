@@ -28,6 +28,8 @@ lints clean today can fail on the next minor, and this file is where that is rec
   its own `Manual — no command covers these:` heading, and is unchanged. The durable
   targets `agents.md` and `claude.md` still exclude them deliberately — a stale task in a
   repo-durable file is worse than no file.
+- `bench/`: behavioural benchmark — task × prompt-variant × agent matrix measured by
+  `verify_acceptance` + `check_scope` (`references/benchmark.md`).
 
 ### Changed
 
