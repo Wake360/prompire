@@ -1,0 +1,17 @@
+# T04 monorepo-cwd — the second package only imports with cwd=services.
+goal: Add an uptime field to services/api/handler.status().
+scope:
+  - services/api/handler.py
+forbidden:
+  - tests/**
+  - services/api/tests/**
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "from api.handler import status; assert 'uptime' in status()"
+    cwd: services
+    expect: exit 0
+    transition: flip
+  - cmd: python3 -m unittest -q api.tests.test_handler
+    cwd: services
+    expect: exit 0
+autonomy: ask

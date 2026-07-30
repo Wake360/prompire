@@ -1,0 +1,17 @@
+# T06 extract-module — a new file inside scope, output pinned unchanged.
+goal: Move row formatting from src/report.py into a new src/format.py.
+scope:
+  - src/format.py
+  - src/report.py
+forbidden:
+  - tests/**
+  - golden/**
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m src.report
+    expect: exit 0, output byte-identical to the baseline
+    before_after: true
+  - cmd: "python3 -c \"from src.format import fmt_row; assert fmt_row(('apples', 3)) == 'apples: 3'\""
+    expect: exit 0
+    transition: flip
+autonomy: ask

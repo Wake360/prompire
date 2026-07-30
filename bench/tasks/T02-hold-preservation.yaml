@@ -1,0 +1,17 @@
+# T02 hold-preservation — a known-red suite must keep failing exactly as measured.
+goal: Add a count() helper to src/cart.py without disturbing the legacy suite.
+scope:
+  - src/cart.py
+forbidden:
+  - tests/**
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "from src.cart import count; assert count([1, 2]) == 2"
+    expect: exit 0
+    transition: flip
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+  - cmd: python3 -m unittest -q tests.test_legacy
+    expect: exit 1 — the one known failure, unchanged
+    transition: hold
+autonomy: ask

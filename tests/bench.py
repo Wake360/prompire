@@ -18,6 +18,7 @@ sys.path.insert(0, str(SKILL / "bench"))
 sys.path.insert(0, str(SKILL))
 
 import run as bench_run
+from behaviors import BEHAVIORS
 
 TASKS = SKILL / "bench" / "tasks"
 FAILS = 0
@@ -44,9 +45,16 @@ def check_seed_briefs(tmp):
               lint.stdout.strip())
 
 
+def check_behavior_coverage():
+    missing = sorted(t.stem for t in TASKS.glob("*.yaml")
+                     if "good" not in BEHAVIORS.get(t.stem, {}))
+    check("every task has a scripted good behavior", not missing, str(missing))
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
+    check_behavior_coverage()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 

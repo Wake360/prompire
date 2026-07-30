@@ -1,0 +1,13 @@
+# T03 refactor-hold-output — behaviour-preserving change, pinned by an output digest.
+goal: Build the report lines in src/report.py as a list before joining them.
+scope:
+  - src/report.py
+forbidden:
+  - tests/**
+  - golden/**
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m src.report
+    expect: exit 0, output byte-identical to the baseline
+    before_after: true
+autonomy: ask
