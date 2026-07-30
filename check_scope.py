@@ -55,6 +55,7 @@ from brief_common import (
     norm_path,
     tests_policy_of,
     tests_verdict,
+    tolerant_stdio,
 )
 
 
@@ -81,8 +82,22 @@ class RepoError(Exception):
     pass
 
 
-def git(root, args, check=True):
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+def git(root, args, errors="surrogateescape", check=True):
+    """git's output, decoded as UTF-8 rather than as whatever the locale happens to be.
+
+    git emits UTF-8, so naming the decoder is correctness and not a workaround: the
+    locale default is cp1252 on Windows, which decodes a UTF-8 path either into mojibake
+    (silently changing which side of the boundary it lands on) or into a
+    `UnicodeDecodeError` — and a traceback out of the post-hoc authority is not one of the
+    three answers this tool is allowed to give.
+
+    `surrogateescape` is the default because most of what comes back here is *paths*: it
+    round-trips undecodable bytes, keeps two distinct paths distinct, and is what the OS
+    itself does, so `root / path` still opens the file git named. Callers reading file
+    *content* pass `errors="replace"` instead — see `added_lines`.
+    """
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                       encoding="utf-8", errors=errors)
     if check and r.returncode != 0:
         raise RepoError(f"git {' '.join(args)}: {r.stderr.strip()}")
     return r.stdout
@@ -90,7 +105,7 @@ def git(root, args, check=True):
 
 def repo_root(start):
     r = subprocess.run(["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="utf-8", errors="surrogateescape")
     if r.returncode != 0:
         raise RepoError(f"{start} is not inside a git repository")
     return pathlib.Path(r.stdout.strip())
@@ -416,9 +431,15 @@ def deactivate(start, expected_brief=None):
 
 
 def git_show(root, rev, rel):
-    """The file's content at that revision, or None if it was not tracked there."""
+    """The file's content at that revision, or None if it was not tracked there.
+
+    Content, not a path, so `errors="replace"` rather than the `surrogateescape` `git()`
+    uses: the one caller scans this for the ASCII `base_rev:` line, which a replacement
+    character elsewhere in the file can neither create nor destroy, and flattening keeps
+    an undecodable byte in a committed brief from raising here.
+    """
     r = subprocess.run(["git", "-C", str(root), "show", f"{rev}:{rel}"],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="utf-8", errors="replace")
     return r.stdout if r.returncode == 0 else None
 
 
@@ -594,14 +615,18 @@ def changed(root, base):
 def added_lines(root, base, path):
     """Lines the diff adds to `path`. Untracked files count as entirely added."""
     full = root / path
+    # Only the exit code is read, so this one captures bytes: output nothing looks at must
+    # not be able to fail on the way in.
     tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", path],
-                             capture_output=True, text=True).returncode == 0
+                             capture_output=True).returncode == 0
     if not tracked:
         try:
             return full.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return []
-    diff = git(root, ["diff", "-U0", base, "--", path], check=False)
+    # Content, and the same `errors=` as the untracked branch above: the two must return
+    # lines the same way or a `forbidden` pattern would depend on whether git is asked.
+    diff = git(root, ["diff", "-U0", base, "--", path], errors="replace", check=False)
     return [ln[1:] for ln in diff.splitlines()
             if ln.startswith("+") and not ln.startswith("+++")]
 
@@ -677,6 +702,10 @@ def check(brief, root, base, brief_path):
 
 
 def main(argv):
+    # Before anything can be reported: a path this tool has to name may be unspellable in
+    # this process's output encoding, and a verdict nobody can print is a traceback where
+    # an exit code belongs.
+    tolerant_stdio()
     args = [a for a in argv[1:] if not a.startswith("--")]
 
     if "--deactivate" in argv:

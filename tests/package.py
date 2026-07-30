@@ -16,7 +16,7 @@ for cmd in (
     [sys.executable, str(ROOT / "prompire.py"), "--help"],
     [sys.executable, "-m", "prompire", "--help"],
 ):
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prepare" in result.stdout
     assert "verify" in result.stdout
@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as tmp:
     installed = subprocess.run(
         [str(python), "-m", "pip", "install", "--no-deps", str(ROOT)],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
     )
     assert installed.returncode == 0, installed.stdout + installed.stderr
 
@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory() as tmp:
         [str(command), "--help"],
         cwd=tmp,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prepare" in result.stdout

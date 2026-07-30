@@ -11,6 +11,7 @@ that a brief survives compile → lint → baseline → render.
 """
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -57,7 +58,7 @@ class Checks:
 
 def tool(name, *args):
     r = subprocess.run([sys.executable, str(SKILL / name)] + [str(a) for a in args],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     return r
 
 
@@ -89,7 +90,7 @@ def brief(repo, name, body):
     text = body.lstrip()
     if not re.search(r"^base_rev:", text, re.M):
         head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                              capture_output=True, text=True).stdout.strip()
+                              capture_output=True, text=True, encoding="utf-8").stdout.strip()
         if head:
             text = text.rstrip("\n") + f"\nbase_rev: {head}\n"
     p.write_text(text, encoding="utf-8")
@@ -316,7 +317,7 @@ autonomy: ask
          f"a repo-writing command must not run: {kinds[2]}")
     c.ok((pathlib.Path(repo) / "src/cart.py").exists(), "the repo must be untouched")
     c.ok(subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                        capture_output=True, text=True).stdout.strip() == "",
+                        capture_output=True, text=True, encoding="utf-8").stdout.strip() == "",
          "measuring a baseline must not dirty the tree")
 
 
@@ -389,7 +390,7 @@ autonomy: ask
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "agent work"],
                    capture_output=True)
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD~1"],
-                          capture_output=True, text=True).stdout.strip()
+                          capture_output=True, text=True, encoding="utf-8").stdout.strip()
     g = guard(p, "--base", head)
     c.ok(len(violations(g)) >= 2,
          f"committed out-of-scope work is still caught with --base: {g['findings']}")
@@ -787,7 +788,7 @@ autonomy: ask
     # it tracked explicitly, so the guard diffs the *next* edit (status M), not the
     # file's own first appearance (status A, which the brief-path branch ignores)
     tracked = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                             capture_output=True, text=True).stdout.strip()
+                             capture_output=True, text=True, encoding="utf-8").stdout.strip()
     p.write_text(p.read_text(encoding="utf-8") + "notes: widened after the fact\n",
                  encoding="utf-8")
     g = guard(p, "--base", tracked)
@@ -912,7 +913,7 @@ autonomy: ask
         raw = ptr.read_bytes()
         lines = raw.decode("utf-8").splitlines()
         head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                              capture_output=True, text=True).stdout.strip()
+                              capture_output=True, text=True, encoding="utf-8").stdout.strip()
         # Line 1 alone is what the hook reads; the records below it must never change
         # that. Asserted on raw bytes: read_text() applies universal-newline translation
         # and splitlines() splits on CR as well, so between them this assertion passed
@@ -1844,7 +1845,7 @@ def copilot_hook(repo, tool_name, args, cwd=None):
     payload = json.dumps({"sessionId": "e2e", "timestamp": 0, "cwd": str(cwd or repo),
                           "toolName": tool_name, "toolArgs": args})
     return subprocess.run([sys.executable, COPILOT_HOOK], input=payload,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
 
 
 def _denial(c, r, *must_contain):
@@ -2001,6 +2002,61 @@ autonomy: ask
     c.ok(guard(p)["base_source"] == "pin",
          f"the base must be corroborated by the pin, not merely uncontradicted: "
          f"{guard(p)['base_source']!r}")
+
+
+@case("a path git cannot decode as utf-8 still gets a verdict")
+def _(repo, c):
+    """The one case where the decoder is load-bearing rather than merely tidy.
+
+    git stores path *bytes*, so a repository can carry a name that is not valid UTF-8 in
+    any encoding, and `git diff --name-status -z` hands those bytes straight back. Decoded
+    with the locale's codec — which is what `text=True` does — that raised
+    `UnicodeDecodeError` *inside* subprocess, so the post-hoc authority answered a real
+    violation with a traceback; naming utf-8 without naming `errors=` then moved the same
+    crash to the `print()`. Exit 1 with the path escaped is the only acceptable answer:
+    this tool's vocabulary is 0/1/2 and a stack trace is none of them.
+
+    The entry goes in through the index because no mainstream filesystem will hold the
+    name — which is also why this case is the only place either half is exercised.
+    """
+    if os.name == "nt":
+        return          # git for Windows will not put these bytes in an index entry
+    weird = b"src/we\xffird.py"
+    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                          input=b"leak\n", capture_output=True, check=True).stdout.strip()
+    added = subprocess.run(["git", "-C", str(repo), "update-index", "--add",
+                            b"--cacheinfo", b"100644," + blob + b"," + weird],
+                           capture_output=True)
+    c.ok(added.returncode == 0,
+         f"sanity: the undecodable path must reach the index, else this case proves "
+         f"nothing: {added.stderr!r}")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "undecodable"],
+                   capture_output=True, check=True)
+
+    # The file is in that commit but never in the working tree, so it reads as a deletion
+    # outside `scope` — a finding the guard has to be able to name.
+    p = brief(repo, "undecodable", """
+goal: Touch nothing but the cart.
+scope: [src/cart.py]
+autonomy: ask
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_total
+    expect: exit 0
+""")
+    r = tool("check_scope.py", p, "--json")
+    c.ok(r.returncode == 1,
+         f"an undecodable path must be a verdict, not a crash: exit {r.returncode} "
+         f"{r.stdout}{r.stderr}")
+    c.ok("Traceback" not in r.stderr, f"the guard must not raise: {r.stderr}")
+    paths = [f["path"] for f in json.loads(r.stdout)["findings"]]
+    c.ok(weird.decode("utf-8", "surrogateescape") in paths,
+         f"the path must round-trip byte-for-byte, not be flattened into one that names "
+         f"a different file: {paths}")
+
+    prose = tool("check_scope.py", p)
+    c.ok(prose.returncode == 1 and "Traceback" not in prose.stderr,
+         f"reporting the same verdict as prose must not raise either: exit "
+         f"{prose.returncode} {prose.stderr}")
 
 
 def main():

@@ -26,7 +26,8 @@ def main():
     quiet = "--quiet" in sys.argv
     results = []
     for s in SUITES:
-        r = subprocess.run([sys.executable, str(HERE / s)], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(HERE / s)], capture_output=True,
+                           text=True, encoding="utf-8")
         results.append((s, r.returncode))
         if not quiet or r.returncode:
             print(f"===== {s} =====")

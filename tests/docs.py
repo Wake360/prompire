@@ -445,6 +445,77 @@ def overclaim_problems():
 BINARY_MODES = {"rb", "wb", "ab", "rb+", "wb+", "ab+", "r+b", "w+b", "a+b", "xb", "x+b"}
 
 
+def tracked_py():
+    return subprocess.run(
+        ["git", "-C", str(SKILL), "ls-files", "*.py"], capture_output=True,
+        encoding="utf-8", check=True).stdout.splitlines()
+
+
+def tokens_of(rel):
+    with open(SKILL / rel, "rb") as f:
+        return list(tokenize.tokenize(f.readline))
+
+
+def kwargs_of(tokens, i):
+    """The keyword names passed directly to the call whose `(` is at `tokens[i + 1]`,
+    plus the index of its closing paren. Only depth 1, so a keyword belonging to a
+    nested call is not credited to this one."""
+    depth = 0
+    names = set()
+    j = i + 1
+    while j < len(tokens):
+        t = tokens[j]
+        if t.type == tokenize.OP and t.string == "(":
+            depth += 1
+        elif t.type == tokenize.OP and t.string == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        elif (depth == 1 and t.type == tokenize.NAME and j + 1 < len(tokens)
+              and tokens[j + 1].type == tokenize.OP and tokens[j + 1].string == "="):
+            names.add(t.string)
+        j += 1
+    return names, j
+
+
+def decoder_problems():
+    """No tracked `*.py` file may capture a child's output as text without an explicit
+    `encoding=`.
+
+    `text=True` (and `universal_newlines=True`) decode the child's stdout and stderr
+    with the *locale* encoding, the same defaulting bug as `open()` without
+    `encoding=` — so on Windows a `git diff --name-status` naming a non-ASCII path
+    comes back either mojibake (cp1252 decodes almost every byte, silently) or as a
+    `UnicodeDecodeError`. In `check_scope.py` the first corrupts a verdict and the
+    second replaces one with a traceback, and this tool's vocabulary for "could not
+    decide" is exit 2, not a stack trace. git speaks UTF-8, so `encoding="utf-8"` is
+    the right decoder rather than a workaround; each site picks its own `errors=`.
+
+    A call that omits every text-mode keyword captures bytes and is left alone — that
+    is a deliberate choice, not a defaulted one.
+    """
+    problems = []
+    for rel in tracked_py():
+        tokens = tokens_of(rel)
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if (tok.type == tokenize.NAME and tok.string in ("run", "Popen", "check_output")
+                    and i + 1 < len(tokens) and tokens[i + 1].type == tokenize.OP
+                    and tokens[i + 1].string == "("
+                    and i >= 2 and tokens[i - 1].string == "."
+                    and tokens[i - 2].string == "subprocess"):
+                names, end = kwargs_of(tokens, i)
+                if names & {"text", "universal_newlines"} and "encoding" not in names:
+                    problems.append(f"{rel}:{tok.start[0]}: `subprocess.{tok.string}(...)` "
+                                    "decodes the child's output with no `encoding=` — "
+                                    "that is the locale encoding, which is not UTF-8 on "
+                                    "Windows")
+                i = end
+            i += 1
+    return problems
+
+
 def encoding_problems():
     """No tracked `*.py` file may do text I/O without an explicit `encoding=`.
 
@@ -458,12 +529,8 @@ def encoding_problems():
     that merely mentions `write_text()`, or on a YAML fixture string containing
     `python -c "...write_text('x')..."` as command text a test runs.
     """
-    tracked = subprocess.run(
-        ["git", "-C", str(SKILL), "ls-files", "*.py"],
-        capture_output=True, text=True, check=True).stdout.splitlines()
-
     problems = []
-    for rel in tracked:
+    for rel in tracked_py():
         path = SKILL / rel
         with open(path, "rb") as f:
             tokens = list(tokenize.tokenize(f.readline))
@@ -588,6 +655,7 @@ def main():
     problems += hook_config_problems()
     problems += overclaim_problems()
     problems += encoding_problems()
+    problems += decoder_problems()
 
     skill_md = read("SKILL.md")
     for rel, name in (("README.md", "hook_copilot_guard.py"),

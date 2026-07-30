@@ -43,8 +43,12 @@ def flag(name, default="false"):
 
 
 def git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args],
-                          capture_output=True, text=True)
+    # UTF-8 because that is what git emits, not because of the runner's locale — see the
+    # same decision in check_scope.py. `surrogateescape` for the same reason too: what
+    # comes back here is revisions and paths, and a path must round-trip rather than be
+    # flattened into one that names a different file.
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                          encoding="utf-8", errors="surrogateescape")
 
 
 def resolves(root, rev):
@@ -277,13 +281,13 @@ def run_scope(brief, base):
         argv.append("--strict")
     argv += ["--base", base]
     return subprocess.run([sys.executable, str(HOME / "check_scope.py"), *argv],
-                          capture_output=True, text=True)
+                          capture_output=True, encoding="utf-8", errors="replace")
 
 
 def run_acceptance(brief):
     return subprocess.run(
         [sys.executable, str(HOME / "verify_acceptance.py"), str(brief), "--json"],
-        capture_output=True, text=True)
+        capture_output=True, encoding="utf-8", errors="replace")
 
 
 def main():

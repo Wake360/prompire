@@ -122,7 +122,8 @@ def run(root, tmp, event=None, event_name="", runner_temp=None, **inputs):
         env["PROMPIRE_" + k.upper().replace("-", "_")] = str(v)
 
     r = subprocess.run([sys.executable, str(ACTION / "runner.py")],
-                       capture_output=True, text=True, env=env, cwd=str(root))
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=env, cwd=str(root))
 
     class Result:
         code = r.returncode
@@ -440,7 +441,7 @@ def _(tmp, c):
     commit(root, "fix")
     shallow = pathlib.Path(tmp) / "shallow"
     subprocess.run(["git", "clone", "-q", "--depth=1", root.as_uri(), str(shallow)],
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, encoding="utf-8")
     if not (shallow / ".git").exists():
         return  # git refused a local shallow clone; nothing to assert
     r = run(shallow, tmp, base=head)
@@ -457,7 +458,7 @@ def _(tmp, c):
     commit(root, "out of scope")
     shallow = pathlib.Path(tmp) / "cut-off"
     subprocess.run(["git", "clone", "-q", "--depth=1", root.as_uri(), str(shallow)],
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, encoding="utf-8")
     if not (shallow / ".git").exists():
         return
     git(shallow, "remote", "remove", "origin")

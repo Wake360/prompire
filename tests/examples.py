@@ -136,7 +136,7 @@ def measure(repo, name, body):
     p.parent.mkdir(exist_ok=True)
     p.write_text(body.lstrip(), encoding="utf-8")
     r = subprocess.run([sys.executable, str(SKILL / "baseline.py"), str(p), "--json"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     if r.returncode == 2:
         raise AssertionError(f"{name}: baseline refused: {r.stdout}{r.stderr}")
     return json.loads(r.stdout)
@@ -184,7 +184,7 @@ def main():
                 problems.append(f"recorded {statuses(committed)} but a fresh measurement "
                                 f"gives {statuses(fresh)}")
             r = subprocess.run([sys.executable, str(SKILL / "lint_brief.py"), str(target),
-                                "--json"], capture_output=True, text=True)
+                                "--json"], capture_output=True, text=True, encoding="utf-8")
             lr = json.loads(r.stdout)
             if lr["errors"] or lr["warnings"]:
                 problems.append(f"lints {lr['errors']}E/{lr['warnings']}W: "

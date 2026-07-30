@@ -46,7 +46,7 @@ class Checks:
 
 def run(*args, cwd=None):
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
-                          capture_output=True, text=True, env=ENV,
+                          capture_output=True, text=True, encoding="utf-8", env=ENV,
                           cwd=None if cwd is None else str(cwd))
 
 
@@ -59,7 +59,7 @@ def run_with_replaced_tools(args, replacements):
             (tool_root / name).write_text(body, encoding="utf-8")
         return subprocess.run(
             [sys.executable, str(tool_root / "prompire.py"), *map(str, args)],
-            capture_output=True, text=True, env=ENV,
+            capture_output=True, text=True, encoding="utf-8", env=ENV,
         )
 
 
@@ -518,7 +518,7 @@ def _(repo, checks):
     lock.mkdir()
     process = subprocess.Popen(
         [sys.executable, str(CLI), "close", str(requested)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=ENV,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=ENV,
     )
     time.sleep(1)
     waiting = process.poll() is None
@@ -547,7 +547,7 @@ def _(repo, checks):
     lock.mkdir()
     process = subprocess.Popen(
         [sys.executable, str(CLI), "scope", str(path), "--activate"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=ENV,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=ENV,
     )
     time.sleep(1)
     waiting = process.poll() is None
@@ -577,7 +577,7 @@ def _(repo, checks):
     # Re-arm through the existing low-level tool after the derived prompt workflow has
     # deliberately refused to overwrite the brief's measured baseline.
     armed = subprocess.run([sys.executable, str(ROOT / "check_scope.py"), str(path), "--activate"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
     checks.equal(armed.returncode, 0, "low-level rearm")
     repin = json_out(run("status", path, "--json"))
     checks.equal(repin["status"], "repin", "rearmed status")
@@ -624,7 +624,8 @@ def _(repo, checks):
 def _(repo, checks):
     for command, script in (("baseline", "baseline.py"), ("lint", "lint_brief.py"),
                             ("render", "render_brief.py"), ("scope", "check_scope.py")):
-        direct = subprocess.run([sys.executable, str(ROOT / script)], capture_output=True, text=True)
+        direct = subprocess.run([sys.executable, str(ROOT / script)],
+                                capture_output=True, text=True, encoding="utf-8")
         forwarded = run(command)
         checks.equal(forwarded.returncode, direct.returncode,
                      f"{command} must preserve its underlying exit code")
@@ -635,7 +636,8 @@ def _(repo, checks):
     if os.name != "nt":
         return
     result = subprocess.run(
-        ["python", "-c", "print('ok')"], capture_output=True, text=True, env=ENV)
+        ["python", "-c", "print('ok')"], capture_output=True, text=True,
+        encoding="utf-8", env=ENV)
     checks.equal(result.returncode, 0, "Windows Python shim exit")
     checks.equal(result.stdout, "ok\n",
                  "Windows command echo must not alter acceptance stdout")
@@ -646,7 +648,7 @@ def _(repo, checks):
     for command, script in (("baseline", "baseline.py"), ("lint", "lint_brief.py"),
                             ("render", "render_brief.py"), ("scope", "check_scope.py")):
         direct = subprocess.run([sys.executable, str(ROOT / script), "--help"],
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, encoding="utf-8")
         forwarded = run(command, "--help")
         checks.equal(forwarded.returncode, direct.returncode,
                      f"{command} --help exit must come from the underlying script")
@@ -660,7 +662,7 @@ def _(repo, checks):
 def _(repo, checks):
     good = brief(repo, "good")
     measured = subprocess.run([sys.executable, str(ROOT / "baseline.py"), str(good), "--write"],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8")
     checks.equal(measured.returncode, 0, "good fixture baseline")
     bad = brief(repo, "bad", extra="scope: []\n")
     probes = (
@@ -670,7 +672,7 @@ def _(repo, checks):
     )
     for command, script, arguments in probes:
         direct = subprocess.run([sys.executable, str(ROOT / script), *map(str, arguments)],
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, encoding="utf-8")
         forwarded = run(command, *arguments)
         checks.equal(forwarded.returncode, direct.returncode,
                      f"{command} {arguments} exit must be preserved")

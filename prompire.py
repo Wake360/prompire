@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 
+from brief_common import tolerant_stdio
 from check_scope import RepoError, active_brief, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -51,10 +52,16 @@ CHILD_JSON_KEYS = {
 
 
 def run_tool(name, *args):
+    # The child's own stdout, which it already wrote as UTF-8 — decoding it with the
+    # locale's encoding instead is how a Czech path in a verdict became mojibake, or a
+    # traceback, on the way through this wrapper. `replace` because this layer only
+    # reprints and re-parses that text: it cannot preserve a byte it also has to encode
+    # back out, and a forwarded exit code must not depend on one.
     return subprocess.run(
         [sys.executable, str(HERE / TOOLS[name]), *map(str, args)],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -317,7 +324,8 @@ def demo(args, extra):
 
     def cli(*command):
         return subprocess.run([sys.executable, str(HERE / "prompire.py"), *command],
-                              cwd=str(root), capture_output=True, text=True)
+                              cwd=str(root), capture_output=True,
+                              encoding="utf-8", errors="replace")
 
     try:
         (root / "greeting.py").write_text('WORD = "hello"\n', encoding="utf-8")
@@ -545,6 +553,10 @@ def build_parser():
 
 
 def main(argv=None):
+    # This layer re-emits the children's JSON with `ensure_ascii=False`, so a path
+    # check_scope.py escaped for its own stdout arrives back here as a real surrogate and
+    # has to be printed again — see brief_common.tolerant_stdio.
+    tolerant_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in LOW_LEVEL_COMMANDS:
         return emit_process(run_tool(argv[0], *argv[1:]))
