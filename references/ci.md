@@ -10,18 +10,18 @@ compares against is chosen by git rather than by a field in the brief.
 ```yaml
 name: prompire
 on: [pull_request]
-permissions:
-  contents: read
-  pull-requests: write        # only needed for `comment: true`
 jobs:
   scope:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write    # only needed for `comment: true`
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - uses: Wake360/prompire/.github/actions/prompire-verify@v0.7.0
+      - uses: Wake360/prompire/.github/actions/prompire-verify@v0.8.0
         with:
           comment: 'true'
           artifact-name: prompire

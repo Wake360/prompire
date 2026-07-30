@@ -24,6 +24,7 @@ LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
 # A draft is not a brief yet. Every line the heuristic could not settle carries this
 # marker, and `prepare` refuses while one remains — deleting it is the confirmation.
 DRAFT_MARKER = "prompire:unconfirmed"
+DEFAULT_DRAFT_OUT = ".prompire/task.yaml"
 DEMO_PYTHON = "python" if os.name == "nt" else "python3"
 # The demo's acceptance command must not import a module: the bytecode cache it would
 # leave behind is itself a change outside `scope`, and the clean pass would not be clean.
@@ -235,7 +236,9 @@ def draft(args, extra):
         root = repo_root(pathlib.Path("."))
     except RepoError as exc:
         return report_refusal(str(exc))
-    out = pathlib.Path(args.out)
+    # The default lands at the repo root, because that is the only place the Action's
+    # `find_brief` looks. A path the caller typed keeps its cwd-relative meaning.
+    out = root / DEFAULT_DRAFT_OUT if args.out is None else pathlib.Path(args.out)
     if os.path.lexists(out):  # a dangling symlink counts — never write through one
         return report_refusal(f"`{out}` already exists; pick another --out")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -251,19 +254,26 @@ def demo_verdict(result):
         data = json.loads(result.stdout)
     except ValueError:
         data = None
-    if not isinstance(data, dict) or "scope" not in data:
+    # Every key is read before a line is printed, so a JSON shape this retelling does not
+    # know falls back to the raw run instead of half-narrating it and then raising. A
+    # traceback here would turn `demo`'s refusal path (exit 2) into exit 1.
+    try:
+        scope = data["scope"]
+        lines = [f"     {f['kind'].lower()}: {f['path']} — {f['message']}"
+                 for f in scope["findings"]]
+        lines.append(f"     scope: {scope['violations']} violation(s) "
+                     f"against base {scope['base']}")
+        acceptance = data["acceptance"]
+        if acceptance.get("status") == "not_run":
+            lines.append(f"     acceptance: not run — {acceptance['reason']}")
+        else:
+            lines += [f"     acceptance: {e['cmd']} — {e['status']}"
+                      for e in acceptance["results"]]
+    except (TypeError, KeyError, AttributeError, IndexError):
         emit_process(result)
         return
-    scope = data["scope"]
-    for finding in scope["findings"]:
-        print(f"     {finding['kind'].lower()}: {finding['path']} — {finding['message']}")
-    print(f"     scope: {scope['violations']} violation(s) against base {scope['base']}")
-    acceptance = data["acceptance"]
-    if acceptance.get("status") == "not_run":
-        print(f"     acceptance: not run — {acceptance['reason']}")
-    else:
-        for entry in acceptance["results"]:
-            print(f"     acceptance: {entry['cmd']} — {entry['status']}")
+    for line in lines:
+        print(line)
     print("     clean (exit 0)" if result.returncode == 0
           else f"     caught (exit {result.returncode})")
 
@@ -474,7 +484,8 @@ def build_parser():
 
     drafted = commands.add_parser("draft")
     drafted.add_argument("sentence")
-    drafted.add_argument("--out", default=".prompire/task.yaml")
+    drafted.add_argument("--out", default=None,
+                         help=f"default: <repo root>/{DEFAULT_DRAFT_OUT}")
     drafted.set_defaults(handler=draft)
 
     demoed = commands.add_parser("demo")

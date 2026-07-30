@@ -615,9 +615,11 @@ def _(tmp, c):
         cond = str(step["if"])
         c.ok("github.event_name == 'pull_request'" in cond,
              f"the comment step must be gated on the pull_request event: {cond}")
-        c.ok("github.event.pull_request.head.repo.fork != true" in cond,
+        c.ok("github.event.pull_request.head.repo.fork == false" in cond,
              "a fork's token is read-only, so the comment step must skip itself there "
-             f"instead of failing an otherwise clean job: {cond}")
+             "instead of failing an otherwise clean job — and `== false` rather than "
+             "`!= true`, which a deleted fork's null `head.repo` also satisfies: "
+             f"{cond}")
         c.ok(step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}",
              f"the comment step must take the token from github.token: {step.get('env')}")
         c.ok("${{" not in step["run"],

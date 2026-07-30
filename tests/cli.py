@@ -155,6 +155,24 @@ def _(repo, checks):
               "draft must not write through a dangling symlink")
 
 
+@case("draft defaults to the repo root, wherever it is run from")
+def _(repo, checks):
+    inner = pathlib.Path(repo) / "src" / "deep"
+    inner.mkdir(parents=True, exist_ok=True)
+    result = run("draft", "Add a health endpoint", cwd=inner)
+    checks.equal(result.returncode, 0, "draft exit")
+    root_brief = pathlib.Path(repo) / ".prompire" / "task.yaml"
+    checks.ok(root_brief.exists(),
+              "the default brief must land where the Action looks for it — the repo root")
+    checks.ok(not (inner / ".prompire").exists(),
+              "a brief under the working directory is invisible to CI")
+    # An --out the caller typed keeps its cwd-relative meaning; only the default moves.
+    typed = run("draft", "Another task", "--out", ".prompire/typed.yaml", cwd=inner)
+    checks.equal(typed.returncode, 0, "explicit --out exit")
+    checks.ok((inner / ".prompire" / "typed.yaml").exists(),
+              "an explicit --out must not be silently relocated")
+
+
 @case("prepare writes baseline, prompt, checklist, then ACTIVE")
 def _(repo, checks):
     path = brief(repo)
