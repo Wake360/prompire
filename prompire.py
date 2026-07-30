@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,24 @@ LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
 # A draft is not a brief yet. Every line the heuristic could not settle carries this
 # marker, and `prepare` refuses while one remains — deleting it is the confirmation.
 DRAFT_MARKER = "prompire:unconfirmed"
+DEMO_PYTHON = "python" if os.name == "nt" else "python3"
+# The demo's acceptance command must not import a module: the bytecode cache it would
+# leave behind is itself a change outside `scope`, and the clean pass would not be clean.
+DEMO_BRIEF = f"""\
+goal: Change the greeting word in greeting.py.
+scope:
+  - greeting.py
+autonomy: ask
+acceptance:
+  - cmd: {DEMO_PYTHON} check.py
+    expect: exit 0
+"""
+DEMO_CHECK = """\
+import pathlib
+
+text = pathlib.Path("greeting.py").read_text(encoding="utf-8")
+raise SystemExit(0 if text.startswith('WORD = "') else 1)
+"""
 CHILD_JSON_KEYS = {
     "scope": {"violations", "reviews", "findings"},
     "acceptance": {"passed", "failed", "not_run", "results"},
@@ -226,6 +245,92 @@ def draft(args, extra):
     return 0
 
 
+def demo_verdict(result):
+    """Retell one `verify` run as prose — the child speaks JSON, the demo speaks English."""
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict) or "scope" not in data:
+        emit_process(result)
+        return
+    scope = data["scope"]
+    for finding in scope["findings"]:
+        print(f"     {finding['kind'].lower()}: {finding['path']} — {finding['message']}")
+    print(f"     scope: {scope['violations']} violation(s) against base {scope['base']}")
+    acceptance = data["acceptance"]
+    if acceptance.get("status") == "not_run":
+        print(f"     acceptance: not run — {acceptance['reason']}")
+    else:
+        for entry in acceptance["results"]:
+            print(f"     acceptance: {entry['cmd']} — {entry['status']}")
+    print("     clean (exit 0)" if result.returncode == 0
+          else f"     caught (exit {result.returncode})")
+
+
+def demo(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra))
+    root = pathlib.Path(tempfile.mkdtemp(prefix="prompire-demo-")).resolve()
+
+    def git(*command):
+        # The seed commit must not depend on the caller's identity or signing config.
+        subprocess.run(["git", "-C", str(root), "-c", "user.email=demo@prompire",
+                        "-c", "user.name=demo", "-c", "commit.gpgsign=false",
+                        *command], check=True, capture_output=True)
+
+    def cli(*command):
+        return subprocess.run([sys.executable, str(HERE / "prompire.py"), *command],
+                              cwd=str(root), capture_output=True, text=True)
+
+    try:
+        (root / "greeting.py").write_text('WORD = "hello"\n', encoding="utf-8")
+        (root / "check.py").write_text(DEMO_CHECK, encoding="utf-8")
+        git("init", "-q")
+        git("add", ".")
+        git("commit", "-qm", "seed")
+        (root / ".prompire").mkdir()
+        (root / ".prompire" / "demo.yaml").write_text(DEMO_BRIEF, encoding="utf-8")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        shutil.rmtree(root, ignore_errors=True)
+        return report_refusal(f"could not build the demo repository: {exc}")
+
+    print(f"demo repo: {root}")
+    print("     greeting.py — the one file the brief lets the agent touch")
+    print(f"     check.py — its test, run as `{DEMO_PYTHON} check.py`")
+    print("the brief the agent is held to:")
+    for line in DEMO_BRIEF.splitlines():
+        print(f"     {line}")
+    print("1. prepare: measure the acceptance command on untouched HEAD, lint the brief,")
+    print("   render the prompt, pin the base commit.")
+    prepared = cli("prepare", ".prompire/demo.yaml")
+    if prepared.returncode == 0:
+        print("     armed: prompt and checklist rendered, base commit pinned")
+    else:
+        emit_process(prepared)
+
+    print('2. the agent does what it was asked: greeting.py now says "ahoj".')
+    (root / "greeting.py").write_text('WORD = "ahoj"\n', encoding="utf-8")
+    clean = cli("verify", ".prompire/demo.yaml", "--json")
+    demo_verdict(clean)
+
+    print("3. the same agent drifts and also writes secrets.cfg, which the brief")
+    print("   never allowed.")
+    (root / "secrets.cfg").write_text("token=oops\n", encoding="utf-8")
+    caught = cli("verify", ".prompire/demo.yaml", "--json")
+    demo_verdict(caught)
+
+    if args.keep:
+        print(f"kept: {root}")
+    else:
+        shutil.rmtree(root, ignore_errors=True)
+    if not (prepared.returncode == 0 and clean.returncode == 0 and caught.returncode == 1):
+        return report_refusal("the demo story did not play out; rerun with --keep")
+    print("the violation above was read out of the real git diff against the pinned base —")
+    print("the agent was never asked, so nothing it could claim would hide the extra file.")
+    return 0
+
+
 def prepare(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
@@ -371,6 +476,10 @@ def build_parser():
     drafted.add_argument("sentence")
     drafted.add_argument("--out", default=".prompire/task.yaml")
     drafted.set_defaults(handler=draft)
+
+    demoed = commands.add_parser("demo")
+    demoed.add_argument("--keep", action="store_true")
+    demoed.set_defaults(handler=demo)
 
     prepared = commands.add_parser("prepare")
     prepared.add_argument("brief")
