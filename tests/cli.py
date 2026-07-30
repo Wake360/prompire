@@ -641,6 +641,32 @@ def _(repo, checks):
                      f"{command} {arguments} stderr must be preserved")
 
 
+@case("demo shows a clean pass and a caught violation, then cleans up")
+def _(repo, checks):
+    result = run("demo", cwd=repo)
+    checks.equal(result.returncode, 0, f"demo exit ({result.stdout}{result.stderr})")
+    low = result.stdout.lower()
+    checks.ok("violation" in low, "demo must show the caught out-of-scope write")
+    checks.ok("clean" in low or "0 violation" in low,
+              "demo must also show the in-scope change passing")
+    checks.ok("secrets.cfg" in low, "demo must name the file that drifted out of scope")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
+              "demo must not touch the caller's repo state")
+    scratch = [line.split(": ", 1)[1] for line in result.stdout.splitlines()
+               if line.startswith("demo repo: ")]
+    checks.equal(len(scratch), 1, "demo must name its throwaway repo once")
+    if scratch:
+        checks.ok(not pathlib.Path(scratch[0]).exists(),
+                  "demo must remove its throwaway repo without --keep")
+
+
+@case("demo refuses unrecognized arguments")
+def _(repo, checks):
+    result = run("demo", "--wat", cwd=repo)
+    checks.equal(result.returncode, 2, "demo refusal exit")
+    checks.ok("refused" in result.stdout, "the refusal must be legible")
+
+
 @case("json mode emits one parseable object and no prose")
 def _(repo, checks):
     path = brief(repo)
