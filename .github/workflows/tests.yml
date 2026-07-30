@@ -3,13 +3,15 @@ on: [push, pull_request]
 jobs:
   full:
     strategy:
+      # Every cell reports. A cancelled sibling hides a failure that is its own.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ["3.11", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install PyYAML
@@ -18,14 +20,17 @@ jobs:
   cli-windows:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install PyYAML
+      # Each suite is its own step, so the log names the one that broke. The steps stop
+      # at the first failure, so a red suite here hides every suite below it.
       - run: python tests/battery.py
       - run: python tests/golden.py
       - run: python tests/docs.py
