@@ -81,7 +81,7 @@ def check_ablations():
     brief = load_brief(str(SKILL / "examples" / "02-must-flip.yaml"))
     cur = VARIANTS["current"](brief, bench_run.BRIEF_REL)
     out = {name: VARIANTS[name](brief, bench_run.BRIEF_REL)
-           for name in ("no_state", "no_guard", "no_bounds")}
+           for name in ("no_state", "no_guard", "no_bounds", "no_acceptance")}
     for name, text in out.items():
         check(f"{name} actually changed the prompt", text != cur, name)
         check(f"{name} still states the goal",
@@ -114,6 +114,15 @@ def check_ablations():
     check("no_bounds keeps the criteria and their measured state",
           "tests.test_total" in out["no_bounds"]
           and "fails today" in out["no_bounds"], out["no_bounds"])
+
+    check("no_acceptance drops the criteria and their header",
+          "unittest" not in out["no_acceptance"]
+          and "Done when" not in out["no_acceptance"], out["no_acceptance"])
+    check("no_acceptance keeps the boundary and the external check",
+          "src/cart.py" in out["no_acceptance"]
+          and "check_scope.py" in out["no_acceptance"], out["no_acceptance"])
+    check("no_acceptance leaves no dangling blank block",
+          "\n\n\n" not in out["no_acceptance"], repr(out["no_acceptance"]))
 
     src = (SKILL / "bench" / "variants.py").read_text(encoding="utf-8")
     check("a no-op text ablation is an error, not a silent pass",

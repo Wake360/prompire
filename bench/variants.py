@@ -57,6 +57,18 @@ def _cut(text, marker, required=True):
     return text.replace(marker, "")
 
 
+def _cut_lines(text, marker):
+    """Drop every rendered line carrying `marker`, and refuse a no-op for the same
+    reason `_cut` does."""
+    kept = [line for line in text.splitlines() if marker not in line]
+    if len(kept) == len(text.splitlines()):
+        raise RuntimeError(f"ablation found nothing to remove: {marker!r}")
+    out = "\n".join(kept)
+    while "\n\n\n" in out:
+        out = out.replace("\n\n\n", "\n\n")
+    return out
+
+
 def _drop(brief, *keys):
     out = copy.deepcopy(brief)
     for key in keys:
@@ -82,12 +94,21 @@ def no_state(brief, brief_path):
 def no_guard(brief, brief_path):
     """The brief without the sentence announcing the external diff check. Isolates
     whether telling the agent it is checked from outside changes what it does."""
-    text = current(brief, brief_path)
-    sentence = [line for line in text.splitlines() if "check_scope.py" in line]
-    if not sentence:
-        raise RuntimeError("ablation found nothing to remove: the guard sentence")
-    return "\n".join(line for line in text.splitlines()
-                     if "check_scope.py" not in line).replace("\n\n\n", "\n\n")
+    return _cut_lines(current(brief, brief_path), "check_scope.py")
+
+
+def no_acceptance(brief, brief_path):
+    """The brief without executable criteria: goal, boundary and autonomy stay, the
+    commands and their header go. Isolates what stating how success is judged buys.
+
+    The first live matrix is why this exists. Half of what a naked request lost was
+    the boundary — it edited frozen tests — but the other half was the contract: it
+    never learned that `total_line()` must render `'total: 4'`, or that the extracted
+    function is called `fmt_row`. Those failures belong to the criteria, and no other
+    ablation removes them.
+    """
+    return _cut_lines(current(_drop(brief, "acceptance"), brief_path),
+                      "Done when all of these hold:")
 
 
 def no_bounds(brief, brief_path):
@@ -108,4 +129,5 @@ def no_bounds(brief, brief_path):
 
 
 VARIANTS = {"current": current, "persona": persona, "bare": bare,
-            "no_state": no_state, "no_guard": no_guard, "no_bounds": no_bounds}
+            "no_state": no_state, "no_guard": no_guard, "no_bounds": no_bounds,
+            "no_acceptance": no_acceptance}

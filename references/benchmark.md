@@ -18,7 +18,8 @@ A cell is task × variant × agent:
 - **variant** — a prompt renderer in `bench/variants.py`. `current` is what
   `render_brief.py` produces today; every other entry is a hypothesis. A
   variant that does not beat `current` across the matrix does not move into
-  the renderer. `no_state`, `no_guard` and `no_bounds` are ablations — each
+  the renderer. `no_state`, `no_guard`, `no_bounds` and `no_acceptance` are
+  ablations — each
   removes exactly one thing the brief adds, so the matrix says which *part*
   earns its tokens rather than only whether the brief as a whole does.
   `no_state` keeps the commands but drops their measured red/green/frozen
@@ -27,7 +28,11 @@ A cell is task × variant × agent:
   drops the sentence announcing the external diff check. `no_bounds` drops
   `scope`, `forbidden` and every sentence pointing back at them, while leaving
   the external check intact — a path named in `goal` or `manual_checks`
-  survives on purpose, since cutting it would ablate a second factor. A text
+  survives on purpose, since cutting it would ablate a second factor.
+  `no_acceptance` drops the criteria and their header, keeping goal, boundary
+  and autonomy — the first live matrix showed half of what a naked request
+  loses is the contract (which string `total_line()` must render, what the
+  extracted function is called), and no other ablation removes it. A text
   ablation that matches nothing raises rather than silently returning
   `current`: an ablation that removes nothing scores like the control and
   reads as "this factor does not matter", which is the one result the
