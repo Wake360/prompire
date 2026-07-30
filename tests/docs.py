@@ -60,7 +60,7 @@ OVERCLAIMS = ("sandboxed", "fully secure", "cannot be bypassed", "cannot bypass"
 
 PROSE = ("README.md", "SKILL.md", "references/hosts.md", "references/rendering.md",
          "references/rules.md", "references/schema.md", "references/maintaining.md",
-         "references/ci.md")
+         "references/ci.md", "references/threat-model.md")
 
 EXPECTED_INTERFACE = {
     "display_name": "Prompire",
