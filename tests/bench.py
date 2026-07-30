@@ -98,9 +98,59 @@ def check_scripted():
         check("an unknown behavior raises", True)
 
 
+def check_cli(tmp):
+    out = pathlib.Path(tmp) / "run.jsonl"
+    r = subprocess.run([sys.executable, str(SKILL / "bench" / "run.py"),
+                        "--tasks", str(TASKS / "T01-flip-fix.yaml"),
+                        "--variants", "current", "--agents", "scripted:good",
+                        "--out", str(out)],
+                       capture_output=True, text=True, encoding="utf-8")
+    rows = [json.loads(l)
+            for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("run.py writes one row and exits 0",
+          r.returncode == 0 and len(rows) == 1 and not rows[0].get("error"),
+          r.stdout + r.stderr)
+
+    r = subprocess.run([sys.executable, str(SKILL / "bench" / "run.py"),
+                        "--tasks", str(TASKS / "T01-flip-fix.yaml"),
+                        "--variants", "current", "--agents", "no-such-agent",
+                        "--out", str(out)],
+                       capture_output=True, text=True, encoding="utf-8")
+    rows = [json.loads(l)
+            for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("an unknown agent is a recorded error and exit 1",
+          r.returncode == 1 and rows[-1].get("error"), r.stdout + r.stderr)
+
+    rep = subprocess.run([sys.executable, str(SKILL / "bench" / "report.py"),
+                          str(out)], capture_output=True, text=True,
+                         encoding="utf-8")
+    check("report renders marks and totals",
+          rep.returncode == 0 and "ERR" in rep.stdout and "solved" in rep.stdout,
+          rep.stdout + rep.stderr)
+
+    out2 = pathlib.Path(tmp) / "repeats.jsonl"
+    r = subprocess.run([sys.executable, str(SKILL / "bench" / "run.py"),
+                        "--tasks", str(TASKS / "T01-flip-fix.yaml"),
+                        "--variants", "current", "--agents", "scripted:good",
+                        "--repeats", "2", "--out", str(out2)],
+                       capture_output=True, text=True, encoding="utf-8")
+    rows = [json.loads(l)
+            for l in out2.read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("repeats write one row per run",
+          r.returncode == 0 and len(rows) == 2
+          and {row.get("rep") for row in rows} == {0, 1},
+          r.stdout + r.stderr)
+    rep = subprocess.run([sys.executable, str(SKILL / "bench" / "report.py"),
+                          str(out2)], capture_output=True, text=True,
+                         encoding="utf-8")
+    check("a repeated cell renders as its solved rate", "2/2" in rep.stdout,
+          rep.stdout + rep.stderr)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
+        check_cli(tmp)
     check_behavior_coverage()
     check_variants()
     check_scripted()

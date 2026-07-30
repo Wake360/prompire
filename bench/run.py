@@ -13,6 +13,7 @@ is the same one a human would run: verify_acceptance + check_scope + the git
 diff — nothing the agent reported is trusted. Live agents cost minutes and
 money; tests/bench.py only ever runs scripted:* agents.
 """
+import argparse
 import hashlib
 import json
 import pathlib
@@ -30,7 +31,7 @@ sys.path.insert(0, str(SKILL / "bench"))
 import fixtures
 import verify_acceptance
 from behaviors import BEHAVIORS
-from brief_common import is_test_path, load_brief, norm_path
+from brief_common import is_test_path, load_brief, norm_path, utf8_stdio
 from variants import VARIANTS
 
 BRIEF_REL = ".prompire/brief.yaml"
@@ -132,3 +133,47 @@ def run_cell(task_path, variant, agent, keep=False):
     finally:
         if not keep:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main(argv=None):
+    utf8_stdio()
+    ap = argparse.ArgumentParser(
+        description="task × variant × agent benchmark over the fixture repo")
+    ap.add_argument("--tasks", default=str(SKILL / "bench" / "tasks"),
+                    help="a task brief or a directory of them")
+    ap.add_argument("--variants", default="current")
+    ap.add_argument("--agents", default="scripted:good")
+    ap.add_argument("--repeats", type=int, default=1,
+                    help="runs per cell — live agents are stochastic; one run is noise")
+    ap.add_argument("--out", default=str(SKILL / "bench" / "results" / "run.jsonl"))
+    ap.add_argument("--keep", action="store_true",
+                    help="keep each cell's repo for a post-mortem")
+    ns = ap.parse_args(argv)
+    tasks_path = pathlib.Path(ns.tasks)
+    tasks = sorted(tasks_path.glob("*.yaml")) if tasks_path.is_dir() else [tasks_path]
+    if not tasks:
+        print(f"no task briefs under {tasks_path}")
+        return 2
+    out = pathlib.Path(ns.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    errs = 0
+    with open(out, "a", encoding="utf-8") as fh:
+        for task in tasks:
+            for variant in (v for v in ns.variants.split(",") if v):
+                for agent in (a for a in ns.agents.split(",") if a):
+                    for rep in range(ns.repeats):
+                        try:
+                            row = run_cell(task, variant, agent, keep=ns.keep)
+                        except Exception as e:
+                            row, errs = {"task": task.stem, "variant": variant,
+                                         "agent": agent, "error": str(e)}, errs + 1
+                        row["rep"] = rep
+                        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                        print(f"{'ERR' if row.get('error') else 'ok '}  "
+                              f"{task.stem} × {variant} × {agent} #{rep}")
+    print(f"rows appended to {out}")
+    return 1 if errs else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

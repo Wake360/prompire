@@ -7,3 +7,4 @@ build/
 !.prompire/*.yaml
 .agent-brief/
 .worktrees/
+bench/results/
