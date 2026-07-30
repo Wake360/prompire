@@ -680,14 +680,15 @@ def _(repo, checks):
                      f"{command} {arguments} stderr must be preserved")
 
 
-@case("demo cleanup clears a read-only file before removing it")
+@case("demo cleanup makes a read-only file writable before removing it")
 def _(repo, checks):
     # Regression: `shutil.rmtree(..., ignore_errors=True)` leaves a demo repo behind
     # on Windows, where every object under `.git/objects` is created read-only and
     # Windows (unlike POSIX, where deletion is a directory-permission question) refuses
-    # to unlink a read-only file. `_clear_readonly_and_retry` is the onerror hook that
-    # fixes that; tested directly because POSIX would let the naive rmtree pass here
-    # even without the fix, so an rmtree-level test alone would not have caught this.
+    # to unlink a read-only file. `_make_tree_writable` is the fix; tested directly
+    # (checking the mode bit, not deletion) because POSIX lets a naive rmtree remove a
+    # read-only file regardless, so an rmtree-level test alone would not have caught
+    # this.
     sys.path.insert(0, str(ROOT))
     import importlib
     prompire_mod = importlib.import_module("prompire")
@@ -695,8 +696,8 @@ def _(repo, checks):
         target = pathlib.Path(tmp) / "readonly.txt"
         target.write_text("x", encoding="utf-8")
         target.chmod(0o444)
-        prompire_mod._clear_readonly_and_retry(os.remove, str(target), None)
-        checks.ok(not target.exists(), "the handler must clear read-only and retry")
+        prompire_mod._make_tree_writable(pathlib.Path(tmp))
+        checks.ok(os.access(target, os.W_OK), "the file must be writable afterward")
 
 
 @case("demo removes its throwaway repo even with a read-only file inside")
