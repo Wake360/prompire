@@ -18,7 +18,20 @@ A cell is task × variant × agent:
 - **variant** — a prompt renderer in `bench/variants.py`. `current` is what
   `render_brief.py` produces today; every other entry is a hypothesis. A
   variant that does not beat `current` across the matrix does not move into
-  the renderer. `bare` is the opposite control: the goal line alone, the
+  the renderer. `no_state`, `no_guard` and `no_bounds` are ablations — each
+  removes exactly one thing the brief adds, so the matrix says which *part*
+  earns its tokens rather than only whether the brief as a whole does.
+  `no_state` keeps the commands but drops their measured red/green/frozen
+  labels (it must clear both the `baseline:` block and each entry's authored
+  `transition:`, or the label survives and nothing is ablated). `no_guard`
+  drops the sentence announcing the external diff check. `no_bounds` drops
+  `scope`, `forbidden` and every sentence pointing back at them, while leaving
+  the external check intact — a path named in `goal` or `manual_checks`
+  survives on purpose, since cutting it would ablate a second factor. A text
+  ablation that matches nothing raises rather than silently returning
+  `current`: an ablation that removes nothing scores like the control and
+  reads as "this factor does not matter", which is the one result the
+  experiment must never fabricate. `bare` is the opposite control: the goal line alone, the
   request as it would have arrived without Prompire. It answers whether the
   brief earns the tokens it costs, and the comparison is fair because both
   variants are measured from outside against the *author's* brief — only what

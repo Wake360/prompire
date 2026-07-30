@@ -74,6 +74,52 @@ def check_variants():
     check("bare is the shortest variant", len(bare.split()) < len(cur.split()))
 
 
+def check_ablations():
+    """Each ablation must remove its one factor and nothing else. An ablation that
+    silently removes nothing renders as `current` and reads as 'this factor does not
+    matter' — a false negative dressed as a result, so every one is pinned here."""
+    brief = load_brief(str(SKILL / "examples" / "02-must-flip.yaml"))
+    cur = VARIANTS["current"](brief, bench_run.BRIEF_REL)
+    out = {name: VARIANTS[name](brief, bench_run.BRIEF_REL)
+           for name in ("no_state", "no_guard", "no_bounds")}
+    for name, text in out.items():
+        check(f"{name} actually changed the prompt", text != cur, name)
+        check(f"{name} still states the goal",
+              str(brief["goal"]).strip() in text, name)
+
+    check("no_state drops the measured red/green labels",
+          "fails today" not in out["no_state"]
+          and "green today" not in out["no_state"], out["no_state"])
+    check("no_state keeps the boundary and the commands",
+          "src/cart.py" in out["no_state"]
+          and "tests.test_total" in out["no_state"], out["no_state"])
+
+    check("no_guard drops the external-check sentence",
+          "check_scope.py" not in out["no_guard"], out["no_guard"])
+    check("no_guard keeps the boundary and the measured state",
+          "src/cart.py" in out["no_guard"]
+          and "fails today" in out["no_guard"], out["no_guard"])
+
+    check("no_bounds drops the allowlist and every sentence pointing at it",
+          "Files you may edit:" not in out["no_bounds"]
+          and "Never touch:" not in out["no_bounds"]
+          and "the list above" not in out["no_bounds"]
+          and "listed paths" not in out["no_bounds"], out["no_bounds"])
+    # A path named in manual_checks survives no_bounds by design (see its docstring).
+    # Pinned so the leak stays a known, documented weakening of the contrast rather
+    # than a surprise when a result comes out flat.
+    check("no_bounds leaks a path only through the human-review line",
+          "src/cart.py" in out["no_bounds"]
+          and out["no_bounds"].count("src/cart.py") == 1, out["no_bounds"])
+    check("no_bounds keeps the criteria and their measured state",
+          "tests.test_total" in out["no_bounds"]
+          and "fails today" in out["no_bounds"], out["no_bounds"])
+
+    src = (SKILL / "bench" / "variants.py").read_text(encoding="utf-8")
+    check("a no-op text ablation is an error, not a silent pass",
+          "raise" in src and "found nothing to remove" in src)
+
+
 # One real `claude -p --output-format json` envelope, trimmed to the keys the
 # adapter reads. Recorded 2026-07-30: there is no top-level `model`, and
 # `usage.input_tokens` counts only the uncached remainder.
@@ -288,6 +334,7 @@ def main():
         check_cli(tmp)
     check_behavior_coverage()
     check_variants()
+    check_ablations()
     check_claude_stats()
     check_scripted()
     check_tamper()
