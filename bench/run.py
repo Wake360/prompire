@@ -74,6 +74,12 @@ def measure(repo, base):
     """`base` is captured before the agent runs: the brief lives in .prompire/, which
     the scope check does not police, so an agent can re-stamp `base_rev` and delete the
     pin. Re-reading the base here would let it choose its own diff."""
+    # baseline.py already compiled the untouched tree. CPython invalidates a .pyc on
+    # (source mtime second, source size), so an edit of the same size inside that
+    # second is invisible and the acceptance would score HEAD's bytecode instead of
+    # the agent's file. __pycache__ is gitignored, so this changes no diff.
+    for cache in repo.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
     verdict = verify_acceptance.verify(str(repo / BRIEF_REL))
     scope = tool(repo, "check_scope.py", BRIEF_REL, "--json", "--base", base, "--strict")
     try:
