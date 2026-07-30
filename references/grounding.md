@@ -1,7 +1,8 @@
 # Grounding — where each lint rule comes from
 
 Every rule in `lint_brief.py` traces to a passage in a book extracted under
-`~/LifeOS/outputs/book-extraction/`. If a rule cannot be traced here, delete the rule.
+`~/LifeOS/outputs/book-extraction/`, or is recorded below as an explicit internal
+inference (B11, B12). If a rule cannot be traced either way, delete the rule.
 
 Sources:
 - **AIE** — Chip Huyen, *AI Engineering* (O'Reilly 2025) → `ai-engineering/source-text.md`
