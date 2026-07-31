@@ -63,6 +63,29 @@ def check_seed_briefs(tmp):
         check(f"{task.stem} lints clean after baseline", ok, detail)
 
 
+def check_prepare_rejects_unlintable(tmp):
+    """Every seed brief lints clean and nothing else ever hands `prepare()` one that
+    should be rejected, so the lint step in its tuple can be deleted with the suite
+    still green — the guard would then be enforced by nothing. Drive a brief that
+    lint_brief.py rejects through the real path instead of asserting on the tuple.
+
+    B2 goal-too-long is the rule to trip: neither `baseline.py --write` nor
+    `--activate` reads the goal, so the two earlier steps still succeed and the
+    RuntimeError can only have come from the lint.
+    """
+    brief = yaml.safe_load((TASKS / "T01-flip-fix.yaml").read_text(encoding="utf-8"))
+    brief["goal"] = "Fix " + " ".join(f"word{i}" for i in range(40))
+    task = pathlib.Path(tmp) / "unlintable.yaml"
+    task.write_text(yaml.safe_dump(brief, sort_keys=False, allow_unicode=True),
+                    encoding="utf-8")
+    try:
+        bench_run.prepare(task, pathlib.Path(tmp) / "unlintable-repo")
+        ok, detail = False, "prepare() accepted a brief lint_brief.py rejects"
+    except RuntimeError as e:
+        ok, detail = "lint_brief.py" in str(e), str(e)
+    check("prepare() refuses a task brief that lint_brief.py rejects", ok, detail)
+
+
 def check_dirty_rev():
     """A rev recorded off a dirty tree does not identify the code that ran: two rows
     can share a rev and a variant name and still be different prompts. prompire_rev()
@@ -912,6 +935,7 @@ def check_report_footer_excludes_err():
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
+        check_prepare_rejects_unlintable(tmp)
         check_cli(tmp)
     check_dirty_rev()
     check_behavior_coverage()
