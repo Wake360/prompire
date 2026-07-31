@@ -501,8 +501,11 @@ def check_handed_brief_on_disk():
         # written out per variant. It is a raw substring test but not the value-fragment
         # pattern round 2 removed: the needle is a key name taken from the table, and
         # PyYAML always emits a key as `name:` and never folds it, so unlike `"total: 4"`
-        # it cannot silently miss. `bare` drops every key and so searches the widest — a
-        # seed task whose goal prose contained `scope:` would false-positive; none does.
+        # it cannot silently miss. What it catches is the dropped key's *name* re-entering
+        # the file, not its content: prose carrying the allowlist without writing `scope:`
+        # is invisible here, as it was to the grep. Every row dropping `scope` searches for
+        # it, so a seed task whose goal prose contained `scope:` would false-positive on
+        # three rows at once, not just on `bare`; none does, and it fails loudly.
         leaked = sorted(k for k in author_keys - want if f"{k}:" in seen["brief"])
         check(f"{name} does not reintroduce a dropped key inside a surviving value",
               not leaked, str(leaked))
