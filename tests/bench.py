@@ -328,7 +328,7 @@ def check_ablation_fidelity():
 
 
 def check_brief_edits_invariants():
-    """Two properties every `BRIEF_EDITS` entry must hold, checked once across the whole
+    """Three properties every `BRIEF_EDITS` entry must hold, checked once across the whole
     dict rather than per-variant, so a new entry inherits the coverage automatically
     instead of needing a matching line in a second, hand-maintained table.
 
@@ -341,6 +341,9 @@ def check_brief_edits_invariants():
     2. No entry mutates the author's brief in place. Every current entry goes through
        `_drop`'s `copy.deepcopy`, but a raw `.pop()` here would corrupt every other
        variant built from the same `author` dict in this same run.
+    3. Every entry names a registered variant. A misspelt key is dead — `run_cell` looks
+       the entry up by the variant name it was given — so the variant it was meant for
+       silently hands over the author's brief instead.
     """
     task = TASKS / "T05-forbidden-temptation.yaml"
     tmp = tempfile.mkdtemp(prefix="bench-edits-invariants-")
@@ -355,6 +358,9 @@ def check_brief_edits_invariants():
                       "baseline" not in handed, sorted(handed))
         check("BRIEF_EDITS entries leave the author's brief alone",
               author == snapshot, "author brief was mutated by a BRIEF_EDITS entry")
+        unknown = sorted(set(variants.BRIEF_EDITS) - set(VARIANTS))
+        check("every BRIEF_EDITS entry names a registered variant", not unknown,
+              str(unknown))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -379,27 +385,27 @@ def brief_seen_by_agent(task, variant):
     return seen
 
 
-# The exact key set each `BRIEF_EDITS` entry must drop from disk, and the keys it must
-# keep — matches `bench/variants.py`'s own drop lists so a reduction there is caught
-# here rather than only by review. Every entry below must keep `goal` in addition to
-# whatever `keeps` lists: it is required generically in the loop, not repeated per
-# entry, so a drop list that grows to swallow it too — a variant handing the agent
-# nothing at all — is caught rather than passing on whatever the rest of the set
-# happens to assert. This table used to cover only the two additive variants; `bare`
-# and `no_state` are here too now, because a check that unit-tested only their
-# `BRIEF_EDITS` lambda (deleted in fix round 2, on the mistaken belief that the on-disk
-# checks below already subsumed it) went with it, and neither `bare`-as-identity nor
-# `no_state`-as-identity was caught until this table grew to include them.
-DISK_DROPS = {
-    "bare": {"drops": ("acceptance", "baseline", "scope", "forbidden"), "keeps": ()},
-    "no_state": {"drops": ("baseline",), "keeps": ("acceptance",)},
-    "no_acceptance": {"drops": ("acceptance", "baseline"), "keeps": ()},
-    "plus_acceptance": {"drops": ("scope", "forbidden", "constraints", "manual_checks",
-                                  "tests_policy", "autonomy"),
-                        "keeps": ("acceptance",)},
-    "plus_bounds": {"drops": ("acceptance", "baseline", "constraints", "manual_checks",
-                              "tests_policy", "autonomy"),
-                    "keeps": ("scope", "forbidden")},
+# Exactly which top-level keys each `BRIEF_EDITS` entry leaves at .prompire/brief.yaml
+# for T05 — an equality, not a drop list. A row that only names what a lambda is meant
+# to drop cannot catch the lambda keeping something the row never mentioned: `bare`'s
+# old row listed four drops while its lambda hands over one key, so `tests_policy` and
+# `autonomy` could ride along on the floor of the whole experiment and stay green, and a
+# row with empty drops and keeps asserted nothing at all. An equality also makes `goal`
+# a consequence rather than a separate rule.
+#
+# `base_rev` is listed per entry rather than assumed universal: it is not. Every entry
+# built with `_drop` keeps it, but `bare` returns a fresh `{"goal": ...}` and does not,
+# so the assertion cannot hard-code it.
+DISK_KEYS = {
+    "bare": ("goal",),
+    "no_bounds": ("goal", "tests_policy", "acceptance", "autonomy", "base_rev",
+                  "baseline"),
+    "no_acceptance": ("goal", "scope", "forbidden", "tests_policy", "autonomy",
+                      "base_rev"),
+    "no_state": ("goal", "scope", "forbidden", "tests_policy", "acceptance", "autonomy",
+                 "base_rev"),
+    "plus_acceptance": ("goal", "acceptance", "base_rev", "baseline"),
+    "plus_bounds": ("goal", "scope", "forbidden", "base_rev"),
 }
 
 
@@ -408,6 +414,7 @@ def check_handed_brief_on_disk():
     the prompt. T05's contract string is what the first live matrix showed `no_acceptance`
     could still read straight off disk."""
     task = TASKS / "T05-forbidden-temptation.yaml"
+    author = load_brief(str(task))
     control = brief_seen_by_agent(task, "current")
     check("control hands over the author's brief, contract string and all",
           "total: 4" in control["brief"], control["brief"])
@@ -416,14 +423,18 @@ def check_handed_brief_on_disk():
     check("no_acceptance withholds the criteria from the prompt",
           "total: 4" not in seen["prompt"], seen["prompt"])
 
-    seen = brief_seen_by_agent(task, "no_bounds")
-    check("no_bounds withholds the allowlist from the disclosed file",
-          "scope:" not in seen["brief"] and "forbidden:" not in seen["brief"],
-          seen["brief"])
-
     seen = brief_seen_by_agent(task, "no_guard")
     check("no_guard hands over the author's brief — its factor is rendered, not stored",
           "total: 4" in seen["brief"], seen["brief"])
+
+    # Membership in DISK_KEYS is what makes an entry asserted at all, so a new
+    # `BRIEF_EDITS` entry with no row would otherwise land entirely unchecked on disk —
+    # and the suite would report a *higher* count, because the invariants above pair
+    # themselves to it automatically while nothing reads its output.
+    check("every BRIEF_EDITS entry has a DISK_KEYS row and every row a live entry",
+          set(DISK_KEYS) == set(variants.BRIEF_EDITS),
+          f"unrowed {sorted(set(variants.BRIEF_EDITS) - set(DISK_KEYS))} "
+          f"stale {sorted(set(DISK_KEYS) - set(variants.BRIEF_EDITS))}")
 
     # A `BRIEF_EDITS` lambda tested only against its own output cannot catch the entry
     # going missing entirely — `bench_run.run_cell` falls back to the untouched author's
@@ -431,20 +442,30 @@ def check_handed_brief_on_disk():
     # write path. Asserted against the *parsed* brief rather than a value fragment like
     # `"total: 4"`: PyYAML's default emitter can fold a long scalar across lines
     # depending on width, so a substring check on a value can silently pass while the
-    # key it belongs to is still present. Every key in the drop set is checked, not one
-    # representative string — a reduced drop set that still removes the headline key
-    # (e.g. keeping `autonomy` while dropping `scope`) is a real, different leak that a
-    # single-string check misses, and `goal` is required on every entry so a drop set
-    # that grows to swallow it — a variant handing over nothing at all — is caught too.
-    for name, contract in DISK_DROPS.items():
+    # key it belongs to is still present. Intersected rather than looped over either
+    # table alone, so a stale row or a typo'd entry is the FAIL above and the one in
+    # check_brief_edits_invariants, not a KeyError traceback here.
+    disclosed = {}
+    for name in sorted(set(DISK_KEYS) & set(variants.BRIEF_EDITS) & set(VARIANTS)):
         seen = brief_seen_by_agent(task, name)
         parsed = yaml.safe_load(seen["brief"])
-        for key in contract["drops"]:
-            check(f"{name} drops {key!r} from the disclosed file",
-                  key not in parsed, sorted(parsed))
-        for key in ("goal",) + contract["keeps"]:
-            check(f"{name} still carries {key!r} in the disclosed file",
-                  key in parsed, sorted(parsed))
+        disclosed[name] = parsed
+        want = set(DISK_KEYS[name])
+        check(f"{name} discloses exactly the keys its row contracts for",
+              set(parsed) == want,
+              f"extra {sorted(set(parsed) - want)} missing {sorted(want - set(parsed))}")
+        check(f"{name} discloses the author's goal, not a placeholder",
+              parsed.get("goal") == author["goal"], repr(parsed.get("goal")))
+
+    # `_strip_state` edits *inside* `acceptance` as well as dropping `baseline`, and a
+    # key-level equality cannot see that: the ablated factor is a sub-key, so it needs
+    # its own line or `transition: flip` stays readable off disk while the prompt has
+    # the state notes stripped out of the text.
+    no_state = disclosed.get("no_state") or {}
+    check("no_state strips `transition` from every criterion in the disclosed file",
+          bool(no_state.get("acceptance"))
+          and not [e for e in no_state["acceptance"] if "transition" in e],
+          no_state.get("acceptance"))
 
 
 def check_handed_brief_restored():
