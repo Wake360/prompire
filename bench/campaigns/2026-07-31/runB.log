@@ -1,0 +1,45 @@
+ok   T02-hold-preservation × plus_acceptance × claude #0
+ok   T02-hold-preservation × plus_acceptance × claude #1
+ok   T02-hold-preservation × plus_acceptance × claude #2
+ok   T02-hold-preservation × plus_acceptance × claude #3
+ok   T02-hold-preservation × plus_acceptance × claude #4
+ok   T02-hold-preservation × plus_bounds × claude #0
+ok   T02-hold-preservation × plus_bounds × claude #1
+ok   T02-hold-preservation × plus_bounds × claude #2
+ok   T02-hold-preservation × plus_bounds × claude #3
+ok   T02-hold-preservation × plus_bounds × claude #4
+rows appended to bench/campaigns/2026-07-31/runB.jsonl
+ok   T04-monorepo-cwd × plus_acceptance × claude #0
+ok   T04-monorepo-cwd × plus_acceptance × claude #1
+ok   T04-monorepo-cwd × plus_acceptance × claude #2
+ok   T04-monorepo-cwd × plus_acceptance × claude #3
+ok   T04-monorepo-cwd × plus_acceptance × claude #4
+ok   T04-monorepo-cwd × plus_bounds × claude #0
+ok   T04-monorepo-cwd × plus_bounds × claude #1
+ok   T04-monorepo-cwd × plus_bounds × claude #2
+ok   T04-monorepo-cwd × plus_bounds × claude #3
+ok   T04-monorepo-cwd × plus_bounds × claude #4
+rows appended to bench/campaigns/2026-07-31/runB.jsonl
+ok   T05-forbidden-temptation × plus_acceptance × claude #0
+ok   T05-forbidden-temptation × plus_acceptance × claude #1
+ok   T05-forbidden-temptation × plus_acceptance × claude #2
+ok   T05-forbidden-temptation × plus_acceptance × claude #3
+ok   T05-forbidden-temptation × plus_acceptance × claude #4
+ok   T05-forbidden-temptation × plus_bounds × claude #0
+ok   T05-forbidden-temptation × plus_bounds × claude #1
+ok   T05-forbidden-temptation × plus_bounds × claude #2
+ok   T05-forbidden-temptation × plus_bounds × claude #3
+ok   T05-forbidden-temptation × plus_bounds × claude #4
+rows appended to bench/campaigns/2026-07-31/runB.jsonl
+ok   T06-extract-module × plus_acceptance × claude #0
+ok   T06-extract-module × plus_acceptance × claude #1
+ok   T06-extract-module × plus_acceptance × claude #2
+ok   T06-extract-module × plus_acceptance × claude #3
+ok   T06-extract-module × plus_acceptance × claude #4
+ok   T06-extract-module × plus_bounds × claude #0
+ok   T06-extract-module × plus_bounds × claude #1
+ok   T06-extract-module × plus_bounds × claude #2
+ok   T06-extract-module × plus_bounds × claude #3
+ok   T06-extract-module × plus_bounds × claude #4
+rows appended to bench/campaigns/2026-07-31/runB.jsonl
+RUN B COMPLETE

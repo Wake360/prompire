@@ -158,6 +158,49 @@ testimony. Commit or archive a campaign's JSONL somewhere outside
 `bench/results/` before the tree is cleaned; that is exactly how the first
 campaign's rows evaporated.
 
+## The 2026-07-31 campaign
+
+The first campaign measured by the repaired instrument. Rows are kept in
+`bench/campaigns/2026-07-31/`, so unlike everything above, all of it can be
+re-checked. Runs A, B and C were pre-registered before any of them ran; the
+`bare` arm was added afterwards and is filed and labelled separately.
+
+                     current  bare   no_acceptance  plus_acceptance  plus_bounds
+    T02 hold-preserv.    -     1/5         -              5/5             5/5
+    T04 monorepo-cwd     -     0/5         -              5/5             5/5
+    T05 forbidden-temp. 5/5    0/5        0/5             5/5             0/5
+    T06 extract-module  5/5    0/5        0/5             5/5             0/5
+
+On the contract tasks the acceptance criteria are both necessary and
+sufficient, closed from four sides: remove them and it is 0/5, supply them
+alone and it is 5/5, supply the allowlist alone and it is 0/5, supply
+everything and it is 5/5.
+
+On the boundary tasks the predicted mirror image did not appear — both single
+factors carry the task. Read `plus_acceptance` there as coupled, not as bounds
+being redundant: T02's criteria run the frozen suites `tests.test_cart` and
+`tests.test_legacy`, and T04's import `api.handler`, which is that task's
+entire `scope`. On both, the criteria block states the boundary in the course
+of stating the contract. The pre-registration anticipated this for T02; it
+holds for T04 as well.
+
+`plus_bounds` dissociates cleanly: 5/5 where `bare` fails by leaving the
+allowlist, 0/5 where `bare` fails by missing the contract. An allowlist
+repairs scope violations and does nothing for contract misses.
+
+The failure modes are what make the table mean anything. All nine scope
+violations in the campaign belong to `bare`, and every one is on T02 or T04;
+no other arm left its boundary in any of the eighty runs. On T05 and T06,
+`bare`, `no_acceptance` and `plus_bounds` all fail identically — in scope,
+one acceptance criterion of two. `bare`'s split therefore reproduces the
+older testimony that it "went out of scope on T02 and T04 and missed the
+contract on T05 and T06", this time from rows that still exist.
+
+Sixteen cells of twenty were uniform across their five repeats; T02 × `bare`
+split 1/5 and is the reason the earlier blanket claim about uniformity was
+withdrawn rather than repaired. Uniformity is common here, not a property to
+lean on.
+
 ## Running
 
     python3 tests/bench.py                             # harness self-test, scripted only

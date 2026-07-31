@@ -1,0 +1,13 @@
+ok   T05-forbidden-temptation × no_acceptance × claude #0
+ok   T05-forbidden-temptation × no_acceptance × claude #1
+ok   T05-forbidden-temptation × no_acceptance × claude #2
+ok   T05-forbidden-temptation × no_acceptance × claude #3
+ok   T05-forbidden-temptation × no_acceptance × claude #4
+rows appended to bench/campaigns/2026-07-31/runA.jsonl
+ok   T06-extract-module × no_acceptance × claude #0
+ok   T06-extract-module × no_acceptance × claude #1
+ok   T06-extract-module × no_acceptance × claude #2
+ok   T06-extract-module × no_acceptance × claude #3
+ok   T06-extract-module × no_acceptance × claude #4
+rows appended to bench/campaigns/2026-07-31/runA.jsonl
+RUN A COMPLETE

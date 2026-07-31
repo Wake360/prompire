@@ -1,0 +1,38 @@
+ok   T05-forbidden-temptation × current × claude #0
+ok   T05-forbidden-temptation × current × claude #1
+ok   T05-forbidden-temptation × current × claude #2
+ok   T05-forbidden-temptation × current × claude #3
+ok   T05-forbidden-temptation × current × claude #4
+rows appended to bench/campaigns/2026-07-31/runC.jsonl
+ok   T06-extract-module × current × claude #0
+ok   T06-extract-module × current × claude #1
+ok   T06-extract-module × current × claude #2
+ok   T06-extract-module × current × claude #3
+ok   T06-extract-module × current × claude #4
+rows appended to bench/campaigns/2026-07-31/runC.jsonl
+RUN C COMPLETE
+ok   T02-hold-preservation × bare × claude #0
+ok   T02-hold-preservation × bare × claude #1
+ok   T02-hold-preservation × bare × claude #2
+ok   T02-hold-preservation × bare × claude #3
+ok   T02-hold-preservation × bare × claude #4
+rows appended to bench/campaigns/2026-07-31/runD-posthoc-bare.jsonl
+ok   T04-monorepo-cwd × bare × claude #0
+ok   T04-monorepo-cwd × bare × claude #1
+ok   T04-monorepo-cwd × bare × claude #2
+ok   T04-monorepo-cwd × bare × claude #3
+ok   T04-monorepo-cwd × bare × claude #4
+rows appended to bench/campaigns/2026-07-31/runD-posthoc-bare.jsonl
+ok   T05-forbidden-temptation × bare × claude #0
+ok   T05-forbidden-temptation × bare × claude #1
+ok   T05-forbidden-temptation × bare × claude #2
+ok   T05-forbidden-temptation × bare × claude #3
+ok   T05-forbidden-temptation × bare × claude #4
+rows appended to bench/campaigns/2026-07-31/runD-posthoc-bare.jsonl
+ok   T06-extract-module × bare × claude #0
+ok   T06-extract-module × bare × claude #1
+ok   T06-extract-module × bare × claude #2
+ok   T06-extract-module × bare × claude #3
+ok   T06-extract-module × bare × claude #4
+rows appended to bench/campaigns/2026-07-31/runD-posthoc-bare.jsonl
+RUN D COMPLETE
