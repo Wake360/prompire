@@ -75,11 +75,14 @@ Live agents are stochastic: one run per cell is noise, so real comparisons use
 `--repeats N`, and the report renders such cells as their solved rate among
 the rows that actually ran ("4/4≥0.51 E1" for a cell of 5 with one ERR),
 naming any SCOPE/FAIL/GAMED/ERR rows alongside it rather than folding them
-into the count. A cell whose rows disagree on `(prompt_sha, model,
-prompire_rev)` — an error row does not count, since it has no population to
-belong to — renders as `MIXED` instead of a mark; the rest of the matrix and
-the per-arm footer still render, and the run exits 2 with the offending cells
-named at the bottom.
+into the count; a cell where every rep crashed prints "no attempts", never a
+`0/0` that could be misread as a measured zero. The per-arm footer beneath the
+matrix uses the same denominator — every non-ERR row for that variant×agent —
+so it can never disagree with the cell marks above it. A cell whose rows
+disagree on `(prompt_sha, model, prompire_rev)` — an error row does not
+count, since it has no population to belong to — renders as `MIXED` instead
+of a mark; the rest of the matrix and the per-arm footer still render, and
+the run exits 2 with the offending cells named at the bottom.
 
 ## Running
 

@@ -671,6 +671,50 @@ def check_report_attempted_denominator():
           "E1" in m, m)
 
 
+def check_report_all_err_cell():
+    crashed = {"acceptance": {"passed": 0, "failed": 0, "not_run": 0}, "scope_exit": 0,
+               "agent": "claude", "agent_exit": 1, "model": None, "tampered": []}
+    m = report.cell_mark([crashed, crashed, crashed])
+    check("a cell with zero attempted runs prints no rate or bound, just the count",
+          "/" not in m and "≥" not in m, m)
+    check("the all-ERR cell still names how many crashed",
+          "E3" in m, m)
+
+
+def check_report_footer_excludes_err():
+    """The footer's `n/n runs solved` must count the same denominator as the cell
+    marks above it — otherwise the two numbers on one screen answer different
+    questions while sharing a label."""
+    tmp = tempfile.mkdtemp(prefix="bench-footer-")
+    try:
+        good = {"task": "T1", "variant": "current", "agent": "claude",
+                "prompt_sha": "sha", "model": "m", "prompire_rev": "rev",
+                "acceptance": {"passed": 1, "failed": 0, "not_run": 0},
+                "scope_exit": 0, "tampered": [], "seconds": 1.0}
+        # Same population as `good` (prompt_sha/model/prompire_rev unchanged) — only
+        # agent_exit trips the crash rule. A differing model would also trip the
+        # population-mismatch guard, which is a separate concern from this test.
+        crashed = {"task": "T1", "variant": "current", "agent": "claude",
+                   "prompt_sha": "sha", "model": "m", "prompire_rev": "rev",
+                   "acceptance": {"passed": 0, "failed": 0, "not_run": 0},
+                   "scope_exit": 0, "agent_exit": 1, "tampered": [], "seconds": 1.0}
+        rows = [good, good, good, good, crashed]
+        path = pathlib.Path(tmp) / "footer.jsonl"
+        path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = report.main(["report.py", str(path)])
+        out = buf.getvalue()
+        check("the footer excludes the ERR row from its denominator too",
+              "4/4 runs solved" in out, out)
+        check("the footer does not also print the stale 4/5 count",
+              "4/5 runs solved" not in out, out)
+        check("one ERR row beside a consistent population is not a mismatch",
+              code == 0, code)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
@@ -692,6 +736,8 @@ def main():
     check_report_err_not_solved()
     check_report_gamed_outranks_err()
     check_report_attempted_denominator()
+    check_report_all_err_cell()
+    check_report_footer_excludes_err()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 

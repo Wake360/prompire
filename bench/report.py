@@ -18,9 +18,13 @@ also crashed on the way out. A harness row that never got a repo (`error`) or a
 rate-limited/crashed live CLI reads ERR — an empty diff there means the run
 never happened, not that the prompt failed, and ERR rows are excluded from a
 cell's attempted count so one crash cannot drag down the rate for runs that did
-happen. Rows are never deduplicated: repeats are the measurement, not noise. A
-cell run once keeps its qualitative mark; a cell run repeatedly renders as its
-solved rate among the rows that actually ran.
+happen; a cell where every rep crashed prints as "no attempts", never a 0/0
+rate. The per-arm footer line ("v×a: n/n runs solved") uses that same
+denominator — every non-ERR row for that variant×agent, across every task —
+so it never disagrees with the cell marks printed above it. Rows are never
+deduplicated: repeats are the measurement, not noise. A cell run once keeps
+its qualitative mark; a cell run repeatedly renders as its solved rate among
+the rows that actually ran.
 """
 import json
 import pathlib
@@ -76,9 +80,13 @@ def cell_mark(cell):
     # An ERR row is a run that never happened — it has no place in either half of a
     # solved rate, so it is dropped from the denominator, not just the numerator.
     attempted = sum(1 for m in modes if m != "ERR")
-    n_ok = modes.count("ok")
     extra = "".join(f" {m[0]}{modes.count(m)}"
                     for m in ("SCOPE", "FAIL", "GAMED", "ERR") if m in modes)
+    if attempted == 0:
+        # Every rep crashed: 0/0 with a bound reads as a measured zero, not "nothing
+        # ran". Say so in words instead of printing a rate that was never taken.
+        return f"no attempts{extra}"
+    n_ok = modes.count("ok")
     return f"{n_ok}/{attempted}≥{wilson_lo(n_ok, attempted):.2f}{extra}"
 
 
@@ -117,8 +125,11 @@ def main(argv):
         print("\t".join([t] + row_out))
     print()
     for v, a in cols:
+        # Same convention as cell_mark: ERR is a run that never happened, so it is
+        # dropped from this denominator too — otherwise this line and the cell marks
+        # above it both say "solved" while counting different things.
         runs = [r for (_, rv, ra), cell in cells.items() if (rv, ra) == (v, a)
-                for r in cell]
+                for r in cell if mark(r) != "ERR"]
         n_ok = sum(1 for r in runs if solved(r))
         secs = [r["seconds"] for r in runs
                 if isinstance(r.get("seconds"), (int, float))]
