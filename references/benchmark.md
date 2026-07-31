@@ -22,8 +22,10 @@ A cell is task × variant × agent:
   ablations — each
   removes exactly one thing the brief adds, so the matrix says which *part*
   earns its tokens rather than only whether the brief as a whole does.
-  An ablation removes its factor from the brief on disk as well as from the
-  prompt. The rendered prompt names `.prompire/brief.yaml`, and that file is
+  An ablation whose factor is stored in the brief removes it from the file on
+  disk as well as from the prompt; `no_guard`'s factor is a rendered sentence
+  the brief never stores, so it hands the file over unchanged.
+  The rendered prompt names `.prompire/brief.yaml`, and that file is
   readable: a variant that dropped the criteria from the text while leaving
   them in the file would have handed the agent their address instead of
   removing them. `bench/variants.py`'s `BRIEF_EDITS` is what each variant
@@ -54,11 +56,17 @@ A cell is task × variant × agent:
   `no_acceptance` drops the criteria and their header, keeping goal, boundary
   and autonomy — the first live matrix showed half of what a naked request
   loses is the contract (which string `total_line()` must render, what the
-  extracted function is called), and no other ablation removes it. A text
-  ablation that matches nothing raises rather than silently returning
-  `current`: an ablation that removes nothing scores like the control and
-  reads as "this factor does not matter", which is the one result the
-  experiment must never fabricate. `bare` is the opposite control: the goal line alone, the
+  extracted function is called), and no other ablation removes it. An
+  ablation that removes nothing scores like the control and reads as "this
+  factor does not matter", which is the one result the experiment must never
+  fabricate. Most text cuts raise when they match nothing, but not all: the
+  "listed paths are the whole boundary" tail `no_bounds` removes is declared
+  optional, because autonomy `manual` and the undeclared-autonomy sentence
+  carry no such tail. What actually protects the property is
+  `ABLATION_CONTRACT` in `tests/bench.py` — every phrase an ablation owns
+  must be absent from its render and present in some control render, so a cut
+  that stopped matching fails there instead of scoring.
+  `bare` is the opposite control: the goal line alone, the
   request as it would have arrived without Prompire. It answers whether the
   brief earns the tokens it costs, and the comparison is fair because both
   variants are measured from outside against the *author's* brief — only what
@@ -115,10 +123,15 @@ the run exits 2 with the offending cells named at the bottom.
 
 ## What the first campaigns support
 
-The `current` vs `bare` matrix (6 tasks × 5 repeats, 30/30 vs 13/30) stands:
-`bare` disclosed no brief path and `current` is the control, so neither arm
-depended on the leak. Its failure split stands too — `bare` went out of
-scope on T02 and T04 and missed the contract on T05 and T06.
+The `current` vs `bare` matrix (6 tasks × 5 repeats, 30/30 vs 13/30) stands as
+a lower bound on the gap, not as a measurement of it. Those cells ran before
+any variant edited the brief on disk, so a `bare` cell left the complete
+author brief at `.prompire/brief.yaml`: undisclosed by the prompt, but found
+by any agent that lists the repo. That could only have helped `bare` —
+`current` is the control and discloses the file deliberately — so the true
+gap is at least the measured one and the headline conclusion survives. Its
+failure split stands too — `bare` went out of scope on T02 and T04 and missed
+the contract on T05 and T06.
 
 The single-factor ablation matrix on T05 (`no_state`, `no_guard`,
 `no_bounds` all 5/5 against `bare` 0/5) does not support "no single factor
@@ -129,9 +142,19 @@ unaffected by the leak — it removes the path along with the sentence —
 and it says the guard announcement was not what carried T05.
 
 Per-cell repeats measure stability, not a sampling distribution: a cell
-re-runs the same prompt bytes against the same fixture, and every cell
-observed so far has been 5/5 or 0/5. Comparisons need variation across
-tasks, not more repeats on one.
+re-runs the same prompt bytes against the same fixture, so more repeats buy
+precision on a number that barely moves. Comparisons need variation across
+tasks, not more repeats on one. An earlier version of this section supported
+that with "every cell observed so far has been 5/5 or 0/5"; six cells of 5 or
+0 cannot total 13, so the claim is withdrawn rather than repaired — the point
+above does not rest on it.
+
+None of the numbers in this section can be re-checked. Each campaign wrote
+its rows to `bench/results/`, which is gitignored, and no copy survives, so
+the per-task split behind 13/30 cannot be recovered and everything here is
+testimony. Commit or archive a campaign's JSONL somewhere outside
+`bench/results/` before the tree is cleaned; that is exactly how the first
+campaign's rows evaporated.
 
 ## Running
 
