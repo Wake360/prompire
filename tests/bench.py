@@ -379,10 +379,21 @@ def brief_seen_by_agent(task, variant):
     return seen
 
 
-# The exact key set each additive variant's `BRIEF_EDITS` entry must drop, and the key
-# it must keep — matches `bench/variants.py`'s own drop lists so a reduction there is
-# caught here rather than only by review.
-ADDITIVE_DROPS = {
+# The exact key set each `BRIEF_EDITS` entry must drop from disk, and the keys it must
+# keep — matches `bench/variants.py`'s own drop lists so a reduction there is caught
+# here rather than only by review. Every entry below must keep `goal` in addition to
+# whatever `keeps` lists: it is required generically in the loop, not repeated per
+# entry, so a drop list that grows to swallow it too — a variant handing the agent
+# nothing at all — is caught rather than passing on whatever the rest of the set
+# happens to assert. This table used to cover only the two additive variants; `bare`
+# and `no_state` are here too now, because a check that unit-tested only their
+# `BRIEF_EDITS` lambda (deleted in fix round 2, on the mistaken belief that the on-disk
+# checks below already subsumed it) went with it, and neither `bare`-as-identity nor
+# `no_state`-as-identity was caught until this table grew to include them.
+DISK_DROPS = {
+    "bare": {"drops": ("acceptance", "baseline", "scope", "forbidden"), "keeps": ()},
+    "no_state": {"drops": ("baseline",), "keeps": ("acceptance",)},
+    "no_acceptance": {"drops": ("acceptance", "baseline"), "keeps": ()},
     "plus_acceptance": {"drops": ("scope", "forbidden", "constraints", "manual_checks",
                                   "tests_policy", "autonomy"),
                         "keeps": ("acceptance",)},
@@ -404,11 +415,6 @@ def check_handed_brief_on_disk():
     seen = brief_seen_by_agent(task, "no_acceptance")
     check("no_acceptance withholds the criteria from the prompt",
           "total: 4" not in seen["prompt"], seen["prompt"])
-    check("no_acceptance withholds the criteria from the disclosed file too",
-          "total: 4" not in seen["brief"], seen["brief"])
-    check("the handed brief still states the goal",
-          yaml.safe_load(seen["brief"])["goal"] == load_brief(str(task))["goal"],
-          seen["brief"])
 
     seen = brief_seen_by_agent(task, "no_bounds")
     check("no_bounds withholds the allowlist from the disclosed file",
@@ -422,20 +428,21 @@ def check_handed_brief_on_disk():
     # A `BRIEF_EDITS` lambda tested only against its own output cannot catch the entry
     # going missing entirely — `bench_run.run_cell` falls back to the untouched author's
     # brief when `BRIEF_EDITS.get(variant)` is `None` — so this goes through the real
-    # write path, the same way the other variants above do. Asserted against the
-    # *parsed* brief rather than a value fragment like `"total: 4"`: PyYAML's default
-    # emitter can fold a long scalar across lines depending on width, so a substring
-    # check on a value can silently pass while the key it belongs to is still present.
-    # Every key in the drop set is checked, not one representative string — a reduced
-    # drop set that still removes the headline key (e.g. keeping `autonomy` while
-    # dropping `scope`) is a real, different leak that a single-string check misses.
-    for name, contract in ADDITIVE_DROPS.items():
+    # write path. Asserted against the *parsed* brief rather than a value fragment like
+    # `"total: 4"`: PyYAML's default emitter can fold a long scalar across lines
+    # depending on width, so a substring check on a value can silently pass while the
+    # key it belongs to is still present. Every key in the drop set is checked, not one
+    # representative string — a reduced drop set that still removes the headline key
+    # (e.g. keeping `autonomy` while dropping `scope`) is a real, different leak that a
+    # single-string check misses, and `goal` is required on every entry so a drop set
+    # that grows to swallow it — a variant handing over nothing at all — is caught too.
+    for name, contract in DISK_DROPS.items():
         seen = brief_seen_by_agent(task, name)
         parsed = yaml.safe_load(seen["brief"])
         for key in contract["drops"]:
             check(f"{name} drops {key!r} from the disclosed file",
                   key not in parsed, sorted(parsed))
-        for key in contract["keeps"]:
+        for key in ("goal",) + contract["keeps"]:
             check(f"{name} still carries {key!r} in the disclosed file",
                   key in parsed, sorted(parsed))
 
