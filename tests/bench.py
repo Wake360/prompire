@@ -142,6 +142,12 @@ def check_variants():
           "check_scope.py" not in bare and "src/cart.py" not in bare
           and "unittest" not in bare)
     check("bare is the shortest variant", len(bare.split()) < len(cur.split()))
+    # The three checks above grep for factors we thought to name. `bare` is the floor of
+    # the headline comparison and the additive variants' base, so a second factor arriving
+    # in it inflates the floor and shrinks every measured gap. Equality is what makes that
+    # unreachable, and it is what earns `bare`'s place in NO_FIDELITY_ROW.
+    check("bare is exactly the goal, nothing appended",
+          bare.strip() == str(brief["goal"]).strip(), repr(bare))
 
 
 def check_ablations():
@@ -621,9 +627,10 @@ ADDITIVE_CONTRACT = {
 # Variants with no row in either prompt-fidelity table, named so the omission is a
 # decision rather than something a new variant inherits by forgetting. `current` is the
 # control every other variant is diffed against, so it has nothing to be faithful to.
-# `persona` and `bare` are pinned whole in check_variants — `persona` by
-# `endswith(current)`, `bare` by its own withholds-everything pair — which is stricter
-# than a phrase table, not weaker.
+# `bare` is pinned by equality against the goal in check_variants, which is stricter than
+# any phrase table — nothing can arrive in it at all. `persona` is pinned to end with
+# `current`, so only its prepended header is unpinned, and that header is the hypothesis
+# under test rather than a factor it is supposed to withhold.
 NO_FIDELITY_ROW = ("bare", "current", "persona")
 
 

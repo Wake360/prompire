@@ -135,19 +135,21 @@ the contract on T05 and T06.
 
 The single-factor ablation matrix on T05 (`no_state`, `no_guard`,
 `no_bounds` all 5/5 against `bare` 0/5) does not support "no single factor
-is necessary". Three of those arms disclosed the path to a file still
-carrying every ablated field, and `no_state` at that time substituted a
-placeholder rather than deleting the labels. `no_guard` 5/5 is the one arm
-unaffected by the leak — it removes the path along with the sentence —
-and it says the guard announcement was not what carried T05.
+is necessary". Two of those arms — `no_state` and `no_bounds` — disclosed
+the path to a file still carrying every ablated field, and `no_state` at
+that time substituted a placeholder rather than deleting the labels. The
+prompt names that path on the `check_scope.py` line alone, which is the
+line `no_guard` cuts. `no_guard` 5/5 is the one arm unaffected by the
+leak — it removes the path along with the sentence — and it says the guard
+announcement was not what carried T05.
 
 Per-cell repeats measure stability, not a sampling distribution: a cell
-re-runs the same prompt bytes against the same fixture, so more repeats buy
-precision on a number that barely moves. Comparisons need variation across
-tasks, not more repeats on one. An earlier version of this section supported
-that with "every cell observed so far has been 5/5 or 0/5"; six cells of 5 or
-0 cannot total 13, so the claim is withdrawn rather than repaired — the point
-above does not rest on it.
+re-runs the same prompt bytes against the same fixture, so the only thing
+varying across a cell's repeats is the agent. Comparisons need variation
+across tasks, not more repeats on one. An earlier version of this section
+supported that with "every cell observed so far has been 5/5 or 0/5"; six
+cells of 5 or 0 cannot total 13, so the claim is withdrawn rather than
+repaired — the point above does not rest on it.
 
 None of the numbers in this section can be re-checked. Each campaign wrote
 its rows to `bench/results/`, which is gitignored, and no copy survives, so
