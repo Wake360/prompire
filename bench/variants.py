@@ -13,7 +13,7 @@ import sys
 SKILL = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL))
 
-from render_brief import render_prompt
+from render_brief import render_prompt, autonomy_sentence, tests_sentence
 
 
 def current(brief, brief_path):
@@ -138,9 +138,51 @@ def no_bounds(brief, brief_path):
     return _cut(text, BOUNDARY_TAIL, required=False)
 
 
+# Additive variants — the sufficiency counterparts to the ablations above. Each is
+# `bare` plus exactly one section, built by subtraction from `current` rather than
+# hand-written prose, so a surviving section is byte-identical to `current`'s and any
+# result reads as "this factor, alone" rather than "this particular short prompt".
+
+def _bare_plus(stripped, brief_path):
+    """Render what survives, then cut the sentences the renderer emits regardless of
+    which keys are present. Autonomy cannot be dropped by key: a missing `autonomy`
+    substitutes "Autonomy was not declared; do not write anything until it is." — an
+    ablation that swaps one instruction for another has removed nothing. Most keys are
+    safe to drop plainly; `tests_policy` is not always one of them — `legacy_pinned`
+    (brief_common.py) infers "immutable" from a `forbidden` entry that looks like a test
+    path, so `plus_bounds`, which keeps `forbidden`, still renders the prohibition after
+    the key is gone. Cut it as text too, the same way autonomy is, when it survives."""
+    text = current(stripped, brief_path)
+    text = _cut_lines(text, "check_scope.py")
+    text = _cut_lines(text, autonomy_sentence(stripped))
+    ts = tests_sentence(stripped)
+    if ts:
+        text = _cut_lines(text, ts)
+    return text
+
+
+def plus_acceptance(brief, brief_path):
+    """goal + the criteria block, nothing else. The sufficiency counterpart to
+    no_acceptance: does stating how success is judged, alone, lift bare off the floor?"""
+    return _bare_plus(_drop(brief, "scope", "forbidden", "constraints", "manual_checks",
+                            "tests_policy"), brief_path)
+
+
+def plus_bounds(brief, brief_path):
+    """goal + the declared allowlist, nothing else. `tests_policy` goes too: it renders
+    its own prohibition and is a separate field, so keeping it would make this variant
+    goal + two boundary factors. The renderer emits "Done when all of these hold:" even
+    with no `acceptance` to number underneath it — the same header no_acceptance already
+    has to cut for the same reason — so it goes too, as text, not by key."""
+    text = _bare_plus(_drop(brief, "acceptance", "constraints", "manual_checks",
+                            "tests_policy"), brief_path)
+    return _cut_lines(text, "Done when all of these hold:")
+
+
 VARIANTS = {"current": current, "persona": persona, "bare": bare,
             "no_state": no_state, "no_guard": no_guard, "no_bounds": no_bounds,
-            "no_acceptance": no_acceptance}
+            "no_acceptance": no_acceptance,
+            "plus_acceptance": plus_acceptance, "plus_bounds": plus_bounds}
 
 
 def _strip_state(brief):
@@ -163,4 +205,15 @@ BRIEF_EDITS = {
     # them out on disk. The rendered no_acceptance prompt carries neither.
     "no_acceptance": lambda b: _drop(b, "acceptance", "baseline"),
     "no_state": _strip_state,
+    # `autonomy` is dropped on disk because the prompt cut removes its sentence;
+    # leaving the key would let an agent recover from the file what the variant
+    # removed from the text.
+    "plus_acceptance": lambda b: _drop(b, "scope", "forbidden", "constraints",
+                                       "manual_checks", "tests_policy", "autonomy"),
+    # `baseline` goes with `acceptance` here too, for the same reason it does in
+    # no_acceptance above: every baseline entry quotes the command it measured, so
+    # keeping it on disk after dropping `acceptance` would still spell out the
+    # criteria's contract strings for a variant whose prompt withholds them.
+    "plus_bounds": lambda b: _drop(b, "acceptance", "baseline", "constraints",
+                                   "manual_checks", "tests_policy", "autonomy"),
 }
