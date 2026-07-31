@@ -22,21 +22,35 @@ A cell is task × variant × agent:
   ablations — each
   removes exactly one thing the brief adds, so the matrix says which *part*
   earns its tokens rather than only whether the brief as a whole does.
+  An ablation removes its factor from the brief on disk as well as from the
+  prompt. The rendered prompt names `.prompire/brief.yaml`, and that file is
+  readable: a variant that dropped the criteria from the text while leaving
+  them in the file would have handed the agent their address instead of
+  removing them. `bench/variants.py`'s `BRIEF_EDITS` is what each variant
+  writes there, and `bench/run.py` restores the author's brief before
+  measuring, so the criteria and the boundary judged at the end are always
+  the author's.
   `no_state` keeps the commands but drops their measured red/green/frozen
   labels: it renders the control and deletes each criterion's trailing
   parenthetical for every label `render_brief.state_of` can emit, raising if
-  none matched rather than silently returning the control. `no_guard`
-  drops the sentence announcing the external diff check. `no_bounds` drops
-  `scope`, `forbidden` and every sentence pointing back at them, while leaving
-  the external check intact — a path named in `goal` or `manual_checks`
-  survives on purpose, since cutting it would ablate a second factor.
-  `no_bounds` also necessarily removes the consequence clause "A file changed
-  outside the list above fails it." — the clause names a list the ablation
-  deletes, so it cannot survive coherently. It keeps the announcement that an
-  external check runs, which is `no_guard`'s factor; the two ablations
-  therefore differ by exactly the announcement, and `tests/bench.py` asserts
-  that split. Read a `no_bounds` result as "no declared allowlist, still told
-  it is checked", not as "no enforcement mentioned".
+  none matched rather than silently returning the control. `STATE_NOTES` in
+  `bench/variants.py` must list every label `render_brief.state_of` can
+  return, and `tests/bench.py` asserts that set equality in both directions.
+  Miss one and a brief that renders it keeps its label while the other
+  notes still match, so `hits` stays nonzero and the no-op guard never
+  fires. `no_guard` drops the sentence announcing the external diff check.
+  `no_bounds` drops `scope`, `forbidden` and every sentence pointing back
+  at them, while leaving the external check intact — a path named in
+  `goal` or `manual_checks` survives on purpose, since cutting it would
+  ablate a second factor. `no_bounds` also necessarily removes the
+  consequence clause "A file changed outside the list above fails it." —
+  the clause names a list the ablation deletes, so it cannot survive
+  coherently. It keeps the announcement that an external check runs,
+  which is `no_guard`'s factor; the two ablations therefore overlap only
+  on the consequence clause, and the announcement is removed by
+  `no_guard` alone. `tests/bench.py` asserts that split. Read a
+  `no_bounds` result as "no declared allowlist, still told it is
+  checked", not as "no enforcement mentioned".
   `no_acceptance` drops the criteria and their header, keeping goal, boundary
   and autonomy — the first live matrix showed half of what a naked request
   loses is the contract (which string `total_line()` must render, what the
@@ -51,6 +65,21 @@ A cell is task × variant × agent:
   the agent was told differs. Against `scripted:*` agents every variant scores
   alike, because a scripted write-set ignores its prompt; variants only
   separate under a live agent.
+  The ablations above are subtractive: each removes one factor from the
+  complete brief and asks whether the rest still carries the task — that
+  measures necessity. `plus_acceptance` and `plus_bounds` are additive:
+  each starts from `bare` and adds back exactly one factor, which
+  measures sufficiency. The two can both come back negative without
+  contradiction — that is what redundancy looks like, and it is why a
+  subtractive-only matrix cannot tell "this factor does nothing" apart
+  from "another factor covers for it".
+  `plus_acceptance` keeps the acceptance criteria as the renderer writes
+  them, including the measured-state parenthetical on each command
+  (`fails today; must pass when you are done` and the rest of
+  `STATE_NOTES`). A positive result therefore supports "the criteria
+  block, measured state included, was sufficient" — not "the commands
+  alone were". Separating those two needs a further variant that nothing
+  in this plan builds.
 - **agent** — `scripted:<behavior>` (deterministic write-sets from
   `bench/behaviors.py`; the only kind CI ever runs) or a live CLI (`claude`).
 
@@ -83,6 +112,26 @@ disagree on `(prompt_sha, model, prompire_rev)` — an error row does not
 count, since it has no population to belong to — renders as `MIXED` instead
 of a mark; the rest of the matrix and the per-arm footer still render, and
 the run exits 2 with the offending cells named at the bottom.
+
+## What the first campaigns support
+
+The `current` vs `bare` matrix (6 tasks × 5 repeats, 30/30 vs 13/30) stands:
+`bare` disclosed no brief path and `current` is the control, so neither arm
+depended on the leak. Its failure split stands too — `bare` went out of
+scope on T02 and T04 and missed the contract on T05 and T06.
+
+The single-factor ablation matrix on T05 (`no_state`, `no_guard`,
+`no_bounds` all 5/5 against `bare` 0/5) does not support "no single factor
+is necessary". Three of those arms disclosed the path to a file still
+carrying every ablated field, and `no_state` at that time substituted a
+placeholder rather than deleting the labels. `no_guard` 5/5 is the one arm
+unaffected by the leak — it removes the path along with the sentence —
+and it says the guard announcement was not what carried T05.
+
+Per-cell repeats measure stability, not a sampling distribution: a cell
+re-runs the same prompt bytes against the same fixture, and every cell
+observed so far has been 5/5 or 0/5. Comparisons need variation across
+tasks, not more repeats on one.
 
 ## Running
 
