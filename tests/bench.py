@@ -64,18 +64,38 @@ def check_seed_briefs(tmp):
 
 def check_dirty_rev():
     """A rev recorded off a dirty tree does not identify the code that ran: two rows
-    can share a rev and a variant name and still be different prompts. Forces the dirty
-    branch with a throwaway untracked file rather than trusting the desk to be dirty
-    when the suite runs — on a clean checkout (CI) that trust would make the assertion
-    vacuous."""
-    probe = bench_run.SKILL / ".bench-dirty-rev-probe"
+    can share a rev and a variant name and still be different prompts. prompire_rev()
+    reads SKILL as a module global, so pointing it at a throwaway git repo makes both
+    the clean and the dirty branch assertable without touching this repo's own tree —
+    a probe file dropped into SKILL itself would risk clobbering a same-named file and
+    would raise uncaught on a read-only checkout."""
+    tmp = tempfile.mkdtemp(prefix="bench-dirty-rev-")
+    real_skill = bench_run.SKILL
     try:
-        probe.write_text("probe\n", encoding="utf-8")
-        rev = bench_run.prompire_rev()
-        check("a rev recorded off a tree forced dirty is marked +dirty",
-              rev is not None and rev.endswith("+dirty"), rev)
+        repo = pathlib.Path(tmp)
+        for args in (("init", "-q"), ("config", "user.email", "fixture@example.invalid"),
+                     ("config", "user.name", "prompire fixtures"),
+                     ("config", "commit.gpgsign", "false")):
+            subprocess.run(["git", *args], cwd=str(repo), check=True,
+                           capture_output=True)
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=str(repo), check=True,
+                       capture_output=True)
+
+        bench_run.SKILL = repo
+        clean = bench_run.prompire_rev()
+        check("a rev off a clean temp repo carries no +dirty suffix",
+              clean is not None and not clean.endswith("+dirty"), clean)
+
+        (repo / "a.txt").write_text("a changed\n", encoding="utf-8")
+        dirty = bench_run.prompire_rev()
+        check("a rev off a dirtied temp repo is marked +dirty, same rev underneath",
+              dirty == f"{clean}+dirty", dirty)
     finally:
-        probe.unlink(missing_ok=True)
+        bench_run.SKILL = real_skill
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def check_behavior_coverage():
