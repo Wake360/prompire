@@ -573,6 +573,36 @@ def check_cli(tmp):
           rep.stdout + rep.stderr)
 
 
+def check_report_honesty():
+    check("wilson_lo(5,5) reads as ~0.566, not 1.0",
+          abs(report.wilson_lo(5, 5) - 0.566) < 0.01, report.wilson_lo(5, 5))
+    vacuous = {"acceptance": {"passed": 0, "failed": 0, "not_run": 0}, "scope_exit": 0}
+    check("a row with zero criteria run does not score SOLVED",
+          not report.solved(vacuous))
+    crashed = {"acceptance": {"passed": 0, "failed": 2, "not_run": 0}, "scope_exit": 0,
+               "agent_exit": 1, "model": None, "agent": "claude"}
+    check("a crashed CLI scores ERR, not FAIL",
+          report.mark(crashed) == "ERR", report.mark(crashed))
+
+
+def check_report_refuses_mixed_populations():
+    """Two prompt_shas in one cell are two treatments wearing one label."""
+    tmp = tempfile.mkdtemp(prefix="bench-mixed-")
+    try:
+        path = pathlib.Path(tmp) / "mixed.jsonl"
+        rows = [{"task": "T", "variant": "current", "agent": "claude", "seconds": 1.0,
+                 "prompt_sha": sha, "model": "m", "prompire_rev": "r",
+                 "acceptance": {"passed": 1, "failed": 0, "not_run": 0},
+                 "scope_exit": 0, "tampered": []}
+                for sha in ("aaa", "bbb")]
+        path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        code = report.main(["report.py", str(path)])
+        check("report refuses to pool two prompt_shas into one cell",
+              code == 2, code)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
@@ -588,6 +618,8 @@ def main():
     check_handed_brief()
     check_handed_brief_on_disk()
     check_handed_brief_restored()
+    check_report_honesty()
+    check_report_refuses_mixed_populations()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 

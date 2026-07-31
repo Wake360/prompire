@@ -22,15 +22,33 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from brief_common import utf8_stdio
 
 
+def wilson_lo(k, n, z=1.96):
+    """Lower bound of the 95% Wilson score interval. A cell that solved 5 of 5 is not
+    a measurement of 1.0 — it is consistent with a true rate near 0.57, and printing
+    "5/5" without this invites reading noise as certainty."""
+    if n == 0:
+        return 0.0
+    p = k / n
+    d = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    radius = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)
+    return max(0.0, (centre - radius) / d)
+
+
 def solved(row):
     a = row.get("acceptance") or {}
     return (not row.get("error") and not row.get("tampered")
+            and a.get("passed", 0) >= 1
             and a.get("failed") == 0 and a.get("not_run") == 0
             and row.get("scope_exit") == 0)
 
 
 def mark(row):
     if row.get("error"):
+        return "ERR"
+    # A rate-limited or crashed CLI leaves an untouched repo: acceptance is red and the
+    # row reads FAIL, blaming the prompt for a run that never happened.
+    if row.get("agent") == "claude" and (row.get("agent_exit") or row.get("model") is None):
         return "ERR"
     if row.get("tampered"):
         return "GAMED"
@@ -44,7 +62,11 @@ def mark(row):
 def cell_mark(cell):
     if len(cell) == 1:
         return mark(cell[0])
-    return f"{sum(1 for r in cell if solved(r))}/{len(cell)}"
+    n_ok = sum(1 for r in cell if solved(r))
+    modes = [mark(r) for r in cell]
+    extra = "".join(f" {m[0]}{modes.count(m)}"
+                    for m in ("SCOPE", "FAIL", "GAMED", "ERR") if m in modes)
+    return f"{n_ok}/{len(cell)}≥{wilson_lo(n_ok, len(cell)):.2f}{extra}"
 
 
 def main(argv):
@@ -60,6 +82,17 @@ def main(argv):
     cells = {}
     for r in rows:
         cells.setdefault((r["task"], r["variant"], r["agent"]), []).append(r)
+    mixed = [key for key, cell in cells.items()
+             if len({(r.get("prompt_sha"), r.get("model"), r.get("prompire_rev"))
+                     for r in cell}) > 1]
+    if mixed:
+        print("refusing to pool: these cells contain more than one "
+              "(prompt_sha, model, prompire_rev) population:")
+        for task, variant, agent in sorted(mixed):
+            print(f"  {task} × {variant} × {agent}")
+        print("A variant name is a label; only prompt_sha binds it to bytes. "
+              "Split the file or re-run the arm.")
+        return 2
     cols = sorted({(v, a) for _, v, a in cells})
     tasks = sorted({t for t, _, _ in cells})
     print("\t".join(["task"] + [f"{v}×{a}" for v, a in cols]))
