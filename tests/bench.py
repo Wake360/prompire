@@ -9,6 +9,7 @@ invokes a live agent.
 import hashlib
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -127,6 +128,76 @@ def check_ablations():
     src = (SKILL / "bench" / "variants.py").read_text(encoding="utf-8")
     check("a no-op text ablation is an error, not a silent pass",
           "raise" in src and "found nothing to remove" in src)
+
+
+def measured_brief(task_path):
+    """A task brief with a real baseline measured in a throwaway fixture repo, so the
+    state labels the ablations target are actually present in the render."""
+    tmp = tempfile.mkdtemp(prefix="bench-fidelity-")
+    try:
+        repo, brief = bench_run.prepare(task_path, tmp)
+        return load_brief(str(brief)), bench_run.BRIEF_REL
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# Each ablation must delete its own factor and nothing else. `owns` must vanish from
+# the render; `keeps` must survive, or the "single factor" label is false.
+ABLATION_CONTRACT = {
+    "no_state": {
+        "owns": ("fails today", "green today", "must stay exactly as measured",
+                 "no baseline recorded"),
+        "keeps": ("Files you may edit:", "check_scope.py", "Done when all of these hold:"),
+    },
+    "no_guard": {
+        "owns": ("check_scope.py", "A file changed outside the list above fails it."),
+        "keeps": ("Files you may edit:", "Done when all of these hold:"),
+    },
+    "no_bounds": {
+        "owns": ("Files you may edit:", "Never touch:",
+                 "A file changed outside the list above fails it.",
+                 "The listed paths are the whole boundary"),
+        # The tests prohibition comes from `tests_policy`, a separate brief field, and
+        # survives on purpose — conflating it with the allowlist would make no_bounds a
+        # two-factor ablation. Read a no_bounds result as "no allowlist, still told not
+        # to touch tests".
+        "keeps": ("check_scope.py", "Done when all of these hold:",
+                  "Do not create, edit, rename or delete any test file."),
+    },
+    "no_acceptance": {
+        "owns": ("Done when all of these hold:",),
+        "keeps": ("Files you may edit:", "check_scope.py"),
+    },
+}
+
+
+def check_ablation_fidelity():
+    passed = failed = 0
+    for task in sorted(TASKS.glob("*.yaml")):
+        brief, brief_path = measured_brief(task)
+        base = VARIANTS["current"](brief, brief_path)
+        base_lines = set(base.splitlines())
+        for name, contract in ABLATION_CONTRACT.items():
+            text = VARIANTS[name](brief, brief_path)
+            added = [l for l in text.splitlines() if l not in base_lines]
+            if added:
+                print(f"FAIL {task.stem} {name}: ablation ADDED lines {added!r}")
+                failed += 1
+            else:
+                passed += 1
+            for phrase in contract["owns"]:
+                if phrase in base and phrase in text:
+                    print(f"FAIL {task.stem} {name}: owned phrase survived {phrase!r}")
+                    failed += 1
+                else:
+                    passed += 1
+            for phrase in contract["keeps"]:
+                if phrase in base and phrase not in text:
+                    print(f"FAIL {task.stem} {name}: collateral removal of {phrase!r}")
+                    failed += 1
+                else:
+                    passed += 1
+    return passed, failed
 
 
 # One real `claude -p --output-format json` envelope, trimmed to the keys the
@@ -338,6 +409,7 @@ def check_cli(tmp):
 
 
 def main():
+    global TOTAL, FAILS
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
         check_cli(tmp)
@@ -347,6 +419,9 @@ def main():
     check_claude_stats()
     check_scripted()
     check_tamper()
+    passed, failed = check_ablation_fidelity()
+    TOTAL += passed + failed
+    FAILS += failed
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 
