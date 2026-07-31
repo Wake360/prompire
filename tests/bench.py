@@ -448,28 +448,41 @@ def brief_seen_by_agent(task, variant):
 # built with `_drop` keeps it, but `bare` returns a fresh `{"goal": ...}` and does not,
 # so the assertion cannot hard-code it.
 DISK_KEYS = {
-    "bare": ("goal",),
-    "no_bounds": ("goal", "tests_policy", "acceptance", "autonomy", "base_rev",
-                  "baseline"),
-    "no_acceptance": ("goal", "scope", "forbidden", "tests_policy", "autonomy",
-                      "base_rev"),
-    "no_state": ("goal", "scope", "forbidden", "tests_policy", "acceptance", "autonomy",
-                 "base_rev"),
-    "plus_acceptance": ("goal", "acceptance", "base_rev", "baseline"),
-    "plus_bounds": ("goal", "scope", "forbidden", "base_rev"),
+    "T05-forbidden-temptation": {
+        "bare": ("goal",),
+        "no_bounds": ("goal", "tests_policy", "acceptance", "autonomy", "base_rev",
+                      "baseline"),
+        "no_acceptance": ("goal", "scope", "forbidden", "tests_policy", "autonomy",
+                          "base_rev"),
+        "no_state": ("goal", "scope", "forbidden", "tests_policy", "acceptance",
+                     "autonomy", "base_rev"),
+        "plus_acceptance": ("goal", "acceptance", "base_rev", "baseline"),
+        "plus_bounds": ("goal", "scope", "forbidden", "base_rev"),
+    },
+    # T01 differs from T05 by carrying `manual_checks`, which is the whole reason it is
+    # here: on T05 alone the additive rows cannot tell a lambda that drops the key from
+    # one that never met it.
+    "T01-flip-fix": {
+        "bare": ("goal",),
+        "no_bounds": ("goal", "tests_policy", "acceptance", "manual_checks", "autonomy",
+                      "base_rev", "baseline"),
+        "no_acceptance": ("goal", "scope", "forbidden", "tests_policy", "manual_checks",
+                          "autonomy", "base_rev"),
+        "no_state": ("goal", "scope", "forbidden", "tests_policy", "acceptance",
+                     "manual_checks", "autonomy", "base_rev"),
+        "plus_acceptance": ("goal", "acceptance", "base_rev", "baseline"),
+        "plus_bounds": ("goal", "scope", "forbidden", "base_rev"),
+    },
 }
 
 
 def check_handed_brief_on_disk():
-    """The ablated factor must be gone from the file the prompt points at, not just from
-    the prompt. T05's contract string is what the first live matrix showed `no_acceptance`
-    could still read straight off disk."""
+    """T05's contract string is what the first live matrix showed `no_acceptance` could
+    still read straight off disk, so those three named checks stay on T05."""
     task = TASKS / "T05-forbidden-temptation.yaml"
-    author = load_brief(str(task))
     control = brief_seen_by_agent(task, "current")
     check("control hands over the author's brief, contract string and all",
           "total: 4" in control["brief"], control["brief"])
-    author_keys = set(yaml.safe_load(control["brief"]))
 
     seen = brief_seen_by_agent(task, "no_acceptance")
     check("no_acceptance withholds the criteria from the prompt",
@@ -479,14 +492,29 @@ def check_handed_brief_on_disk():
     check("no_guard hands over the author's brief — its factor is rendered, not stored",
           "total: 4" in seen["brief"], seen["brief"])
 
+    check("every task the disk contract is measured on has a DISK_KEYS table",
+          set(DISK_KEYS) == set(CONTRACT_TASKS),
+          f"untabled {sorted(set(CONTRACT_TASKS) - set(DISK_KEYS))} "
+          f"stale {sorted(set(DISK_KEYS) - set(CONTRACT_TASKS))}")
+    for stem in CONTRACT_TASKS:
+        check_disk_keys(TASKS / f"{stem}.yaml", DISK_KEYS.get(stem) or {})
+
+
+def check_disk_keys(task, rows):
+    """The ablated factor must be gone from the file the prompt points at, not just from
+    the prompt."""
+    stem = task.stem
+    author = load_brief(str(task))
+    author_keys = set(yaml.safe_load(brief_seen_by_agent(task, "current")["brief"]))
+
     # Membership in DISK_KEYS is what makes an entry asserted at all, so a new
     # `BRIEF_EDITS` entry with no row would otherwise land entirely unchecked on disk —
     # and the suite would report a *higher* count, because the invariants above pair
     # themselves to it automatically while nothing reads its output.
-    check("every BRIEF_EDITS entry has a DISK_KEYS row and every row a live entry",
-          set(DISK_KEYS) == set(variants.BRIEF_EDITS),
-          f"unrowed {sorted(set(variants.BRIEF_EDITS) - set(DISK_KEYS))} "
-          f"stale {sorted(set(DISK_KEYS) - set(variants.BRIEF_EDITS))}")
+    check(f"{stem}: every BRIEF_EDITS entry has a DISK_KEYS row and every row a live "
+          "entry", set(rows) == set(variants.BRIEF_EDITS),
+          f"unrowed {sorted(set(variants.BRIEF_EDITS) - set(rows))} "
+          f"stale {sorted(set(rows) - set(variants.BRIEF_EDITS))}")
 
     # A `BRIEF_EDITS` lambda tested only against its own output cannot catch the entry
     # going missing entirely — `bench_run.run_cell` falls back to the untouched author's
@@ -498,22 +526,22 @@ def check_handed_brief_on_disk():
     # table alone, so a stale row or a typo'd entry is the FAIL above and the one in
     # check_brief_edits_invariants, not a KeyError traceback here.
     disclosed = {}
-    for name in sorted(set(DISK_KEYS) & set(variants.BRIEF_EDITS) & set(VARIANTS)):
+    for name in sorted(set(rows) & set(variants.BRIEF_EDITS) & set(VARIANTS)):
         seen = brief_seen_by_agent(task, name)
         parsed = yaml.safe_load(seen["brief"])
         # A `BRIEF_EDITS` entry returning something that is not a mapping reaches disk as
         # e.g. `null`, and every assertion below would be a traceback instead of a named
         # FAIL — the same crash-vs-FAIL class the stale-row intersection above fixes.
         if not isinstance(parsed, dict):
-            check(f"{name} discloses a mapping at {bench_run.BRIEF_REL}", False,
+            check(f"{stem} {name} discloses a mapping at {bench_run.BRIEF_REL}", False,
                   repr(parsed))
             continue
         disclosed[name] = parsed
-        want = set(DISK_KEYS[name])
-        check(f"{name} discloses exactly the keys its row contracts for",
+        want = set(rows[name])
+        check(f"{stem} {name} discloses exactly the keys its row contracts for",
               set(parsed) == want,
               f"extra {sorted(set(parsed) - want)} missing {sorted(want - set(parsed))}")
-        check(f"{name} discloses the author's goal, not a placeholder",
+        check(f"{stem} {name} discloses the author's goal, not a placeholder",
               parsed.get("goal") == author["goal"], repr(parsed.get("goal")))
         # The equality above reads keys only. A leak that leaves the key set intact and
         # writes the ablated factor into a *surviving value* passes it — which is what
@@ -530,15 +558,16 @@ def check_handed_brief_on_disk():
         # it, so a seed task whose goal prose contained `scope:` would false-positive on
         # three rows at once, not just on `bare`; none does, and it fails loudly.
         leaked = sorted(k for k in author_keys - want if f"{k}:" in seen["brief"])
-        check(f"{name} does not reintroduce a dropped key inside a surviving value",
-              not leaked, str(leaked))
+        check(f"{stem} {name} does not reintroduce a dropped key inside a surviving "
+              "value", not leaked, str(leaked))
 
     # `_strip_state` edits *inside* `acceptance` as well as dropping `baseline`, and a
     # key-level equality cannot see that: the ablated factor is a sub-key, so it needs
     # its own line or `transition: flip` stays readable off disk while the prompt has
     # the state notes stripped out of the text.
     no_state = disclosed.get("no_state") or {}
-    check("no_state strips `transition` from every criterion in the disclosed file",
+    check(f"{stem} no_state strips `transition` from every criterion in the disclosed "
+          "file",
           bool(no_state.get("acceptance"))
           and not [e for e in no_state["acceptance"] if "transition" in e],
           no_state.get("acceptance"))
@@ -567,12 +596,21 @@ CLAUDE_JSON = json.dumps({
 })
 
 
+# The seed tasks the per-key contracts below are measured on. T05 is the original: its
+# contract string is what the first live matrix caught `no_acceptance` reading straight
+# off disk. T01 is here because T05 carries no `manual_checks`, and a contract measured
+# only on T05 cannot see a variant that keeps a key T05 never had — dropping
+# `manual_checks` from `plus_acceptance`'s `_drop` and its `BRIEF_EDITS` lambda left the
+# suite green while T01's rendered prompt named `src/cart.py` in a human-review line.
+CONTRACT_TASKS = ("T05-forbidden-temptation", "T01-flip-fix")
+
 # An additive variant is bare plus exactly ONE section. Every other sentence the
 # renderer can emit has to be absent, or "acceptance alone was sufficient" really
 # means "acceptance plus the autonomy rule plus the tests prohibition was".
 ADDITIVE_COMMON_HASNT = ("check_scope.py",
                          "Do not create, edit, rename or delete any test file.",
-                         "Ask before any step that is risky or hard to undo.")
+                         "Ask before any step that is risky or hard to undo.",
+                         "Human review — no command covers these")
 ADDITIVE_CONTRACT = {
     "plus_acceptance": {"has": ("Done when all of these hold:", "total: 4"),
                         "hasnt": ("Files you may edit:", "Never touch:")},
@@ -611,21 +649,65 @@ def check_prompt_fidelity_coverage():
     check("every prompt-fidelity row names a registered variant", not unknown,
           str(unknown))
 
+    # And what anchors `CONTRACT_TASKS` itself: dropping a task from it, or adding a seed
+    # task that introduces a key neither of them carries, would leave that key's
+    # singleton property asserted nowhere — the shape of this whole finding.
+    def keys_of(stem):
+        return set(load_brief(str(TASKS / f"{stem}.yaml")))
+
+    covered = set().union(*(keys_of(s) for s in CONTRACT_TASKS))
+    seeded = set().union(*(set(load_brief(str(t))) for t in TASKS.glob("*.yaml")))
+    check("the contract tasks carry every top-level key the seed set uses",
+          seeded <= covered, sorted(seeded - covered))
+
+
+def _additive_dynamic(brief):
+    """Payload companions to `ADDITIVE_CONTRACT`'s headers, derived from the brief being
+    rendered rather than written per task — an additive variant that kept its header and
+    dropped the lines under it would otherwise score clean. Same gap `_dynamic_contract`
+    closes for the ablations."""
+    cmd = str((brief.get("acceptance") or [{}])[0].get("cmd") or "").strip()
+    path = str((brief.get("scope") or [""])[0] or "").strip()
+    bullet = f"- {path}" if path else ""
+    return {"plus_acceptance": {"has": (cmd,), "hasnt": (bullet,)},
+            "plus_bounds": {"has": (bullet,), "hasnt": (cmd,)}}
+
 
 def check_additive_variants():
-    task = TASKS / "T05-forbidden-temptation.yaml"
-    brief, brief_path = measured_brief(task)
-    base_lines = set(VARIANTS["current"](brief, brief_path).splitlines())
+    """Run over every `CONTRACT_TASKS` entry, not T05 alone: "goal + the criteria block,
+    nothing else" asserted only on a task that never had `manual_checks` is not asserting
+    the singleton property at all.
+
+    A phrase is asserted only where the control render carries it — T05 has no
+    `manual_checks` and T01 no `total: 4` — and the canary at the end is what stops a
+    phrase the renderer stopped emitting from silencing itself everywhere at once.
+    """
+    bases = []
+    for stem in CONTRACT_TASKS:
+        brief, brief_path = measured_brief(TASKS / f"{stem}.yaml")
+        base = VARIANTS["current"](brief, brief_path)
+        bases.append(base)
+        base_lines = set(base.splitlines())
+        dynamic = _additive_dynamic(brief)
+        for name, want in ADDITIVE_CONTRACT.items():
+            text = VARIANTS[name](brief, brief_path)
+            for phrase in want["has"] + dynamic[name]["has"]:
+                if phrase and phrase in base:
+                    check(f"{stem} {name} has {phrase!r}", phrase in text, text)
+            for phrase in (want["hasnt"] + ADDITIVE_COMMON_HASNT
+                           + dynamic[name]["hasnt"]):
+                if phrase and phrase in base:
+                    check(f"{stem} {name} carries {phrase!r} — not an additive singleton",
+                          phrase not in text, text)
+            added = [l for l in text.splitlines() if l not in base_lines]
+            check(f"{stem} {name} only drops lines from current, never rewrites them",
+                  not added, added)
+
+    everywhere = "\n".join(bases)
     for name, want in ADDITIVE_CONTRACT.items():
-        text = VARIANTS[name](brief, brief_path)
-        for phrase in want["has"]:
-            check(f"{name} has {phrase!r}", phrase in text, text)
-        for phrase in want["hasnt"] + ADDITIVE_COMMON_HASNT:
-            check(f"{name} carries {phrase!r} — not an additive singleton",
-                  phrase not in text, text)
-        added = [l for l in text.splitlines() if l not in base_lines]
-        check(f"{name} only drops lines from current, never rewrites them",
-              not added, added)
+        for phrase in want["has"] + want["hasnt"] + ADDITIVE_COMMON_HASNT:
+            check(f"canary: {name}'s phrase still appears in some control render "
+                  f"{phrase!r}", phrase in everywhere, phrase)
 
 
 def check_claude_stats():
