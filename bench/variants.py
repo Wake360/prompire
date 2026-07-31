@@ -141,3 +141,26 @@ def no_bounds(brief, brief_path):
 VARIANTS = {"current": current, "persona": persona, "bare": bare,
             "no_state": no_state, "no_guard": no_guard, "no_bounds": no_bounds,
             "no_acceptance": no_acceptance}
+
+
+def _strip_state(brief):
+    out = _drop(brief, "baseline")
+    for entry in out.get("acceptance") or []:
+        if isinstance(entry, dict):
+            entry.pop("transition", None)
+    return out
+
+
+# What each variant puts on disk at .prompire/brief.yaml. The rendered prompt discloses
+# that path, so a variant whose prompt drops a factor while the file keeps it has not
+# ablated anything — the agent can just read it. A variant absent here hands over the
+# author's brief unchanged. bench/run.py restores the author's brief before measuring.
+BRIEF_EDITS = {
+    "bare": lambda b: {"goal": b.get("goal")},
+    "no_bounds": lambda b: _drop(b, "scope", "forbidden"),
+    # `baseline` goes with `acceptance`: every baseline entry quotes the command it
+    # measured, so a brief that drops the criteria and keeps the baseline still spells
+    # them out on disk. The rendered no_acceptance prompt carries neither.
+    "no_acceptance": lambda b: _drop(b, "acceptance", "baseline"),
+    "no_state": _strip_state,
+}

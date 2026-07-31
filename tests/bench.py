@@ -26,6 +26,7 @@ import yaml
 import fixtures
 import report
 import run as bench_run
+import variants
 from behaviors import BEHAVIORS
 from brief_common import load_brief
 from variants import VARIANTS, STATE_NOTES
@@ -283,6 +284,87 @@ def check_ablation_fidelity():
           "cannot run yet" not in synth_no_state, synth_no_state)
 
 
+def check_handed_brief():
+    """The brief on disk must say what the prompt says, and the measurement must still
+    run against the author's brief."""
+    task = TASKS / "T05-forbidden-temptation.yaml"
+    tmp = tempfile.mkdtemp(prefix="bench-handed-")
+    try:
+        _, brief_file = bench_run.prepare(task, tmp)
+        author = load_brief(str(brief_file))
+        for name, expect_key in (("no_acceptance", "acceptance"),
+                                 ("no_bounds", "scope"),
+                                 ("no_state", "baseline"),
+                                 ("bare", "acceptance")):
+            handed = variants.BRIEF_EDITS[name](author)
+            check(f"BRIEF_EDITS[{name}] drops {expect_key!r} from the handed brief",
+                  expect_key not in handed, str(sorted(handed)))
+        check("BRIEF_EDITS leaves the author's brief alone",
+              "acceptance" in author, str(sorted(author)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def brief_seen_by_agent(task, variant):
+    """The bytes at .prompire/brief.yaml in the only window that matters — while the
+    agent is running. Standing in for run_agent is how cell_with_tamper reaches that
+    window too; measuring the file afterwards would read the restored author's brief."""
+    real = bench_run.run_agent
+    seen = {}
+
+    def watched(spec, prompt, repo, stem):
+        seen["brief"] = (repo / bench_run.BRIEF_REL).read_text(encoding="utf-8")
+        seen["prompt"] = prompt
+        return real(spec, prompt, repo, stem)
+
+    bench_run.run_agent = watched
+    try:
+        bench_run.run_cell(task, variant, "scripted:good")
+    finally:
+        bench_run.run_agent = real
+    return seen
+
+
+def check_handed_brief_on_disk():
+    """The ablated factor must be gone from the file the prompt points at, not just from
+    the prompt. T05's contract string is what the first live matrix showed `no_acceptance`
+    could still read straight off disk."""
+    task = TASKS / "T05-forbidden-temptation.yaml"
+    control = brief_seen_by_agent(task, "current")
+    check("control hands over the author's brief, contract string and all",
+          "total: 4" in control["brief"], control["brief"])
+
+    seen = brief_seen_by_agent(task, "no_acceptance")
+    check("no_acceptance withholds the criteria from the prompt",
+          "total: 4" not in seen["prompt"], seen["prompt"])
+    check("no_acceptance withholds the criteria from the disclosed file too",
+          "total: 4" not in seen["brief"], seen["brief"])
+    check("the handed brief still states the goal",
+          yaml.safe_load(seen["brief"])["goal"] == load_brief(str(task))["goal"],
+          seen["brief"])
+
+    seen = brief_seen_by_agent(task, "no_bounds")
+    check("no_bounds withholds the allowlist from the disclosed file",
+          "scope:" not in seen["brief"] and "forbidden:" not in seen["brief"],
+          seen["brief"])
+
+    seen = brief_seen_by_agent(task, "no_guard")
+    check("no_guard hands over the author's brief — its factor is rendered, not stored",
+          "total: 4" in seen["brief"], seen["brief"])
+
+
+def check_handed_brief_restored():
+    """A no_acceptance cell must still be measured against the author's criteria."""
+    task = TASKS / "T05-forbidden-temptation.yaml"
+    row = bench_run.run_cell(task, "no_acceptance", "scripted:good")
+    total = (row["acceptance"]["passed"] + row["acceptance"]["failed"]
+             + row["acceptance"]["not_run"])
+    check("a no_acceptance cell is still measured against the author's criteria",
+          total >= 1, json.dumps(row["acceptance"]))
+    check("the harness's own handed brief is not counted as agent tampering",
+          not row["tampered"], json.dumps(row["tampered"]))
+
+
 # One real `claude -p --output-format json` envelope, trimmed to the keys the
 # adapter reads. Recorded 2026-07-30: there is no top-level `model`, and
 # `usage.input_tokens` counts only the uncached remainder.
@@ -503,6 +585,9 @@ def main():
     check_scripted()
     check_tamper()
     check_ablation_fidelity()
+    check_handed_brief()
+    check_handed_brief_on_disk()
+    check_handed_brief_restored()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 

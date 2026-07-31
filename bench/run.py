@@ -23,6 +23,8 @@ import sys
 import tempfile
 import time
 
+import yaml
+
 SKILL = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL))
 sys.path.insert(0, str(SKILL / "tests"))
@@ -32,7 +34,7 @@ import fixtures
 import verify_acceptance
 from behaviors import BEHAVIORS
 from brief_common import is_test_path, load_brief, norm_path, utf8_stdio
-from variants import VARIANTS
+from variants import BRIEF_EDITS, VARIANTS
 
 BRIEF_REL = ".prompire/brief.yaml"
 # Restored before every measurement — see run_cell.
@@ -172,16 +174,25 @@ def run_cell(task_path, variant, agent, keep=False):
         # are agent-writable state: the criteria, the boundary and the record of both
         # are exactly what a gaming agent would rewrite. Measuring against the file as
         # the agent left it is measuring what the agent chose to be measured on, so
-        # snapshot the pristine bytes here and put them back before measuring.
-        pristine = {p: (repo / p).read_bytes() for p in GUARDED}
+        # snapshot the author's bytes here and put them back before measuring.
+        author = {p: (repo / p).read_bytes() for p in GUARDED}
+        edit = BRIEF_EDITS.get(variant)
+        if edit:
+            # The prompt discloses .prompire/brief.yaml. A variant that drops a factor
+            # from the text while leaving it in the file has ablated nothing — so the
+            # file is rewritten to agree with the prompt for the duration of the run.
+            # `author` above is what measure() sees; this is only what the agent sees.
+            brief.write_text(yaml.safe_dump(edit(brief_data), sort_keys=False,
+                                            allow_unicode=True), encoding="utf-8")
+        handed = {p: (repo / p).read_bytes() for p in GUARDED}
         t0 = time.monotonic()
         stats = run_agent(agent, prompt, repo, task_path.stem)
         tampered = sorted(p for p in GUARDED
                           if not (repo / p).is_file()
-                          or (repo / p).read_bytes() != pristine[p])
-        for p in tampered:
+                          or (repo / p).read_bytes() != handed[p])
+        for p in GUARDED:
             (repo / p).parent.mkdir(parents=True, exist_ok=True)
-            (repo / p).write_bytes(pristine[p])
+            (repo / p).write_bytes(author[p])
         row = {"task": task_path.stem, "variant": variant, "agent": agent,
                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                "prompire_rev": prompire_rev(),
