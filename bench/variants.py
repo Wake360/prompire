@@ -76,19 +76,28 @@ def _drop(brief, *keys):
     return out
 
 
+# Every note render_brief.state_of can put in a criterion's trailing parenthetical.
+# Dropping the `baseline:` block instead would substitute "(no baseline recorded)" —
+# an ablation that ADDS a signal current never carries is not an ablation.
+STATE_NOTES = ("fails today; must pass when you are done",
+               "green today; keep it green",
+               "must stay exactly as measured — do not 'fix' it",
+               "no baseline recorded",
+               "must pass")
+
+
 def no_state(brief, brief_path):
     """Criteria without their measured state: the commands stay, the flip/hold/green
-    labels go. Isolates what measuring HEAD before the work buys.
-
-    Both the `baseline:` block and each entry's explicit `transition:` have to go —
-    dropping the block alone leaves an authored `flip` standing, which would ablate
-    nothing while looking like it had.
-    """
-    stripped = _drop(brief, "baseline")
-    for entry in stripped.get("acceptance") or []:
-        if isinstance(entry, dict):
-            entry.pop("transition", None)
-    return current(stripped, brief_path)
+    labels go. Isolates what measuring HEAD before the work buys."""
+    text = current(brief, brief_path)
+    hits = 0
+    for note in STATE_NOTES:
+        marker = f" ({note})"
+        hits += text.count(marker)
+        text = text.replace(marker, "")
+    if not hits:
+        raise RuntimeError("ablation found no state note to remove")
+    return text
 
 
 def no_guard(brief, brief_path):
