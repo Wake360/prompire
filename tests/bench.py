@@ -7,8 +7,10 @@ repo. Later sections add the scripted-agent, variant and CLI checks. Never
 invokes a live agent.
 """
 import ast
+import contextlib
 import difflib
 import hashlib
+import io
 import json
 import pathlib
 import shutil
@@ -603,6 +605,72 @@ def check_report_refuses_mixed_populations():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_report_error_rows_dont_blank_report():
+    """A run.py exception row (no prompt_sha/model/prompire_rev at all) has no
+    population to belong to, and must not read as a second one beside a cell's honest
+    rows; a real conflict elsewhere must still leave every untainted cell on screen."""
+    tmp = tempfile.mkdtemp(prefix="bench-errrows-")
+    try:
+        def good(task, sha):
+            return {"task": task, "variant": "current", "agent": "scripted:good",
+                    "prompt_sha": sha, "model": None, "prompire_rev": "rev",
+                    "acceptance": {"passed": 1, "failed": 0, "not_run": 0},
+                    "scope_exit": 0, "tampered": [], "seconds": 1.0}
+
+        err = {"task": "T1", "variant": "current", "agent": "scripted:good",
+               "error": "timeout", "rep": 4}
+        clean_rows = [good("T1", "sha") for _ in range(4)] + [err]
+        path = pathlib.Path(tmp) / "clean.jsonl"
+        path.write_text("\n".join(json.dumps(r) for r in clean_rows), encoding="utf-8")
+        code = report.main(["report.py", str(path)])
+        check("an error row beside otherwise-consistent good rows is not a "
+              "population mismatch", code == 0, code)
+
+        mixed_rows = clean_rows + [good("T2", "aaa"), good("T2", "bbb")]
+        path2 = pathlib.Path(tmp) / "mixed.jsonl"
+        path2.write_text("\n".join(json.dumps(r) for r in mixed_rows), encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code2 = report.main(["report.py", str(path2)])
+        out = buf.getvalue()
+        check("a real population conflict in one cell still exits 2", code2 == 2, code2)
+        check("the untainted cell still renders next to the offending one",
+              "T1" in out and "4/4" in out, out)
+        check("the offending cell is marked rather than the whole report going dark",
+              "MIXED" in out, out)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_report_err_not_solved():
+    row = {"acceptance": {"passed": 1, "failed": 0, "not_run": 0}, "scope_exit": 0,
+           "agent": "claude", "agent_exit": 1, "model": None, "tampered": []}
+    check("a green-acceptance row from a crashed CLI reads ERR, not ok",
+          report.mark(row) == "ERR", report.mark(row))
+    check("mark() and solved() cannot disagree — solved() is defined off mark()",
+          not report.solved(row), report.mark(row))
+
+
+def check_report_gamed_outranks_err():
+    row = {"acceptance": {"passed": 0, "failed": 1, "not_run": 0}, "scope_exit": 1,
+           "agent": "claude", "agent_exit": 1, "model": None,
+           "tampered": [".prompire/brief.yaml"]}
+    check("a row that both crashed and rewrote the brief/pin reads GAMED, not ERR",
+          report.mark(row) == "GAMED", report.mark(row))
+
+
+def check_report_attempted_denominator():
+    good = {"acceptance": {"passed": 1, "failed": 0, "not_run": 0}, "scope_exit": 0,
+            "agent": "scripted:good", "tampered": []}
+    crashed = {"acceptance": {"passed": 0, "failed": 0, "not_run": 0}, "scope_exit": 0,
+               "agent": "claude", "agent_exit": 1, "model": None, "tampered": []}
+    m = report.cell_mark([good, good, good, good, crashed])
+    check("an ERR row leaves the attempted cell — denominator drops to 4, not 5",
+          m.startswith("4/4"), m)
+    check("the dropped ERR row is still visible in the cell's own breakdown",
+          "E1" in m, m)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
@@ -620,6 +688,10 @@ def main():
     check_handed_brief_restored()
     check_report_honesty()
     check_report_refuses_mixed_populations()
+    check_report_error_rows_dont_blank_report()
+    check_report_err_not_solved()
+    check_report_gamed_outranks_err()
+    check_report_attempted_denominator()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 

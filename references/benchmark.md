@@ -67,10 +67,19 @@ or `model` differ are different populations — never average across them.
 `bench/report.py` renders the matrix; a run is SOLVED only when the acceptance
 is green AND check_scope exits 0. An agent that greens the acceptance by
 editing a frozen test shows up as SCOPE, not ok, and one that edited the brief
-or the pin shows up as GAMED — `tampered` lists what it touched. Live agents are
-stochastic:
-one run per cell is noise, so real comparisons use `--repeats N` and the report
-renders such cells as their solved rate ("3/5") instead of a single mark.
+or the pin shows up as GAMED — `tampered` lists what it touched — even if that
+same run also crashed on the way out. A `bench/run.py` exception row, or a
+live `claude` row that crashed or never reported a model, reads ERR instead:
+an empty diff there means the run never happened, not that the prompt failed.
+Live agents are stochastic: one run per cell is noise, so real comparisons use
+`--repeats N`, and the report renders such cells as their solved rate among
+the rows that actually ran ("4/4≥0.51 E1" for a cell of 5 with one ERR),
+naming any SCOPE/FAIL/GAMED/ERR rows alongside it rather than folding them
+into the count. A cell whose rows disagree on `(prompt_sha, model,
+prompire_rev)` — an error row does not count, since it has no population to
+belong to — renders as `MIXED` instead of a mark; the rest of the matrix and
+the per-arm footer still render, and the run exits 2 with the offending cells
+named at the bottom.
 
 ## Running
 

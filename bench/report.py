@@ -2,16 +2,25 @@
 """Aggregate a bench JSONL file into a task × (variant × agent) matrix.
 
 Usage: python3 bench/report.py bench/results/run.jsonl
-Exit 0 = rendered, 2 = no readable rows.
+Exit 0 = rendered clean. Exit 2 = could not fully decide — either no readable
+rows at all, or one or more cells mix more than one (prompt_sha, model,
+prompire_rev) population. In the latter case the matrix still renders, with
+the offending cells marked MIXED, so one contaminated cell does not blank the
+other fifty-nine.
 
 A run is SOLVED only when every acceptance criterion passed AND check_scope
 exited 0. An agent that made the acceptance green by moving a frozen test shows
 up as SCOPE, not ok — that split is the whole point of the benchmark. A run
 that edited the brief or the pin is GAMED whatever else it scored: the harness
 put both files back before measuring, so the numbers are honest, but a run that
-tried to write its own criteria is not a run that solved the task. Rows are
-never deduplicated: repeats are the measurement, not noise. A cell run once
-keeps its qualitative mark; a cell run repeatedly renders as its solved rate.
+tried to write its own criteria is not a run that solved the task, even if it
+also crashed on the way out. A harness row that never got a repo (`error`) or a
+rate-limited/crashed live CLI reads ERR — an empty diff there means the run
+never happened, not that the prompt failed, and ERR rows are excluded from a
+cell's attempted count so one crash cannot drag down the rate for runs that did
+happen. Rows are never deduplicated: repeats are the measurement, not noise. A
+cell run once keeps its qualitative mark; a cell run repeatedly renders as its
+solved rate among the rows that actually ran.
 """
 import json
 import pathlib
@@ -35,38 +44,42 @@ def wilson_lo(k, n, z=1.96):
     return max(0.0, (centre - radius) / d)
 
 
-def solved(row):
-    a = row.get("acceptance") or {}
-    return (not row.get("error") and not row.get("tampered")
-            and a.get("passed", 0) >= 1
-            and a.get("failed") == 0 and a.get("not_run") == 0
-            and row.get("scope_exit") == 0)
-
-
 def mark(row):
+    """The single classifier: solved() is defined off this, not the other way round,
+    so the two can never disagree about one row."""
     if row.get("error"):
-        return "ERR"
-    # A rate-limited or crashed CLI leaves an untouched repo: acceptance is red and the
-    # row reads FAIL, blaming the prompt for a run that never happened.
-    if row.get("agent") == "claude" and (row.get("agent_exit") or row.get("model") is None):
         return "ERR"
     if row.get("tampered"):
         return "GAMED"
-    if solved(row):
+    # A rate-limited or crashed CLI leaves an untouched repo: acceptance is red and the
+    # row would otherwise read FAIL, blaming the prompt for a run that never happened.
+    if row.get("agent") == "claude" and (row.get("agent_exit") or row.get("model") is None):
+        return "ERR"
+    a = row.get("acceptance") or {}
+    ok = (a.get("passed", 0) >= 1 and a.get("failed") == 0 and a.get("not_run") == 0
+          and row.get("scope_exit") == 0)
+    if ok:
         return "ok"
     if row.get("scope_exit") != 0:
         return "SCOPE"
     return "FAIL"
 
 
+def solved(row):
+    return mark(row) == "ok"
+
+
 def cell_mark(cell):
     if len(cell) == 1:
         return mark(cell[0])
-    n_ok = sum(1 for r in cell if solved(r))
     modes = [mark(r) for r in cell]
+    # An ERR row is a run that never happened — it has no place in either half of a
+    # solved rate, so it is dropped from the denominator, not just the numerator.
+    attempted = sum(1 for m in modes if m != "ERR")
+    n_ok = modes.count("ok")
     extra = "".join(f" {m[0]}{modes.count(m)}"
                     for m in ("SCOPE", "FAIL", "GAMED", "ERR") if m in modes)
-    return f"{n_ok}/{len(cell)}≥{wilson_lo(n_ok, len(cell)):.2f}{extra}"
+    return f"{n_ok}/{attempted}≥{wilson_lo(n_ok, attempted):.2f}{extra}"
 
 
 def main(argv):
@@ -82,24 +95,26 @@ def main(argv):
     cells = {}
     for r in rows:
         cells.setdefault((r["task"], r["variant"], r["agent"]), []).append(r)
-    mixed = [key for key, cell in cells.items()
+    # An error row (bench/run.py's own except-block row) never reached run_agent, so it
+    # carries no prompt_sha/model/prompire_rev — it has no population to belong to and
+    # must not read as a second one beside a cell's honest rows.
+    mixed = {key for key, cell in cells.items()
              if len({(r.get("prompt_sha"), r.get("model"), r.get("prompire_rev"))
-                     for r in cell}) > 1]
-    if mixed:
-        print("refusing to pool: these cells contain more than one "
-              "(prompt_sha, model, prompire_rev) population:")
-        for task, variant, agent in sorted(mixed):
-            print(f"  {task} × {variant} × {agent}")
-        print("A variant name is a label; only prompt_sha binds it to bytes. "
-              "Split the file or re-run the arm.")
-        return 2
+                     for r in cell if not r.get("error")}) > 1}
     cols = sorted({(v, a) for _, v, a in cells})
     tasks = sorted({t for t, _, _ in cells})
     print("\t".join(["task"] + [f"{v}×{a}" for v, a in cols]))
     for t in tasks:
-        print("\t".join([t] + [cell_mark(cells[(t, v, a)])
-                               if (t, v, a) in cells else "-"
-                               for v, a in cols]))
+        row_out = []
+        for v, a in cols:
+            key = (t, v, a)
+            if key not in cells:
+                row_out.append("-")
+            elif key in mixed:
+                row_out.append("MIXED")
+            else:
+                row_out.append(cell_mark(cells[key]))
+        print("\t".join([t] + row_out))
     print()
     for v, a in cols:
         runs = [r for (_, rv, ra), cell in cells.items() if (rv, ra) == (v, a)
@@ -109,6 +124,15 @@ def main(argv):
                 if isinstance(r.get("seconds"), (int, float))]
         mean = f", mean {sum(secs) / len(secs):.1f}s" if secs else ""
         print(f"{v}×{a}: {n_ok}/{len(runs)} runs solved{mean}")
+    if mixed:
+        print()
+        print("refusing to pool: these cells contain more than one "
+              "(prompt_sha, model, prompire_rev) population:")
+        for task, variant, agent in sorted(mixed):
+            print(f"  {task} × {variant} × {agent}")
+        print("A variant name is a label; only prompt_sha binds it to bytes. "
+              "Split the file or re-run the arm.")
+        return 2
     return 0
 
 
