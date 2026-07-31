@@ -8,6 +8,7 @@ invokes a live agent.
 """
 import ast
 import contextlib
+import copy
 import difflib
 import hashlib
 import io
@@ -326,23 +327,34 @@ def check_ablation_fidelity():
           "cannot run yet" not in synth_no_state, synth_no_state)
 
 
-def check_handed_brief():
-    """The brief on disk must say what the prompt says, and the measurement must still
-    run against the author's brief."""
+def check_brief_edits_invariants():
+    """Two properties every `BRIEF_EDITS` entry must hold, checked once across the whole
+    dict rather than per-variant, so a new entry inherits the coverage automatically
+    instead of needing a matching line in a second, hand-maintained table.
+
+    1. An entry that drops `acceptance` must drop `baseline` with it: every baseline
+       entry quotes its acceptance command verbatim, so keeping the block still spells
+       the criteria out on disk regardless of what dropping `acceptance` meant to
+       withhold. This exact leak has recurred twice on this plan — `no_acceptance` in
+       Task 4, `plus_bounds` here — because it has to be re-derived by hand per variant
+       and nothing enforced the pairing.
+    2. No entry mutates the author's brief in place. Every current entry goes through
+       `_drop`'s `copy.deepcopy`, but a raw `.pop()` here would corrupt every other
+       variant built from the same `author` dict in this same run.
+    """
     task = TASKS / "T05-forbidden-temptation.yaml"
-    tmp = tempfile.mkdtemp(prefix="bench-handed-")
+    tmp = tempfile.mkdtemp(prefix="bench-edits-invariants-")
     try:
         _, brief_file = bench_run.prepare(task, tmp)
         author = load_brief(str(brief_file))
-        for name, expect_key in (("no_acceptance", "acceptance"),
-                                 ("no_bounds", "scope"),
-                                 ("no_state", "baseline"),
-                                 ("bare", "acceptance")):
-            handed = variants.BRIEF_EDITS[name](author)
-            check(f"BRIEF_EDITS[{name}] drops {expect_key!r} from the handed brief",
-                  expect_key not in handed, str(sorted(handed)))
-        check("BRIEF_EDITS leaves the author's brief alone",
-              "acceptance" in author, str(sorted(author)))
+        snapshot = copy.deepcopy(author)
+        for name, edit in variants.BRIEF_EDITS.items():
+            handed = edit(author)
+            if "acceptance" not in handed:
+                check(f"BRIEF_EDITS[{name}] drops acceptance and baseline together",
+                      "baseline" not in handed, sorted(handed))
+        check("BRIEF_EDITS entries leave the author's brief alone",
+              author == snapshot, "author brief was mutated by a BRIEF_EDITS entry")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -365,6 +377,19 @@ def brief_seen_by_agent(task, variant):
     finally:
         bench_run.run_agent = real
     return seen
+
+
+# The exact key set each additive variant's `BRIEF_EDITS` entry must drop, and the key
+# it must keep — matches `bench/variants.py`'s own drop lists so a reduction there is
+# caught here rather than only by review.
+ADDITIVE_DROPS = {
+    "plus_acceptance": {"drops": ("scope", "forbidden", "constraints", "manual_checks",
+                                  "tests_policy", "autonomy"),
+                        "keeps": ("acceptance",)},
+    "plus_bounds": {"drops": ("acceptance", "baseline", "constraints", "manual_checks",
+                              "tests_policy", "autonomy"),
+                    "keeps": ("scope", "forbidden")},
+}
 
 
 def check_handed_brief_on_disk():
@@ -394,18 +419,25 @@ def check_handed_brief_on_disk():
     check("no_guard hands over the author's brief — its factor is rendered, not stored",
           "total: 4" in seen["brief"], seen["brief"])
 
-    # A `BRIEF_EDITS` lambda tested only against its own output cannot catch the
-    # entry going missing entirely — `bench_run.run_cell` falls back to the untouched
-    # author's brief when `BRIEF_EDITS.get(variant)` is `None`, so the disk check has
-    # to go through the real write path, the same way the other variants above do.
-    seen = brief_seen_by_agent(task, "plus_bounds")
-    check("plus_bounds withholds the criteria from the disclosed file too",
-          "total: 4" not in seen["brief"], seen["brief"])
-
-    seen = brief_seen_by_agent(task, "plus_acceptance")
-    check("plus_acceptance withholds the allowlist from the disclosed file",
-          "scope:" not in seen["brief"] and "forbidden:" not in seen["brief"],
-          seen["brief"])
+    # A `BRIEF_EDITS` lambda tested only against its own output cannot catch the entry
+    # going missing entirely — `bench_run.run_cell` falls back to the untouched author's
+    # brief when `BRIEF_EDITS.get(variant)` is `None` — so this goes through the real
+    # write path, the same way the other variants above do. Asserted against the
+    # *parsed* brief rather than a value fragment like `"total: 4"`: PyYAML's default
+    # emitter can fold a long scalar across lines depending on width, so a substring
+    # check on a value can silently pass while the key it belongs to is still present.
+    # Every key in the drop set is checked, not one representative string — a reduced
+    # drop set that still removes the headline key (e.g. keeping `autonomy` while
+    # dropping `scope`) is a real, different leak that a single-string check misses.
+    for name, contract in ADDITIVE_DROPS.items():
+        seen = brief_seen_by_agent(task, name)
+        parsed = yaml.safe_load(seen["brief"])
+        for key in contract["drops"]:
+            check(f"{name} drops {key!r} from the disclosed file",
+                  key not in parsed, sorted(parsed))
+        for key in contract["keeps"]:
+            check(f"{name} still carries {key!r} in the disclosed file",
+                  key in parsed, sorted(parsed))
 
 
 def check_handed_brief_restored():
@@ -810,7 +842,7 @@ def main():
     check_tamper()
     check_ablation_fidelity()
     check_additive_variants()
-    check_handed_brief()
+    check_brief_edits_invariants()
     check_handed_brief_on_disk()
     check_handed_brief_restored()
     check_report_honesty()
