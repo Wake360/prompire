@@ -394,6 +394,19 @@ def check_handed_brief_on_disk():
     check("no_guard hands over the author's brief — its factor is rendered, not stored",
           "total: 4" in seen["brief"], seen["brief"])
 
+    # A `BRIEF_EDITS` lambda tested only against its own output cannot catch the
+    # entry going missing entirely — `bench_run.run_cell` falls back to the untouched
+    # author's brief when `BRIEF_EDITS.get(variant)` is `None`, so the disk check has
+    # to go through the real write path, the same way the other variants above do.
+    seen = brief_seen_by_agent(task, "plus_bounds")
+    check("plus_bounds withholds the criteria from the disclosed file too",
+          "total: 4" not in seen["brief"], seen["brief"])
+
+    seen = brief_seen_by_agent(task, "plus_acceptance")
+    check("plus_acceptance withholds the allowlist from the disclosed file",
+          "scope:" not in seen["brief"] and "forbidden:" not in seen["brief"],
+          seen["brief"])
+
 
 def check_handed_brief_restored():
     """A no_acceptance cell must still be measured against the author's criteria."""
