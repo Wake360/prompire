@@ -6,6 +6,7 @@ Exit 0 = every seed brief survives baseline + activate + lint inside the fixture
 repo. Later sections add the scripted-agent, variant and CLI checks. Never
 invokes a live agent.
 """
+import difflib
 import hashlib
 import json
 import pathlib
@@ -130,33 +131,46 @@ def check_ablations():
           "raise" in src and "found nothing to remove" in src)
 
 
+_MEASURED_BRIEFS = {}
+
+
 def measured_brief(task_path):
     """A task brief with a real baseline measured in a throwaway fixture repo, so the
-    state labels the ablations target are actually present in the render."""
+    state labels the ablations target are actually present in the render. Memoised —
+    measuring all 6 seed tasks costs real wall time and every caller wants the same
+    brief for the same path."""
+    if task_path in _MEASURED_BRIEFS:
+        return _MEASURED_BRIEFS[task_path]
     tmp = tempfile.mkdtemp(prefix="bench-fidelity-")
     try:
-        repo, brief = bench_run.prepare(task_path, tmp)
-        return load_brief(str(brief)), bench_run.BRIEF_REL
+        _, brief = bench_run.prepare(task_path, tmp)
+        result = load_brief(str(brief)), bench_run.BRIEF_REL
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    _MEASURED_BRIEFS[task_path] = result
+    return result
 
 
 # Each ablation must delete its own factor and nothing else. `owns` must vanish from
-# the render; `keeps` must survive, or the "single factor" label is false.
+# the render; `keeps` must survive, or the "single factor" label is false. `never` is
+# for substitution text an ablation *introduces* — it must never appear in any render,
+# so unlike `owns` it is not gated on first appearing in `base`.
 ABLATION_CONTRACT = {
     "no_state": {
-        "owns": ("fails today", "green today", "must stay exactly as measured",
-                 "no baseline recorded"),
+        "owns": ("fails today", "green today", "must stay exactly as measured"),
+        "never": ("no baseline recorded",),
         "keeps": ("Files you may edit:", "check_scope.py", "Done when all of these hold:"),
     },
     "no_guard": {
         "owns": ("check_scope.py", "A file changed outside the list above fails it."),
+        "never": (),
         "keeps": ("Files you may edit:", "Done when all of these hold:"),
     },
     "no_bounds": {
         "owns": ("Files you may edit:", "Never touch:",
                  "A file changed outside the list above fails it.",
                  "The listed paths are the whole boundary"),
+        "never": (),
         # The tests prohibition comes from `tests_policy`, a separate brief field, and
         # survives on purpose — conflating it with the allowlist would make no_bounds a
         # two-factor ablation. Read a no_bounds result as "no allowlist, still told not
@@ -166,38 +180,79 @@ ABLATION_CONTRACT = {
     },
     "no_acceptance": {
         "owns": ("Done when all of these hold:",),
+        "never": (),
         "keeps": ("Files you may edit:", "check_scope.py"),
     },
 }
 
 
+def _dynamic_contract(brief):
+    """Payload companions to `ABLATION_CONTRACT`'s headers and sentences, derived from
+    the brief being rendered rather than hardcoded per task — an ablation that deleted
+    the bullets under a surviving header would otherwise score clean.
+
+    `no_bounds` owns the rendered allowlist *bullet* (`- path`), not the bare path: by
+    design (see `no_bounds`'s own docstring in bench/variants.py) the same path can
+    still leak through `goal` or a `manual_checks` line, and that leak is a documented,
+    accepted weakening of the contrast, not the defect this ablation removes.
+    """
+    cmd = str((brief.get("acceptance") or [{}])[0].get("cmd") or "").strip()
+    path = str((brief.get("scope") or [""])[0] or "").strip()
+    bullet = f"- {path}" if path else ""
+    return {
+        "no_state":      {"owns": (), "keeps": (cmd, path)},
+        "no_guard":      {"owns": (), "keeps": (cmd, path)},
+        "no_bounds":     {"owns": (bullet,), "keeps": (cmd,)},
+        "no_acceptance": {"owns": (cmd,), "keeps": (path,)},
+    }
+
+
+def _added_tokens(base, text):
+    """Tokens `text` carries that cannot be explained by deleting tokens from `base` —
+    a whitespace-tokenised diff, so a rendered sentence merging two factors onto one
+    line doesn't read as an insertion just because the line as a whole is new."""
+    a, b = base.split(), text.split()
+    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    added = []
+    for tag, _, _, j1, j2 in sm.get_opcodes():
+        if tag in ("insert", "replace"):
+            added.extend(b[j1:j2])
+    return added
+
+
 def check_ablation_fidelity():
-    passed = failed = 0
+    bases = []
     for task in sorted(TASKS.glob("*.yaml")):
         brief, brief_path = measured_brief(task)
         base = VARIANTS["current"](brief, brief_path)
-        base_lines = set(base.splitlines())
+        bases.append(base)
+        dynamic = _dynamic_contract(brief)
         for name, contract in ABLATION_CONTRACT.items():
             text = VARIANTS[name](brief, brief_path)
-            added = [l for l in text.splitlines() if l not in base_lines]
-            if added:
-                print(f"FAIL {task.stem} {name}: ablation ADDED lines {added!r}")
-                failed += 1
-            else:
-                passed += 1
-            for phrase in contract["owns"]:
-                if phrase in base and phrase in text:
-                    print(f"FAIL {task.stem} {name}: owned phrase survived {phrase!r}")
-                    failed += 1
-                else:
-                    passed += 1
-            for phrase in contract["keeps"]:
-                if phrase in base and phrase not in text:
-                    print(f"FAIL {task.stem} {name}: collateral removal of {phrase!r}")
-                    failed += 1
-                else:
-                    passed += 1
-    return passed, failed
+            added = _added_tokens(base, text)
+            check(f"{task.stem} {name}: ablation only deletes, never adds",
+                  not added, added)
+            for phrase in contract["owns"] + dynamic[name]["owns"]:
+                if phrase and phrase in base:
+                    check(f"{task.stem} {name}: owned phrase removed {phrase!r}",
+                          phrase not in text, text)
+            for phrase in contract["never"]:
+                check(f"{task.stem} {name}: substitution phrase never appears {phrase!r}",
+                      phrase not in text, text)
+            for phrase in contract["keeps"] + dynamic[name]["keeps"]:
+                if phrase and phrase in base:
+                    check(f"{task.stem} {name}: collateral phrase kept {phrase!r}",
+                          phrase in text, text)
+
+    # A `phrase in base` guard above only protects a check the phrase applies to; it
+    # also lets a reworded render (e.g. render_brief.py changing its own wording)
+    # silence every one of those checks at once. Pin that every contract phrase still
+    # shows up in at least one control render across the task set.
+    everywhere = "\n".join(bases)
+    for name, contract in ABLATION_CONTRACT.items():
+        for phrase in contract["owns"] + contract["keeps"]:
+            check(f"canary: {name}'s phrase still appears in some control render "
+                  f"{phrase!r}", phrase in everywhere, phrase)
 
 
 # One real `claude -p --output-format json` envelope, trimmed to the keys the
@@ -409,7 +464,6 @@ def check_cli(tmp):
 
 
 def main():
-    global TOTAL, FAILS
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
         check_cli(tmp)
@@ -419,9 +473,7 @@ def main():
     check_claude_stats()
     check_scripted()
     check_tamper()
-    passed, failed = check_ablation_fidelity()
-    TOTAL += passed + failed
-    FAILS += failed
+    check_ablation_fidelity()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 
