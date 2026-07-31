@@ -58,6 +58,17 @@ def check_seed_briefs(tmp):
               lint.stdout.strip())
 
 
+def check_dirty_rev():
+    """A rev recorded off a dirty tree does not identify the code that ran: two rows
+    can share a rev and a variant name and still be different prompts."""
+    rev = bench_run.prompire_rev()
+    porcelain = subprocess.run(["git", "-C", str(bench_run.SKILL), "status", "--porcelain"],
+                               capture_output=True, text=True,
+                               encoding="utf-8").stdout.strip()
+    check("a rev recorded off a dirty tree is marked +dirty",
+          not porcelain or (rev is not None and rev.endswith("+dirty")), rev)
+
+
 def check_behavior_coverage():
     missing = sorted(t.stem for t in TASKS.glob("*.yaml")
                      if "good" not in BEHAVIORS.get(t.stem, {}))
@@ -719,6 +730,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
         check_cli(tmp)
+    check_dirty_rev()
     check_behavior_coverage()
     check_variants()
     check_ablations()

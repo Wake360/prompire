@@ -54,7 +54,8 @@ def prepare(task_path, workdir):
     brief.parent.mkdir(exist_ok=True)
     shutil.copy(task_path, brief)
     for args in (("baseline.py", BRIEF_REL, "--write"),
-                 ("check_scope.py", BRIEF_REL, "--activate")):
+                 ("check_scope.py", BRIEF_REL, "--activate"),
+                 ("lint_brief.py", BRIEF_REL)):
         r = tool(repo, *args)
         if r.returncode != 0:
             raise RuntimeError(f"{args[0]} failed for {task_path.name}: "
@@ -154,11 +155,17 @@ def measure(repo, base):
 
 
 def prompire_rev():
-    """Which Prompire produced this row — an installed skill copy without .git
-    records None rather than a guess."""
+    """Which Prompire produced this row — an installed skill copy without .git records
+    None rather than a guess. A dirty tree is marked: the rev alone would name a commit
+    whose bytes are not what ran."""
     r = subprocess.run(["git", "-C", str(SKILL), "rev-parse", "--short", "HEAD"],
                        capture_output=True, text=True, encoding="utf-8")
-    return r.stdout.strip() or None
+    rev = r.stdout.strip()
+    if not rev:
+        return None
+    dirty = subprocess.run(["git", "-C", str(SKILL), "status", "--porcelain"],
+                           capture_output=True, text=True, encoding="utf-8")
+    return f"{rev}+dirty" if dirty.stdout.strip() else rev
 
 
 def run_cell(task_path, variant, agent, keep=False):
