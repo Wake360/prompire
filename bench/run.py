@@ -158,6 +158,9 @@ def prompire_rev():
     """Which Prompire produced this row — an installed skill copy without .git records
     None rather than a guess. A dirty tree is marked: the rev alone would name a commit
     whose bytes are not what ran."""
+    # --short is load-bearing beyond formatting: it forces single-revision verification,
+    # so a real failure (e.g. an unborn HEAD) leaves stdout empty. Without it, the same
+    # failure echoes the literal string "HEAD" to stdout instead.
     r = subprocess.run(["git", "-C", str(SKILL), "rev-parse", "--short", "HEAD"],
                        capture_output=True, text=True, encoding="utf-8")
     rev = r.stdout.strip()
