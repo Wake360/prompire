@@ -254,6 +254,20 @@ def check_ablation_fidelity():
             check(f"canary: {name}'s phrase still appears in some control render "
                   f"{phrase!r}", phrase in everywhere, phrase)
 
+    # None of the seed tasks measure a not_runnable command, so the fifth state label
+    # `state_of` can emit — "cannot run yet; must pass when you are done" — never
+    # exercises the loop above. Cover it with a synthetic brief rather than a new
+    # bench/tasks/ fixture, which would change the live matrix.
+    synth = {"goal": "synthetic",
+             "acceptance": [{"cmd": "true", "expect": "0", "transition": "flip"}],
+             "baseline": [{"cmd": "true", "status": "not_runnable", "reason": "no fixture"}]}
+    synth_base = VARIANTS["current"](synth, "brief.yaml")
+    check("synthetic not_runnable: control carries 'cannot run yet'",
+          "cannot run yet" in synth_base, synth_base)
+    synth_no_state = VARIANTS["no_state"](synth, "brief.yaml")
+    check("synthetic not_runnable: no_state removes 'cannot run yet'",
+          "cannot run yet" not in synth_no_state, synth_no_state)
+
 
 # One real `claude -p --output-format json` envelope, trimmed to the keys the
 # adapter reads. Recorded 2026-07-30: there is no top-level `model`, and

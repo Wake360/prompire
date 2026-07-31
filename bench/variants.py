@@ -80,6 +80,7 @@ def _drop(brief, *keys):
 # Dropping the `baseline:` block instead would substitute "(no baseline recorded)" —
 # an ablation that ADDS a signal current never carries is not an ablation.
 STATE_NOTES = ("fails today; must pass when you are done",
+               "cannot run yet; must pass when you are done",
                "green today; keep it green",
                "must stay exactly as measured — do not 'fix' it",
                "no baseline recorded",
