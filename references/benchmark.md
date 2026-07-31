@@ -23,12 +23,20 @@ A cell is task × variant × agent:
   removes exactly one thing the brief adds, so the matrix says which *part*
   earns its tokens rather than only whether the brief as a whole does.
   `no_state` keeps the commands but drops their measured red/green/frozen
-  labels (it must clear both the `baseline:` block and each entry's authored
-  `transition:`, or the label survives and nothing is ablated). `no_guard`
+  labels: it renders the control and deletes each criterion's trailing
+  parenthetical for every label `render_brief.state_of` can emit, raising if
+  none matched rather than silently returning the control. `no_guard`
   drops the sentence announcing the external diff check. `no_bounds` drops
   `scope`, `forbidden` and every sentence pointing back at them, while leaving
   the external check intact — a path named in `goal` or `manual_checks`
   survives on purpose, since cutting it would ablate a second factor.
+  `no_bounds` also necessarily removes the consequence clause "A file changed
+  outside the list above fails it." — the clause names a list the ablation
+  deletes, so it cannot survive coherently. It keeps the announcement that an
+  external check runs, which is `no_guard`'s factor; the two ablations
+  therefore differ by exactly the announcement, and `tests/bench.py` asserts
+  that split. Read a `no_bounds` result as "no declared allowlist, still told
+  it is checked", not as "no enforcement mentioned".
   `no_acceptance` drops the criteria and their header, keeping goal, boundary
   and autonomy — the first live matrix showed half of what a naked request
   loses is the contract (which string `total_line()` must render, what the

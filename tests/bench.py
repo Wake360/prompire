@@ -6,6 +6,7 @@ Exit 0 = every seed brief survives baseline + activate + lint inside the fixture
 repo. Later sections add the scripted-agent, variant and CLI checks. Never
 invokes a live agent.
 """
+import ast
 import difflib
 import hashlib
 import json
@@ -27,7 +28,7 @@ import report
 import run as bench_run
 from behaviors import BEHAVIORS
 from brief_common import load_brief
-from variants import VARIANTS
+from variants import VARIANTS, STATE_NOTES
 
 TASKS = SKILL / "bench" / "tasks"
 FAILS = 0
@@ -129,6 +130,19 @@ def check_ablations():
     src = (SKILL / "bench" / "variants.py").read_text(encoding="utf-8")
     check("a no-op text ablation is an error, not a silent pass",
           "raise" in src and "found nothing to remove" in src)
+
+
+def check_state_notes_sync():
+    """STATE_NOTES (bench/variants.py) must name every literal short label
+    render_brief.state_of can return, or no_state silently stops ablating a
+    branch the renderer grew after STATE_NOTES was last updated."""
+    tree = ast.parse((SKILL / "render_brief.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "state_of")
+    labels = {n.value.elts[0].value for n in ast.walk(fn)
+              if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple)}
+    check("STATE_NOTES covers every literal label state_of can return",
+          labels == set(STATE_NOTES), labels ^ set(STATE_NOTES))
 
 
 _MEASURED_BRIEFS = {}
@@ -484,6 +498,7 @@ def main():
     check_behavior_coverage()
     check_variants()
     check_ablations()
+    check_state_notes_sync()
     check_claude_stats()
     check_scripted()
     check_tamper()
