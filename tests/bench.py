@@ -327,8 +327,18 @@ def check_ablation_fidelity():
           "cannot run yet" not in synth_no_state, synth_no_state)
 
 
+# Variants with no `BRIEF_EDITS` entry, named so that the omission is a decision rather
+# than something a new variant can inherit by forgetting. `current` and `persona` ablate
+# nothing, so the author's brief on disk is what they are supposed to hand over.
+# `no_guard` cuts every line carrying "check_scope.py", and in the claude flavour that is
+# the only line render_prompt emits the brief path on, so it removes the disclosure along
+# with the sentence — and its factor is the external check itself, which is rendered, not
+# stored in the brief at all.
+HANDS_OVER_AUTHOR_BRIEF = ("current", "persona", "no_guard")
+
+
 def check_brief_edits_invariants():
-    """Three properties every `BRIEF_EDITS` entry must hold, checked once across the whole
+    """Five properties every `BRIEF_EDITS` entry must hold, checked once across the whole
     dict rather than per-variant, so a new entry inherits the coverage automatically
     instead of needing a matching line in a second, hand-maintained table.
 
@@ -344,6 +354,15 @@ def check_brief_edits_invariants():
     3. Every entry names a registered variant. A misspelt key is dead — `run_cell` looks
        the entry up by the variant name it was given — so the variant it was meant for
        silently hands over the author's brief instead.
+    4. Every registered variant either has an entry or is named in
+       `HANDS_OVER_AUTHOR_BRIEF`. Only property 3 was asserted; the reverse direction was
+       not, so a new variant that ablates a *stored* factor from its prompt and forgets an
+       entry handed the agent the whole author brief and the suite said nothing at all —
+       the same defect `no_acceptance` shipped with in Task 4, reachable by adding one
+       function. Equality rather than a subset so a name that stops belonging in the
+       opt-out (an entry added later, a variant renamed) is also a FAIL.
+    5. Every entry returns a mapping. A lambda returning `None` used to reach property 1
+       as a `TypeError` traceback rather than a named FAIL.
     """
     task = TASKS / "T05-forbidden-temptation.yaml"
     tmp = tempfile.mkdtemp(prefix="bench-edits-invariants-")
@@ -353,6 +372,10 @@ def check_brief_edits_invariants():
         snapshot = copy.deepcopy(author)
         for name, edit in variants.BRIEF_EDITS.items():
             handed = edit(author)
+            check(f"BRIEF_EDITS[{name}] returns a mapping", isinstance(handed, dict),
+                  repr(handed))
+            if not isinstance(handed, dict):
+                continue
             if "acceptance" not in handed:
                 check(f"BRIEF_EDITS[{name}] drops acceptance and baseline together",
                       "baseline" not in handed, sorted(handed))
@@ -361,6 +384,11 @@ def check_brief_edits_invariants():
         unknown = sorted(set(variants.BRIEF_EDITS) - set(VARIANTS))
         check("every BRIEF_EDITS entry names a registered variant", not unknown,
               str(unknown))
+        unedited = sorted(set(VARIANTS) - set(variants.BRIEF_EDITS))
+        check("every variant either edits the disclosed brief or is a named opt-out",
+              unedited == sorted(HANDS_OVER_AUTHOR_BRIEF),
+              f"unopted {sorted(set(unedited) - set(HANDS_OVER_AUTHOR_BRIEF))} "
+              f"stale {sorted(set(HANDS_OVER_AUTHOR_BRIEF) - set(unedited))}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -418,6 +446,7 @@ def check_handed_brief_on_disk():
     control = brief_seen_by_agent(task, "current")
     check("control hands over the author's brief, contract string and all",
           "total: 4" in control["brief"], control["brief"])
+    author_keys = set(yaml.safe_load(control["brief"]))
 
     seen = brief_seen_by_agent(task, "no_acceptance")
     check("no_acceptance withholds the criteria from the prompt",
@@ -449,6 +478,13 @@ def check_handed_brief_on_disk():
     for name in sorted(set(DISK_KEYS) & set(variants.BRIEF_EDITS) & set(VARIANTS)):
         seen = brief_seen_by_agent(task, name)
         parsed = yaml.safe_load(seen["brief"])
+        # A `BRIEF_EDITS` entry returning something that is not a mapping reaches disk as
+        # e.g. `null`, and every assertion below would be a traceback instead of a named
+        # FAIL — the same crash-vs-FAIL class the stale-row intersection above fixes.
+        if not isinstance(parsed, dict):
+            check(f"{name} discloses a mapping at {bench_run.BRIEF_REL}", False,
+                  repr(parsed))
+            continue
         disclosed[name] = parsed
         want = set(DISK_KEYS[name])
         check(f"{name} discloses exactly the keys its row contracts for",
@@ -456,6 +492,20 @@ def check_handed_brief_on_disk():
               f"extra {sorted(set(parsed) - want)} missing {sorted(want - set(parsed))}")
         check(f"{name} discloses the author's goal, not a placeholder",
               parsed.get("goal") == author["goal"], repr(parsed.get("goal")))
+        # The equality above reads keys only. A leak that leaves the key set intact and
+        # writes the ablated factor into a *surviving value* passes it — which is what
+        # `no_bounds`'s hand-written `"scope:" not in seen["brief"]` grep caught until
+        # round 4 deleted it as subsumed by the row. It is not subsumed: strictly more in
+        # the key dimension, strictly less in the value dimension. This is that grep
+        # generalised to every row, with the drop list derived from the row instead of
+        # written out per variant. It is a raw substring test but not the value-fragment
+        # pattern round 2 removed: the needle is a key name taken from the table, and
+        # PyYAML always emits a key as `name:` and never folds it, so unlike `"total: 4"`
+        # it cannot silently miss. `bare` drops every key and so searches the widest — a
+        # seed task whose goal prose contained `scope:` would false-positive; none does.
+        leaked = sorted(k for k in author_keys - want if f"{k}:" in seen["brief"])
+        check(f"{name} does not reintroduce a dropped key inside a surviving value",
+              not leaked, str(leaked))
 
     # `_strip_state` edits *inside* `acceptance` as well as dropping `baseline`, and a
     # key-level equality cannot see that: the ablated factor is a sub-key, so it needs
