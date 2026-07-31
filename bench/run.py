@@ -165,7 +165,10 @@ def prompire_rev():
         return None
     dirty = subprocess.run(["git", "-C", str(SKILL), "status", "--porcelain"],
                            capture_output=True, text=True, encoding="utf-8")
-    return f"{rev}+dirty" if dirty.stdout.strip() else rev
+    # A status call that itself fails (locked index, git unavailable) must not read as
+    # "clean" — an empty stdout from a real failure would call a possibly-dirty tree
+    # clean, which is the one direction this function exists not to be wrong in.
+    return rev if dirty.returncode == 0 and not dirty.stdout.strip() else f"{rev}+dirty"
 
 
 def run_cell(task_path, variant, agent, keep=False):

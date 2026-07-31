@@ -49,24 +49,33 @@ def check(name, cond, detail=""):
 
 
 def check_seed_briefs(tmp):
+    # prepare() itself lints each brief after baseline.py --write now, so this only
+    # needs to catch its RuntimeError and turn it into a counted FAIL — without the
+    # try/except a failing seed brief would kill the whole suite with a traceback
+    # instead of a legible line.
     for task in sorted(TASKS.glob("*.yaml")):
-        repo, _ = bench_run.prepare(task, pathlib.Path(tmp) / task.stem)
-        lint = subprocess.run([sys.executable, str(SKILL / "lint_brief.py"),
-                               bench_run.BRIEF_REL], cwd=str(repo),
-                              capture_output=True, text=True, encoding="utf-8")
-        check(f"{task.stem} lints clean after baseline", lint.returncode == 0,
-              lint.stdout.strip())
+        try:
+            bench_run.prepare(task, pathlib.Path(tmp) / task.stem)
+            ok, detail = True, ""
+        except RuntimeError as e:
+            ok, detail = False, str(e)
+        check(f"{task.stem} lints clean after baseline", ok, detail)
 
 
 def check_dirty_rev():
     """A rev recorded off a dirty tree does not identify the code that ran: two rows
-    can share a rev and a variant name and still be different prompts."""
-    rev = bench_run.prompire_rev()
-    porcelain = subprocess.run(["git", "-C", str(bench_run.SKILL), "status", "--porcelain"],
-                               capture_output=True, text=True,
-                               encoding="utf-8").stdout.strip()
-    check("a rev recorded off a dirty tree is marked +dirty",
-          not porcelain or (rev is not None and rev.endswith("+dirty")), rev)
+    can share a rev and a variant name and still be different prompts. Forces the dirty
+    branch with a throwaway untracked file rather than trusting the desk to be dirty
+    when the suite runs — on a clean checkout (CI) that trust would make the assertion
+    vacuous."""
+    probe = bench_run.SKILL / ".bench-dirty-rev-probe"
+    try:
+        probe.write_text("probe\n", encoding="utf-8")
+        rev = bench_run.prompire_rev()
+        check("a rev recorded off a tree forced dirty is marked +dirty",
+              rev is not None and rev.endswith("+dirty"), rev)
+    finally:
+        probe.unlink(missing_ok=True)
 
 
 def check_behavior_coverage():
