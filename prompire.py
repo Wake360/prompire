@@ -771,8 +771,10 @@ def close(args, extra):
 def status(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
+    candidate = pathlib.Path(args.brief)
+    start = candidate.resolve() if candidate.is_dir() else candidate.resolve().parent
     try:
-        root = repo_root(pathlib.Path(args.brief).resolve().parent)
+        root = repo_root(start)
     except RepoError as exc:
         return report_refusal(str(exc), args.json)
     live = active_brief(root)
@@ -828,7 +830,7 @@ def build_parser():
     closed.set_defaults(handler=close)
 
     stated = commands.add_parser("status")
-    stated.add_argument("brief")
+    stated.add_argument("brief", nargs="?", default=".")
     stated.add_argument("--json", action="store_true")
     stated.set_defaults(handler=status)
 

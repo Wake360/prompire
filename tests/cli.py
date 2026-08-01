@@ -554,6 +554,8 @@ def _(repo, checks):
     checks.ok("not inside a git repository" in data.get("message", ""),
               "status refusal must retain the cause")
     checks.ok("Traceback" not in result.stderr, "status discovery must not traceback")
+    defaulted = run("status", "--json", cwd=outside)
+    checks.equal(defaulted.returncode, 2, "default status outside a repo refuses")
 
 
 @case("prepare refuses before mutation when another brief is active")
@@ -874,6 +876,10 @@ def _(repo, checks):
     active = json_out(run("status", path, "--json"))
     checks.equal(active["status"], "active", "initial status")
     checks.ok(active["base"], "active status includes base")
+    defaulted = json_out(run("status", "--json", cwd=repo))
+    checks.equal(defaulted, active, "status without a path uses cwd")
+    explicit_dir = json_out(run("status", ".", "--json", cwd=repo))
+    checks.equal(explicit_dir, active, "status accepts an explicit directory")
     closed = run("close", path)
     checks.equal(closed.returncode, 0, "close before inactive status")
     inactive = json_out(run("status", path, "--json"))
