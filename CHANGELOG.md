@@ -3,6 +3,44 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## Unreleased
+
+**Agent-assisted drafting is isolated by construction instead of audited afterwards.**
+
+### Changed
+
+- `draft --agent` and `--agent-cmd` now run the host model inside a disposable git
+  repository holding a copy of the checkout's Git-visible files, removed when the agent
+  exits. Ignored files, submodules and nested checkouts are not copied, and the
+  snapshot's own `git init`/`commit` runs with `--template=`, an empty `core.hooksPath`
+  and `--no-verify`, so a global `init.templateDir` or `core.hooksPath` cannot make
+  agent drafting impossible on that machine. A `{root}` placeholder in a host's
+  invocation names the snapshot, not the caller's checkout.
+- A symlink is carried into the snapshot only where its target resolves inside the
+  repository, re-aimed there at the snapshot's own copy. Recreated verbatim, a link
+  with an absolute or escaping target still aimed out of the snapshot, so an ordinary
+  relative write by the agent landed in the source checkout — reproduced, and now
+  covered by a `tests/cli.py` case. Where the target resolves decides, not whether it
+  exists: a link that would dangle inside the tree is carried, one that would dangle
+  outside it is dropped.
+- The isolation is bounded and stated as such in `references/threat-model.md`: it holds
+  for paths the agent addresses relative to its workspace. An absolute path the agent
+  composes for itself, the network, and credentials are all untouched by it.
+- `prompire status` takes its brief argument optionally and defaults to `.`, so
+  `prompire status` in any repository reports that repository's armed brief.
+- Next-step commands printed by `prepare` and `draft` are quoted for the shell they are
+  meant to be pasted into (`shlex.join`, or `subprocess.list2cmdline` on Windows), so a
+  brief path containing a space stays one argument.
+
+### Removed
+
+- The post-run `git status` comparison `draft --agent` used to make, refusing the draft
+  when the agent had changed the tree. Announced under 0.9.0 and superseded: it could
+  only report a mutation after it had landed in the caller's checkout, whereas the
+  snapshot means the write has nowhere to land. Gone with it: the up-front refusal when
+  `git status --porcelain` could not answer at all, which used to make agent drafting
+  unavailable rather than unsupervised.
+
 ## 0.9.1 — 2026-08-01
 
 **First PyPI release; the package ships all three host adapters.**
