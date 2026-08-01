@@ -35,6 +35,7 @@ tests/
   hook.py             every hook adapter, as subprocesses, on throwaway repos
   verify.py           acceptance verifier integration cases
   cli.py              prepare, verify, and close integration cases
+  runner.py           suite timeout, continuation, and timing output
   package.py          installed CLI packaging checks
   fixtures.py         builds the throwaway repo the last three measure against
   docs.py             the docs and the code still agree
@@ -58,6 +59,7 @@ python3 tests/hook.py          the hook adapters: blocked vs allowed vs neutral
 python3 tests/encoding.py      every tool's stdout is utf-8 under a cp1252 console
 python3 tests/verify.py        acceptance verifier integration cases
 python3 tests/cli.py           prepare, verify, and close integration cases
+python3 tests/runner.py        run-all timeout and duration reporting
 python3 tests/package.py       installed CLI packaging checks
 python3 tests/docs.py          rule ids, schema keys and docs are consistent
 ```

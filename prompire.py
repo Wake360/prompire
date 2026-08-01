@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -153,8 +154,14 @@ def report_stage(stage, result, json_mode):
     return code
 
 
+def display_command(argv):
+    parts = [str(part) for part in argv]
+    return (subprocess.list2cmdline(parts) if os.name == "nt"
+            else shlex.join(parts))
+
+
 def report_prepared(brief, prompt, checklist, target, json_mode):
-    next_command = f"prompire verify {brief}"
+    next_command = display_command(["prompire", "verify", brief])
     if json_mode:
         print(json.dumps({"status": "prepared", "brief": str(brief),
                           "prompt": str(prompt), "checklist": str(checklist),
@@ -406,11 +413,80 @@ def agent_argv(entry, prompt, root):
     return argv, ("" if embedded else prompt)
 
 
-def repo_state(root):
-    """`git status --porcelain` as one string, or None when git cannot answer."""
-    listed = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
-                            capture_output=True, encoding="utf-8", errors="replace")
-    return None if listed.returncode else listed.stdout
+def _git_visible_paths(root):
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--cached", "--others",
+         "--exclude-standard", "-z"],
+        capture_output=True,
+    )
+    if listed.returncode:
+        message = listed.stderr.decode("utf-8", "replace").strip()
+        raise OSError(message or "git could not list the repository files")
+    # os.fsdecode, not decode(errors="replace"): an undecodable filesystem byte must
+    # survive as a path that can be reopened, not as a replacement character.
+    return [pathlib.Path(os.fsdecode(raw))
+            for raw in listed.stdout.split(b"\0") if raw]
+
+
+def _copy_snapshot_entry(source, target, real_root, snapshot):
+    """Copy one Git-visible entry into the snapshot. A symlink recreated verbatim
+    still aims where it always did, so an ordinary relative write by the agent would
+    land through it in the caller's checkout; each one is re-aimed at the snapshot's
+    own copy instead, or dropped when it resolves out of the tree. What the target
+    resolves to decides, not whether it exists — a dangling link is carried when it
+    would dangle inside the tree and dropped when it would dangle outside it."""
+    if source.is_symlink():
+        # realpath, not readlink: the whole chain has to be followed, or a link into
+        # the tree that hops out again through a second link escapes the check.
+        resolved = pathlib.Path(os.path.realpath(source))
+        if not resolved.is_relative_to(real_root):
+            return  # not this repository's to carry
+        inside = snapshot / resolved.relative_to(real_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(os.path.relpath(inside, target.parent),
+                          target_is_directory=source.is_dir())
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+@contextlib.contextmanager
+def draft_snapshot(root):
+    """A throwaway git repo holding the tree's Git-visible files, for the agent to
+    run in. A drafting agent only reads — claude -p denies writes by default and codex
+    drafts read-only — but headless agy has no read-only mode and --agent-cmd can name
+    anything, so the writes land here instead of in the caller's checkout."""
+    snapshot = pathlib.Path(tempfile.mkdtemp(prefix="prompire-draft-"))
+    try:
+        # Resolved once: a checkout reached through a symlinked parent (/tmp on macOS)
+        # would otherwise make every one of its own links look like an escape.
+        real_root = pathlib.Path(os.path.realpath(root))
+        for rel in _git_visible_paths(root):
+            source = root / rel
+            # git lists a submodule gitlink and an untracked nested checkout as single
+            # directory entries. Their contents belong to their own repository, so the
+            # snapshot carries neither — copying one as a file would refuse the draft.
+            if source.is_dir() and not source.is_symlink():
+                continue
+            if os.path.lexists(source):
+                _copy_snapshot_entry(source, snapshot / rel, real_root, snapshot)
+        # The commit is prompire's machinery, not the caller's: `--template=` keeps a
+        # global `init.templateDir` from seeding hooks, and the hooks path and
+        # `--no-verify` keep the caller's own hooks from running against this tree.
+        commands = (
+            ["git", "init", "-q", "--template="],
+            ["git", "add", "-A"],
+            ["git", "-c", "user.email=draft@prompire",
+             "-c", "user.name=prompire-draft", "-c", "commit.gpgsign=false",
+             "-c", "core.hooksPath=", "commit", "--no-verify",
+             "--allow-empty", "-qm", "draft snapshot"],
+        )
+        for command in commands:
+            subprocess.run(command, cwd=str(snapshot), check=True,
+                           capture_output=True)
+        yield snapshot
+    finally:
+        _rmtree(snapshot)
 
 
 def run_draft_agent(argv, prompt, root):
@@ -444,31 +520,19 @@ def draft(args, extra):
         return report_refusal(f"`{out}` already exists; pick another --out")
     if args.agent or args.agent_cmd:
         prompt = DRAFT_PROMPT.format(sentence=args.sentence)
-        if args.agent:
-            argv, feed = agent_argv(DRAFT_AGENTS[args.agent], prompt, root)
-        else:
-            argv, feed = shlex.split(args.agent_cmd), prompt
-        if not argv:
-            return report_refusal("--agent-cmd is empty")
-        # The tree is snapshotted around the agent run because a drafting agent only
-        # reads: claude -p denies writes by default and codex drafts read-only, but
-        # headless agy has no read-only mode, and --agent-cmd can name anything. A
-        # changed tree is refused, not repaired — the change is the caller's to
-        # inspect, and a draft written on top of it would launder it into the workflow.
-        before = repo_state(root)
-        if before is None:
-            return report_refusal("git cannot report the repository state, so an "
-                                  "agent draft cannot be supervised")
-        answered, trouble = run_draft_agent(argv, feed, root)
-        after = repo_state(root)
-        if after != before:
-            was, now = set(before.splitlines()), set((after or "").splitlines())
-            changed = sorted(line[3:] for line in was ^ now) or ["(unknown paths)"]
-            return report_refusal(
-                "the drafting agent changed the repository ("
-                + ", ".join(changed[:5]) + (", …" if len(changed) > 5 else "")
-                + "); a draft only reads — inspect `git status` and restore before "
-                  "drafting again")
+        try:
+            # The host arguments are built inside the snapshot, so a `{root}` a host
+            # takes as its workspace names the disposable repository too.
+            with draft_snapshot(root) as agent_root:
+                if args.agent:
+                    argv, feed = agent_argv(DRAFT_AGENTS[args.agent], prompt, agent_root)
+                else:
+                    argv, feed = shlex.split(args.agent_cmd), prompt
+                if not argv:
+                    return report_refusal("--agent-cmd is empty")
+                answered, trouble = run_draft_agent(argv, feed, agent_root)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            return report_refusal(f"could not build the draft snapshot: {exc}")
         if trouble is None and answered.returncode:
             tail = (answered.stderr or answered.stdout).strip().splitlines()
             trouble = f"agent exited {answered.returncode}" + (
@@ -483,7 +547,8 @@ def draft(args, extra):
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"drafted {out}")
-    print(f"confirm every `# {DRAFT_MARKER}` line, then: prompire prepare {out}")
+    next_command = display_command(["prompire", "prepare", out])
+    print(f"confirm every `# {DRAFT_MARKER}` line, then: {next_command}")
     return 0
 
 
@@ -723,8 +788,10 @@ def close(args, extra):
 def status(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
+    candidate = pathlib.Path(args.brief)
+    start = candidate.resolve() if candidate.is_dir() else candidate.resolve().parent
     try:
-        root = repo_root(pathlib.Path(args.brief).resolve().parent)
+        root = repo_root(start)
     except RepoError as exc:
         return report_refusal(str(exc), args.json)
     live = active_brief(root)
@@ -780,7 +847,7 @@ def build_parser():
     closed.set_defaults(handler=close)
 
     stated = commands.add_parser("status")
-    stated.add_argument("brief")
+    stated.add_argument("brief", nargs="?", default=".")
     stated.add_argument("--json", action="store_true")
     stated.set_defaults(handler=status)
 

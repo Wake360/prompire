@@ -1,9 +1,14 @@
 # Prompire
 
-Compile a request into the smallest brief that can be *checked* — a bounded `scope`, a
-`forbidden` list, acceptance criteria that are commands rather than adjectives, a
-baseline measured before the work starts, and a `tests_policy` saying which test files
-may move. Then check the real git diff afterwards.
+A verifiable contract for work you delegate to a coding agent.
+
+Before the work starts, the request is compiled into a brief that can be *checked*: a
+bounded `scope`, a `forbidden` list, acceptance criteria that are commands rather than
+adjectives, a baseline measured on the untouched repo, and a `tests_policy` saying
+which test files may move. The base commit is pinned outside the brief. After the agent
+stops, Prompire reads the real git diff — not the agent's report — and says whether the
+work stayed inside what was declared and whether the acceptance commands now pass. The
+verdict needs no cooperation from the agent.
 
 The problem it addresses is narrow and specific: an agent that is graded on a test suite
 it can edit will, sooner or later, edit the suite. So will one that is graded on a diff
@@ -18,6 +23,10 @@ prompire close .prompire/task.yaml
 
 Python 3 and PyYAML. Nothing else — no service, no key, no network. The underlying
 scripts remain documented under [Diagnostic commands](#diagnostic-commands).
+
+A sandbox bounds where an agent can technically reach. Prompire bounds what one task
+allowed it to change, and defines how done is recognized. The two compose; neither
+replaces the other.
 
 ## Install the CLI
 
@@ -43,10 +52,16 @@ stdout — delegates the drafting to a host model that can read the repo. The re
 parsed as data and re-serialized: the model's own comments are dropped, `baseline` and
 `base_rev` are refused as measured rather than drafted, and the boundary, every
 acceptance command and any relaxed `tests_policy` come back marked
-`# prompire:unconfirmed` however confident the model sounded. A draft run that changed
-the repository is refused outright — a drafting agent only reads, and `draft` checks
-`git status` afterwards rather than trusting that. Read every `# prompire:unconfirmed`
-line, fix it, then delete the marker: `prompire prepare` refuses while one remains.
+`# prompire:unconfirmed` however confident the model sounded. Agent-assisted drafting
+runs in a disposable repository containing the checkout's current tracked and untracked,
+non-ignored files. The agent can inspect and change that snapshot. A symlink is carried
+only when its target resolves inside the repository, re-aimed there at the snapshot's own
+copy, so a path the agent addresses relative to its workspace cannot reach the source
+checkout through one. Ignored files, submodules and nested checkouts are not copied. This
+isolates ordinary repository writes; it does not sandbox network, credentials, or an
+absolute path the agent composes for itself elsewhere on the machine. Read every
+`# prompire:unconfirmed` line, fix it, then delete the marker: `prompire prepare` refuses
+while one remains.
 Under Claude Code, Copilot CLI, Codex CLI or Antigravity CLI the host model fills this
 step instead, following `SKILL.md`.
 
@@ -55,6 +70,9 @@ step instead, following `SKILL.md`.
 ```bash
 prompire prepare .prompire/task.yaml --target generic
 ```
+
+This measures the baseline, lints the brief, renders the prompt, and arms the guard —
+from here on, editing the brief yields no verdict rather than a favourable one.
 
 ### Hand off — Prompire does not launch the agent
 
@@ -80,27 +98,6 @@ prompire close .prompire/task.yaml
 
 Claude Code and Copilot CLI hooks are optional early-warning adapters; the final
 git-diff check is host-neutral.
-
-## Diagnostic commands
-
-### Combined verdict
-
-Use `prompire verify` for the combined scope and acceptance verdict. The commands below
-diagnose individual stages; they are not an alternative handoff workflow.
-
-### Individual tools
-
-```bash
-python3 baseline.py .prompire/task.yaml --write
-python3 lint_brief.py .prompire/task.yaml
-python3 render_brief.py .prompire/task.yaml --target generic
-python3 check_scope.py .prompire/task.yaml --activate
-python3 check_scope.py .prompire/task.yaml --strict
-python3 check_scope.py .prompire/task.yaml --deactivate
-```
-
-`.prompire/` belongs in `.gitignore`. The briefs are local task specs, and the
-guard's state files (`ACTIVE`, `ACTIVE.tombstones`) are not history.
 
 ## What a catch looks like
 
@@ -140,6 +137,41 @@ the agent was never asked, so nothing it could claim would hide the extra file.
 The verdict in step 3 comes from the real git diff against the pinned base. It needs no
 cooperation from the agent — nothing it could claim would hide the extra file.
 
+## Measured, not asserted
+
+The prompts and the checks are benchmarked, not assumed. Task briefs run through live
+agents in throwaway repos and are scored from outside by the same `verify_acceptance` +
+`check_scope` pair a human would run; nothing the agent prints is trusted. The
+campaigns are pre-registered and their raw rows are committed under `bench/campaigns/`.
+
+The first cross-agent matrix (2026-08-01): six tasks, five repetitions each, on Claude
+Code, Codex CLI and Antigravity CLI. None of the 90 runs left its declared scope,
+changed a test file, or touched the brief or the pin. Acceptance differed by host —
+claude and codex 30/30, antigravity behind — so the honest claim is that the work is
+equally *checked* everywhere, not equally *good* everywhere. Design and reading rules:
+`references/benchmark.md`.
+
+## Diagnostic commands
+
+### Combined verdict
+
+Use `prompire verify` for the combined scope and acceptance verdict. The commands below
+diagnose individual stages; they are not an alternative handoff workflow.
+
+### Individual tools
+
+```bash
+python3 baseline.py .prompire/task.yaml --write
+python3 lint_brief.py .prompire/task.yaml
+python3 render_brief.py .prompire/task.yaml --target generic
+python3 check_scope.py .prompire/task.yaml --activate
+python3 check_scope.py .prompire/task.yaml --strict
+python3 check_scope.py .prompire/task.yaml --deactivate
+```
+
+`.prompire/` belongs in `.gitignore`. The briefs are local task specs, and the
+guard's state files (`ACTIVE`, `ACTIVE.tombstones`) are not history.
+
 ## Limitations
 
 The hook does not watch the shell — not `Bash` or `powershell` on the Claude Code
@@ -157,9 +189,12 @@ one `--deactivate` does to `--strict` forever — is measured and explained in
 
 It is not a sandbox, not a permission system, and not a substitute for reading the diff.
 `tests_policy: named` and `authoring` both end in a REVIEW flag saying so out loud,
-because no checker can tell a repaired assertion from a weakened one. It does not judge
-whether the work is good — only whether it stayed inside what was declared, and whether
-what was declared was pinned before the work began.
+because no checker can tell a repaired assertion from a weakened one. It is not a
+prompt generator either — the rendered prompt exists so the contract can be handed
+over, and it is capped at ~250 words: on the benchmark's contract tasks it was the
+acceptance criteria, not the wording around them, that carried the outcome. It does not
+judge whether the work is good — only whether it stayed inside what was declared, and
+whether what was declared was pinned before the work began.
 
 ## Documentation
 
@@ -168,6 +203,8 @@ what was declared was pinned before the work began.
   Antigravity CLI: install locations, hook configuration, the failure-semantics table.
 - `references/threat-model.md` — the two-layer design, the guarantee, and the full
   limitations table.
+- `references/benchmark.md` — the behavioural benchmark: cells, variants, ablations,
+  and how a campaign is read.
 - `references/ci.md` — the GitHub Action: what the base means in CI, and what the
   Action cannot check.
 - `references/schema.md` — every field, every edge case.

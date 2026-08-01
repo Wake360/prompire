@@ -636,6 +636,37 @@ def encoding_problems():
     return problems
 
 
+def _walk_uses(node, out):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "uses" and isinstance(v, str):
+                out.append(v)
+            else:
+                _walk_uses(v, out)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_uses(item, out)
+
+
+def action_pin_problems():
+    out = []
+    pinned = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+    docker_pinned = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+    paths = set((SKILL / ".github").rglob("*.yml"))
+    paths.update((SKILL / ".github").rglob("*.yaml"))
+    for path in sorted(paths):
+        rel = path.relative_to(SKILL).as_posix()
+        refs = []
+        _walk_uses(yaml.safe_load(path.read_text(encoding="utf-8")), refs)
+        for ref in refs:
+            if ref.startswith("./"):
+                continue
+            if pinned.fullmatch(ref) or docker_pinned.fullmatch(ref):
+                continue
+            out.append(f"{rel} uses mutable third-party action `{ref}`")
+    return out
+
+
 def main():
     problems = []
     rules = enforced_rule_ids()
@@ -716,6 +747,7 @@ def main():
     problems += overclaim_problems()
     problems += encoding_problems()
     problems += decoder_problems()
+    problems += action_pin_problems()
 
     skill_md = read("SKILL.md")
     for rel, name in (("README.md", "hook_copilot_guard.py"),

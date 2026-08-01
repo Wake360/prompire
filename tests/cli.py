@@ -14,6 +14,8 @@ import sys
 import tempfile
 import time
 
+import yaml
+
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 CLI = ROOT / "prompire.py"
@@ -45,9 +47,11 @@ class Checks:
         self.ok(got == want, f"{message}: got {got!r}, want {want!r}")
 
 
-def run(*args, cwd=None):
+def run(*args, cwd=None, env=None):
+    child_env = dict(ENV, **(env or {}))
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
-                          capture_output=True, text=True, encoding="utf-8", env=ENV,
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=child_env,
                           cwd=None if cwd is None else str(cwd))
 
 
@@ -96,9 +100,11 @@ def json_out(result):
 
 @case("draft writes an unconfirmed brief and prepare refuses it as-is")
 def _(repo, checks):
-    result = run("draft", "Add a health endpoint", "--out", ".prompire/task.yaml", cwd=repo)
+    result = run("draft", "Add a health endpoint", "--out", ".prompire/task brief.yaml", cwd=repo)
     checks.equal(result.returncode, 0, "draft exit")
-    path = pathlib.Path(repo) / ".prompire" / "task.yaml"
+    checks.ok("'" in result.stdout or '"' in result.stdout,
+              "draft confirmation quotes the path with spaces")
+    path = pathlib.Path(repo) / ".prompire" / "task brief.yaml"
     text = path.read_text(encoding="utf-8")
     checks.ok("Add a health endpoint" in text, "the sentence must become the goal")
     checks.ok("prompire:unconfirmed" in text, "open items must be visibly unconfirmed")
@@ -278,23 +284,208 @@ def _(repo, checks):
     checks.equal(missing.returncode, 2, "a missing agent binary must be a refusal")
 
 
-@case("draft refuses when the agent changed the repository")
+@case("draft agent writes only inside a disposable snapshot")
 def _(repo, checks):
-    out = pathlib.Path(repo) / ".prompire" / "agent.yaml"
-    # A drafting agent only reads; this one writes a stray file and still answers
-    # with a perfectly valid draft. The valid reply must not buy the mutation a pass.
-    (pathlib.Path(repo) / "fake_agent.py").write_text(
-        "import sys\nsys.stdin.read()\n"
-        "open('stray.txt', 'w', encoding='utf-8').write('oops')\n"
+    root = pathlib.Path(repo)
+    cart = root / "src" / "cart.py"
+    cart.write_text("dirty source\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".prompire/\n__pycache__/\n.env\n",
+                                     encoding="utf-8")
+    ignored = root / ".env"
+    ignored.write_text("source secret\n", encoding="utf-8")
+    note = root / "notes.txt"
+    note.write_text("source note\n", encoding="utf-8")
+    # The agent records where it ran, by absolute path: an empty temp root at the end
+    # is equally true of a snapshot that was never made there, so the emptiness check
+    # only means "removed" once this one says a snapshot was really made there.
+    where = root / "agent-cwd.txt"
+    (root / "fake_agent.py").write_text(
+        "import os, pathlib, sys\n"
+        "sys.stdin.read()\n"
+        f"pathlib.Path({where.as_posix()!r}).write_text(os.getcwd())\n"
+        "assert pathlib.Path('src/cart.py').read_text() == 'dirty source\\n'\n"
+        "pathlib.Path('src/cart.py').write_text('agent cart\\n')\n"
+        "pathlib.Path('.env').write_text('agent secret\\n')\n"
+        "pathlib.Path('notes.txt').write_text('agent note\\n')\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
+        encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    temp_root = root / "draft-temp"
+    temp_root.mkdir()
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", root / ".prompire" / "agent.yaml", cwd=root,
+                 env={"TMPDIR": str(temp_root), "TMP": str(temp_root),
+                      "TEMP": str(temp_root)})
+
+    checks.equal(result.returncode, 0, "snapshot draft exit")
+    checks.equal(cart.read_text(encoding="utf-8"), "dirty source\n",
+                 "tracked dirty source stays unchanged")
+    checks.equal(ignored.read_text(encoding="utf-8"), "source secret\n",
+                 "ignored source stays unchanged")
+    checks.equal(note.read_text(encoding="utf-8"), "source note\n",
+                 "untracked source stays unchanged")
+    ran_in = where.read_text(encoding="utf-8").strip() if where.exists() else ""
+    checks.ok(bool(ran_in) and pathlib.Path(ran_in).resolve().is_relative_to(
+        temp_root.resolve()), f"the agent must run in a snapshot under {temp_root}, "
+        f"not in {ran_in or '(nothing recorded)'}")
+    checks.equal(list(temp_root.iterdir()), [], "draft snapshot is removed")
+
+
+@case("draft snapshot re-targets the symlinks it carries and drops the rest")
+def _(repo, checks):
+    # A symlink recreated verbatim points back out of the snapshot: an ordinary
+    # relative write by the agent then lands wherever the link aims, which for an
+    # absolute target is the caller's own checkout.
+    root = pathlib.Path(repo)
+    outside = root.parent / (root.name + "-outside")
+    outside.mkdir(exist_ok=True)
+    (outside / "outside.txt").write_text("outside secret\n", encoding="utf-8")
+    for name in ("secret_abs.txt", "secret_rel.txt", "secret_dotdot.txt"):
+        (root / name).write_text("source secret\n", encoding="utf-8")
+    (root / "deep").mkdir(exist_ok=True)
+    links = {
+        "abs_in.txt": root / "secret_abs.txt",         # absolute, resolves inside
+        "rel_in.txt": pathlib.Path("secret_rel.txt"),  # relative, resolves inside
+        "deep/dotdot_in.txt": pathlib.Path("..") / "secret_dotdot.txt",
+        "dangling_in.txt": pathlib.Path("absent_in.txt"),
+        "dir_in": pathlib.Path("src"),                 # symlink to a directory inside
+        "abs_out.txt": outside / "outside.txt",        # resolves outside
+        "dangling_out.txt": outside / "absent_out.txt",
+        "mid.txt": outside / "outside.txt",
+        "two_hop.txt": pathlib.Path("mid.txt"),        # inside, but escapes in two hops
+    }
+    try:
+        for name, target in links.items():
+            (root / name).symlink_to(target)
+    except (NotImplementedError, OSError):
+        return
+    subprocess.run(["git", "-c", "user.email=t@example", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", "add", "-A"],
+                   cwd=str(root), check=True, capture_output=True)
+
+    carried = ("abs_in.txt", "rel_in.txt", "deep/dotdot_in.txt", "dangling_in.txt")
+    dropped = ("abs_out.txt", "dangling_out.txt", "mid.txt", "two_hop.txt")
+    report = root / "link-report.txt"
+    (root / "fake_agent.py").write_text(
+        "import json, pathlib, sys\n"
+        "sys.stdin.read()\n"
+        f"carried = {list(carried)!r}\n"
+        f"dropped = {list(dropped)!r}\n"
+        "seen = {}\n"
+        "for name in carried + dropped:\n"
+        "    seen[name] = pathlib.Path(name).is_symlink()\n"
+        "    pathlib.Path(name).write_text('agent wrote ' + name + '\\n')\n"
+        "seen['dir_in'] = pathlib.Path('dir_in').is_symlink()\n"
+        "pathlib.Path('dir_in/inside.py').write_text('agent wrote through dir\\n')\n"
+        f"pathlib.Path({report.as_posix()!r}).write_text(json.dumps(seen))\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
+        encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    out = root / ".prompire" / "agent.yaml"
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd, "--out", out, cwd=root)
+    checks.equal(result.returncode, 0,
+                 f"draft exit beside symlinks: {result.stdout}{result.stderr}")
+    checks.ok(out.exists(), "the draft must still be written")
+
+    for name in ("secret_abs.txt", "secret_rel.txt", "secret_dotdot.txt"):
+        checks.equal((root / name).read_text(encoding="utf-8"), "source secret\n",
+                     f"a link inside the repo must not carry a write into {name}")
+    checks.equal((outside / "outside.txt").read_text(encoding="utf-8"),
+                 "outside secret\n", "a link out of the repo must not carry a write")
+    for absent in (root / "absent_in.txt", outside / "absent_out.txt",
+                   root / "src" / "inside.py"):
+        checks.ok(not absent.exists(),
+                  f"the agent must not create {absent} in the source checkout")
+
+    seen = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
+    for name in carried + ("dir_in",):
+        # Kept, but re-aimed at the snapshot's own copy — including a link that dangles
+        # there, since the decision is where the target resolves, not whether it exists.
+        checks.equal(seen.get(name), True, f"{name} must reach the agent as a symlink")
+    for name in dropped:
+        checks.equal(seen.get(name), False,
+                     f"{name} resolves outside the repository and must not be carried")
+
+
+@case("draft snapshots a repo holding a submodule and a nested checkout")
+def _(repo, checks):
+    # `git ls-files` reports both as one *directory* entry: a gitlink under --cached, a
+    # nested checkout under --others. Copying either as a file is an OSError, which the
+    # draft turns into a refusal — every repo with a submodule would lose agent drafting.
+    root = pathlib.Path(repo)
+
+    def git(*command, cwd):
+        subprocess.run(["git", "-c", "user.email=t@example", "-c", "user.name=t",
+                        "-c", "commit.gpgsign=false", *command],
+                       cwd=str(cwd), check=True, capture_output=True)
+
+    nested = root / "nested"
+    nested.mkdir()
+    (nested / "inner.txt").write_text("inner\n", encoding="utf-8")
+    git("init", "-q", cwd=nested)
+    sub = root / "sub"
+    sub.mkdir()
+    (sub / "file.txt").write_text("sub\n", encoding="utf-8")
+    git("init", "-q", cwd=sub)
+    git("add", "-A", cwd=sub)
+    git("commit", "-qm", "sub", cwd=sub)
+    head = subprocess.run(["git", "-C", str(sub), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, encoding="utf-8",
+                          check=True).stdout.strip()
+    git("update-index", "--add", "--cacheinfo", f"160000,{head},sub", cwd=root)
+
+    out = root / ".prompire" / "agent.yaml"
+    # The snapshot deliberately carries neither: a submodule's contents belong to its
+    # own repository, and a nested checkout is not this repository's to copy.
+    (root / "fake_agent.py").write_text(
+        "import pathlib, sys\n"
+        "sys.stdin.read()\n"
+        "assert not pathlib.Path('sub').exists()\n"
+        "assert not pathlib.Path('nested').exists()\n"
         "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
         encoding="utf-8")
     cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
     result = run("draft", "Improve the cart", "--agent-cmd", cmd,
-                 "--out", str(out), cwd=repo)
-    checks.equal(result.returncode, 2, "a writing agent must be a refusal")
-    checks.ok("stray.txt" in result.stdout,
-              "the refusal must name what the agent changed")
-    checks.ok(not out.exists(), "no draft may be written over a mutated tree")
+                 "--out", out, cwd=root)
+    checks.equal(result.returncode, 0,
+                 f"draft exit beside a submodule: {result.stdout}{result.stderr}")
+    checks.ok(out.exists(), "the draft must still be written")
+
+
+@case("draft snapshot does not run the caller's global git hooks")
+def _(repo, checks):
+    # The snapshot's own commit is machinery, not the caller's commit. A global
+    # `core.hooksPath` or `init.templateDir` — what `pre-commit init-templatedir`
+    # writes — would otherwise run the caller's hooks against a synthetic tree, and a
+    # hook that exits non-zero would make agent drafting impossible on that machine.
+    root = pathlib.Path(repo)
+    home = root / "fake-home"
+    marker = root / "hook-ran.txt"
+    body = f"#!/bin/sh\necho ran >> {marker.as_posix()}\nexit 1\n"
+    for rel in ("hooks/pre-commit", "hooks/post-commit", "template/hooks/pre-commit"):
+        hook = home / rel
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text(body, encoding="utf-8")
+        hook.chmod(0o755)
+    (home / ".gitconfig").write_text(
+        f"[core]\n\thooksPath = {(home / 'hooks').as_posix()}\n"
+        f"[init]\n\ttemplateDir = {(home / 'template').as_posix()}\n", encoding="utf-8")
+    out = root / ".prompire" / "agent.yaml"
+    (root / "fake_agent.py").write_text(
+        "import sys\nsys.stdin.read()\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n", encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    # A synthetic HOME is how git is made to read that config; it also hides a PyYAML
+    # installed under the real home, so the child is told where to find it again.
+    site = str(pathlib.Path(yaml.__file__).resolve().parent.parent)
+    path = os.pathsep.join([site] + ([ENV["PYTHONPATH"]] if ENV.get("PYTHONPATH") else []))
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd, "--out", out,
+                 cwd=root, env={"HOME": str(home), "PYTHONPATH": path,
+                                "GIT_CONFIG_GLOBAL": str(home / ".gitconfig")})
+    checks.equal(result.returncode, 0,
+                 f"draft exit under a failing global hook: {result.stdout}{result.stderr}")
+    checks.ok(not marker.exists(), "no hook of the caller's may run for the snapshot")
+    checks.ok(out.exists(), "the draft must still be written")
 
 
 @case("draft agent flags are validated before anything runs")
@@ -321,9 +512,18 @@ def _(repo, checks):
               "neither the prompt from stdin nor an untrusted cwd as a workspace")
     sys.path.insert(0, str(ROOT))
     try:
-        from prompire import agent_argv
+        from prompire import agent_argv, draft_snapshot
     finally:
         sys.path.remove(str(ROOT))
+    snapshot_path = None
+    try:
+        with draft_snapshot(pathlib.Path(repo)) as made:
+            snapshot_path = made
+            raise RuntimeError("stop inside snapshot")
+    except RuntimeError:
+        pass
+    checks.ok(snapshot_path is not None and not snapshot_path.exists(),
+              "snapshot cleanup runs when draft processing raises")
     sub, feed = agent_argv(["agy", "-p", "{prompt}", "--add-dir", "{root}"],
                            "draft this", pathlib.Path(repo))
     checks.equal(sub, ["agy", "-p", "draft this", "--add-dir",
@@ -430,6 +630,10 @@ def _(repo, checks):
     checks.ok("not inside a git repository" in data.get("message", ""),
               "status refusal must retain the cause")
     checks.ok("Traceback" not in result.stderr, "status discovery must not traceback")
+    defaulted = run("status", "--json", cwd=outside)
+    checks.equal(defaulted.returncode, 2, "default status outside a repo refuses")
+    checks.equal(json_out(defaulted).get("status"), "refused",
+                 "default status refusal is structured")
 
 
 @case("prepare refuses before mutation when another brief is active")
@@ -514,6 +718,23 @@ def _(repo, checks):
         command = f"prompire scope '{path}' --strict"
     checks.equal(first_box, f"- [ ] `{command}`",
                  "CLI checklist must use the installed command and quote the brief")
+
+
+@case("displayed next commands quote brief paths")
+def _(repo, checks):
+    sys.path.insert(0, str(ROOT))
+    import prompire
+    original = prompire.os.name
+    try:
+        prompire.os.name = "posix"
+        checks.equal(prompire.display_command(["prompire", "verify", "task brief.yaml"]),
+                     "prompire verify 'task brief.yaml'", "POSIX command")
+        prompire.os.name = "nt"
+        checks.equal(prompire.display_command(["prompire", "verify", "task brief.yaml"]),
+                     'prompire verify "task brief.yaml"', "Windows command")
+    finally:
+        prompire.os.name = original
+        sys.path.remove(str(ROOT))
 
 
 @case("verify stops before acceptance on a strict scope finding")
@@ -733,6 +954,10 @@ def _(repo, checks):
     active = json_out(run("status", path, "--json"))
     checks.equal(active["status"], "active", "initial status")
     checks.ok(active["base"], "active status includes base")
+    defaulted = json_out(run("status", "--json", cwd=repo))
+    checks.equal(defaulted, active, "status without a path uses cwd")
+    explicit_dir = json_out(run("status", ".", "--json", cwd=repo))
+    checks.equal(explicit_dir, active, "status accepts an explicit directory")
     closed = run("close", path)
     checks.equal(closed.returncode, 0, "close before inactive status")
     inactive = json_out(run("status", path, "--json"))
@@ -913,12 +1138,15 @@ def _(repo, checks):
 
 @case("json mode emits one parseable object and no prose")
 def _(repo, checks):
-    path = brief(repo)
+    path = brief(repo, "task brief")
     result = run("prepare", path, "--json")
     data = json_out(result)
     checks.equal(result.returncode, 0, "JSON prepare exit")
     checks.equal(data["status"], "prepared", "JSON prepared status")
     checks.equal(result.stderr, "", "JSON mode must not emit child prose to stderr")
+    checks.ok("task brief.yaml" in data["next"], "JSON next command keeps the path")
+    quoted = f'"{path}"' if os.name == "nt" else f"'{path}'"
+    checks.ok(quoted in data["next"], "JSON next command quotes the path")
 
 
 def main():
