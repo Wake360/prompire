@@ -34,7 +34,7 @@ import fixtures
 import verify_acceptance
 from behaviors import BEHAVIORS
 from brief_common import is_test_path, load_brief, norm_path, utf8_stdio
-from variants import BRIEF_EDITS, VARIANTS
+from variants import BRIEF_EDITS, REPO_FILES, VARIANTS
 
 BRIEF_REL = ".prompire/brief.yaml"
 # Restored before every measurement — see run_cell.
@@ -47,12 +47,24 @@ def tool(repo, name, *args):
                           encoding="utf-8")
 
 
-def prepare(task_path, workdir):
-    """Fresh fixture repo with the task brief measured, armed and lintable."""
+def prepare(task_path, workdir, variant=None):
+    """Fresh fixture repo with the task brief measured, armed and lintable.
+
+    A variant's REPO_FILES land here, before `baseline.py --write`: they have to be
+    inside `base_rev`, or the diff afterwards reads them as the agent's own
+    out-of-scope writes. `.prompire/` is gitignored in the fixture, so the `add -A`
+    below picks up the planted files and not the brief.
+    """
     repo = fixtures.build(pathlib.Path(workdir) / "repo")
     brief = repo / BRIEF_REL
     brief.parent.mkdir(exist_ok=True)
     shutil.copy(task_path, brief)
+    files = REPO_FILES.get(variant)
+    if files:
+        for rel, body in files(load_brief(str(brief))).items():
+            fixtures.write(repo, rel, body)
+        fixtures.git(repo, "add", "-A")
+        fixtures.git(repo, "commit", "-qm", f"{variant}: durable rules in the repo")
     for args in (("baseline.py", BRIEF_REL, "--write"),
                  ("check_scope.py", BRIEF_REL, "--activate"),
                  ("lint_brief.py", BRIEF_REL)):
@@ -254,7 +266,7 @@ def prompire_rev():
 def run_cell(task_path, variant, agent, keep=False):
     tmp = tempfile.mkdtemp(prefix="prompire-bench-")
     try:
-        repo, brief = prepare(task_path, tmp)
+        repo, brief = prepare(task_path, tmp, variant)
         brief_data = load_brief(str(brief))
         base = str(brief_data.get("base_rev"))
         prompt = VARIANTS[variant](brief_data, BRIEF_REL)

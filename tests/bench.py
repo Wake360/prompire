@@ -31,7 +31,7 @@ import report
 import run as bench_run
 import variants
 from behaviors import BEHAVIORS
-from brief_common import load_brief
+from brief_common import as_list, load_brief
 from variants import VARIANTS, STATE_NOTES
 
 TASKS = SKILL / "bench" / "tasks"
@@ -270,6 +270,34 @@ ABLATION_CONTRACT = {
         "never": (),
         "keeps": ("Files you may edit:", "check_scope.py"),
     },
+    # The host-duplication ablations. Each keeps every factor it is not about, and the
+    # phrases it removes are per-brief, so they live in `_dynamic_contract` below.
+    "no_ask_clause": {
+        "owns": ("Ask before any risky or hard-to-undo step.",),
+        "never": (),
+        # The half that stays is the half no host system prompt duplicates.
+        "keeps": ("The listed paths are the whole boundary", "Files you may edit:",
+                  "check_scope.py", "Done when all of these hold:",
+                  "Do not create, edit, rename or delete any test file."),
+    },
+    "no_redundant_forbidden": {
+        "owns": (),
+        "never": (),
+        # `tests_policy` renders its own prohibition and is a separate field: dropping
+        # a redundant `tests/**` bullet must not take the prohibition with it, or this
+        # becomes a two-factor ablation.
+        "keeps": ("Files you may edit:", "check_scope.py",
+                  "Ask before any risky or hard-to-undo step.",
+                  "Do not create, edit, rename or delete any test file."),
+    },
+    "durable_dedupe": {
+        "owns": ("Never touch:",
+                 "Do not create, edit, rename or delete any test file."),
+        "never": (),
+        "keeps": ("Files you may edit:", "check_scope.py",
+                  "Done when all of these hold:",
+                  "Ask before any risky or hard-to-undo step."),
+    },
 }
 
 
@@ -286,11 +314,20 @@ def _dynamic_contract(brief):
     cmd = str((brief.get("acceptance") or [{}])[0].get("cmd") or "").strip()
     path = str((brief.get("scope") or [""])[0] or "").strip()
     bullet = f"- {path}" if path else ""
+    # Which `forbidden` bullets each of the two boundary-wording ablations removes is a
+    # property of the brief, not of the variant: `no_redundant_forbidden` drops only the
+    # entries no `scope` pattern can reach, and `durable_dedupe` drops the block whole.
+    redundant = tuple(f"- {e}" for e in variants.redundant_forbidden(brief))
+    forbidden = tuple(f"- {e}" for e in as_list(brief.get("forbidden")))
+    constraints = ("Keep true:",) if as_list(brief.get("constraints")) else ()
     return {
         "no_state":      {"owns": (), "keeps": (cmd, path)},
         "no_guard":      {"owns": (), "keeps": (cmd, path)},
         "no_bounds":     {"owns": (bullet,), "keeps": (cmd,)},
         "no_acceptance": {"owns": (cmd,), "keeps": (path,)},
+        "no_ask_clause": {"owns": (), "keeps": (cmd, bullet) + forbidden},
+        "no_redundant_forbidden": {"owns": redundant, "keeps": (cmd, bullet)},
+        "durable_dedupe": {"owns": forbidden + constraints, "keeps": (cmd, bullet)},
     }
 
 
@@ -363,7 +400,11 @@ def check_ablation_fidelity():
 # the only line render_prompt emits the brief path on, so it removes the disclosure along
 # with the sentence — and its factor is the external check itself, which is rendered, not
 # stored in the brief at all.
-HANDS_OVER_AUTHOR_BRIEF = ("current", "persona", "no_guard")
+# `durable_dedupe` is here for a different reason from the other three: it moves the
+# rules it cuts into AGENTS.md/CLAUDE.md inside the repo (REPO_FILES), so the agent is
+# *meant* to be able to find them. Editing the brief as well would make it an ablation
+# of the rules rather than of where they are stated.
+HANDS_OVER_AUTHOR_BRIEF = ("current", "persona", "no_guard", "durable_dedupe")
 
 
 def check_brief_edits_invariants():
@@ -464,6 +505,12 @@ DISK_KEYS = {
                      "autonomy", "base_rev"),
         "plus_acceptance": ("goal", "acceptance", "base_rev", "baseline"),
         "plus_bounds": ("goal", "scope", "forbidden", "base_rev"),
+        "no_ask_clause": ("goal", "scope", "forbidden", "tests_policy", "acceptance",
+                          "base_rev", "baseline"),
+        # Both of T05's `forbidden` entries are unreachable from `scope`, so the key
+        # goes rather than shrinking — `forbidden: []` is a different brief.
+        "no_redundant_forbidden": ("goal", "scope", "tests_policy", "acceptance",
+                                   "autonomy", "base_rev", "baseline"),
     },
     # T01 differs from T05 by carrying `manual_checks`, which is the whole reason it is
     # here: on T05 alone the additive rows cannot tell a lambda that drops the key from
@@ -478,6 +525,10 @@ DISK_KEYS = {
                      "manual_checks", "autonomy", "base_rev"),
         "plus_acceptance": ("goal", "acceptance", "base_rev", "baseline"),
         "plus_bounds": ("goal", "scope", "forbidden", "base_rev"),
+        "no_ask_clause": ("goal", "scope", "forbidden", "tests_policy", "acceptance",
+                          "manual_checks", "base_rev", "baseline"),
+        "no_redundant_forbidden": ("goal", "scope", "tests_policy", "acceptance",
+                                   "manual_checks", "autonomy", "base_rev", "baseline"),
     },
 }
 

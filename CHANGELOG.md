@@ -31,6 +31,26 @@ lints clean today can fail on the next minor, and this file is where that is rec
 - Next-step commands printed by `prepare` and `draft` are quoted for the shell they are
   meant to be pasted into (`shlex.join`, or `subprocess.list2cmdline` on Windows), so a
   brief path containing a space stays one argument.
+- Every prompt target now closes with "Do not edit the brief or Prompire's state
+  files." It was a `copilot`-only sentence, but the pin makes any edit of the brief
+  produce *no verdict* and the hook refuses writes to the state files on every host, so
+  the three other targets were the inconsistent ones. `tests/golden.py` asserts it.
+- The `copilot` prompt no longer tells the agent the hook cannot see shell commands.
+  A prompt states what is checked; the hook's blind spots stay documented in
+  `references/threat-model.md`, which is written for the operator deciding whether to
+  deploy, not for the agent while it runs.
+
+### Added
+
+- Three ablations in `bench/variants.py` — `no_ask_clause`,
+  `no_redundant_forbidden` and `durable_dedupe` — each cutting something a coding
+  agent's own system prompt already carries, so the matrix can say whether Prompire
+  has to spend the words. `durable_dedupe` needs its rules to exist somewhere, so
+  `bench/run.py` gained `REPO_FILES`: files a variant installs in the fixture repo
+  inside `prepare()`, committed ahead of `baseline.py --write` so they land in
+  `base_rev` instead of the diff. Pre-registration:
+  `bench/campaigns/2026-08-01-wording-cuts/`. Nothing moves into `render_brief.py`
+  until that campaign runs.
 
 ### Removed
 

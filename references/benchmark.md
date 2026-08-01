@@ -18,7 +18,8 @@ A cell is task × variant × agent:
 - **variant** — a prompt renderer in `bench/variants.py`. `current` is what
   `render_brief.py` produces today; every other entry is a hypothesis. A
   variant that does not beat `current` across the matrix does not move into
-  the renderer. `no_state`, `no_guard`, `no_bounds` and `no_acceptance` are
+  the renderer. `no_state`, `no_guard`, `no_bounds`, `no_acceptance`,
+  `no_ask_clause`, `no_redundant_forbidden` and `durable_dedupe` are
   ablations — each
   removes exactly one thing the brief adds, so the matrix says which *part*
   earns its tokens rather than only whether the brief as a whole does.
@@ -66,6 +67,22 @@ A cell is task × variant × agent:
   `ABLATION_CONTRACT` in `tests/bench.py` — every phrase an ablation owns
   must be absent from its render and present in some control render, so a cut
   that stopped matching fails there instead of scoring.
+  `no_ask_clause`, `no_redundant_forbidden` and `durable_dedupe` are a
+  different kind of ablation: each removes something a coding agent's *own*
+  system prompt already carries, so the question is not whether the factor
+  matters but whether Prompire has to spend words on it. `no_ask_clause` cuts
+  the first half of the autonomy sentence — Claude Code and Codex both say it
+  themselves — and keeps the second half, which they contradict rather than
+  duplicate. `no_redundant_forbidden` cuts the `forbidden` bullets no `scope`
+  pattern can reach, since the allowlist already refuses them; the rule for
+  "can reach" lives in `bench/variants.py` and not in `brief_common.py`, because
+  it is a claim about what the prompt needs to say and not about where the
+  boundary is. `durable_dedupe` cuts what a durable AGENTS.md / CLAUDE.md would
+  carry and has `bench/run.py` install that file in the repo — `REPO_FILES`,
+  written and committed inside `prepare()` before `baseline.py --write` so the
+  file sits inside `base_rev` rather than showing up in the diff as the agent's
+  own write. Ablating the text without installing the file would measure a
+  shorter prompt rather than a deduplicated one.
   `bare` is the opposite control: the goal line alone, the
   request as it would have arrived without Prompire. It answers whether the
   brief earns the tokens it costs, and the comparison is fair because both

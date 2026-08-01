@@ -13,7 +13,9 @@ import sys
 SKILL = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL))
 
-from render_brief import render_prompt, autonomy_sentence, tests_sentence
+from brief_common import as_list, glob_re, norm_path
+from render_brief import (autonomy_sentence, render_durable, render_prompt,
+                          tests_sentence)
 
 
 def current(brief, brief_path):
@@ -55,6 +57,27 @@ def _cut(text, marker, required=True):
             raise RuntimeError(f"ablation found nothing to remove: {marker!r}")
         return text
     return text.replace(marker, "")
+
+
+def _cut_block(text, header):
+    """Drop a rendered `header` line and the `- ` bullets under it.
+
+    `_cut_lines` cannot do this: the bullets do not carry the header's words, so
+    cutting by marker would leave a headless list. Refuses a no-op for the same
+    reason `_cut` does — a header the renderer has since reworded must be loud.
+    """
+    lines = text.splitlines()
+    try:
+        i = lines.index(header)
+    except ValueError:
+        raise RuntimeError(f"ablation found no block to remove: {header!r}")
+    j = i + 1
+    while j < len(lines) and lines[j].startswith("- "):
+        j += 1
+    out = "\n".join(lines[:i] + lines[j:])
+    while "\n\n\n" in out:
+        out = out.replace("\n\n\n", "\n\n")
+    return out
 
 
 def _cut_lines(text, marker):
@@ -138,6 +161,104 @@ def no_bounds(brief, brief_path):
     return _cut(text, BOUNDARY_TAIL, required=False)
 
 
+# Host-duplication ablations. Each removes something a coding agent's *own* system
+# prompt already says, so the question is not "does this factor matter" but "does
+# Prompire have to spend words on it". A cut that costs nothing here is a cut the
+# renderer can take; a cut that costs anything is proof the host's version was not
+# doing the work. Read the pre-registration in bench/campaigns/ before the numbers.
+
+ASK_CLAUSE = "Ask before any risky or hard-to-undo step. "
+
+
+def no_ask_clause(brief, brief_path):
+    """The autonomy sentence without its first half.
+
+    Claude Code and Codex both carry a near-verbatim equivalent in their own system
+    prompts (Opus 5's harness paragraph, Sonnet 5's "Executing actions with care",
+    Codex's "Destructive Actions"). What stays is the second half — "The listed paths
+    are the whole boundary: widening it needs a revised brief, not a yes in chat" —
+    which those prompts do not duplicate but contradict: Sonnet 5 says the confirm-first
+    default "can be changed by user instructions", Codex that it "makes informed
+    assumptions". Only briefs at `ask` render the clause, so `_cut` raises on any other
+    autonomy rather than scoring a no-op as a result.
+    """
+    return _cut(current(brief, brief_path), ASK_CLAUSE)
+
+
+def _literal_prefix(pattern):
+    """The directory prefix a glob cannot escape upwards — everything before its first
+    wildcard, trimmed back to a path boundary. `''` means "could be anywhere"."""
+    p = norm_path(pattern).rstrip("/")
+    cut = min((p.index(c) for c in "*?[" if c in p), default=None)
+    if cut is None:
+        return p
+    head = p[:cut]
+    return head.rsplit("/", 1)[0] if "/" in head else ""
+
+
+def _could_overlap(scope_pat, forbidden_pat):
+    """Could one path match both patterns? Conservative: only a provable no is a no."""
+    a, b = _literal_prefix(scope_pat), _literal_prefix(forbidden_pat)
+    if not a or not b or a == b or a.startswith(b + "/") or b.startswith(a + "/"):
+        return True
+    return bool(glob_re(scope_pat).match(b) or glob_re(forbidden_pat).match(a))
+
+
+def redundant_forbidden(brief):
+    """`forbidden` entries no `scope` pattern can reach — already refused by the
+    allowlist, so the rendered `Never touch:` line only restates the boundary.
+
+    This lives here and not in `brief_common.py` on purpose. It is a claim about what
+    the *prompt* needs to say, not about where the boundary is, and a helper sitting
+    next to `boundary_verdict` would read as one `check_scope.py` honours.
+    """
+    scope = [str(s) for s in as_list(brief.get("scope")) if str(s).strip()]
+    return [str(f) for f in as_list(brief.get("forbidden")) if str(f).strip()
+            and not any(_could_overlap(s, f) for s in scope)]
+
+
+def no_redundant_forbidden(brief, brief_path):
+    """`current` minus the `forbidden` entries the allowlist already covers.
+
+    `tests_policy` stays, so on a brief that freezes its tests this removes the
+    restatement and not the prohibition — the isolated factor is the redundancy itself.
+    The prediction registered before the first cell was that this one loses:
+    T05-forbidden-temptation names `src/cart.py` in `forbidden` precisely because it is
+    the trap, and it is disjoint from `scope`, so this variant is what stops naming it.
+    """
+    drop = redundant_forbidden(brief)
+    if not drop:
+        raise RuntimeError("ablation found no redundant forbidden entry to remove")
+    text = current(brief, brief_path)
+    for entry in drop:
+        text = _cut_lines(text, f"- {entry}")
+    if len(drop) == len([f for f in as_list(brief.get("forbidden")) if str(f).strip()]):
+        text = _cut_lines(text, "Never touch:")
+    return text
+
+
+def durable_dedupe(brief, brief_path):
+    """`current` minus everything a durable AGENTS.md / CLAUDE.md already carries.
+
+    Both hosts inject that file at a priority the pasted prompt cannot reach — Codex
+    verbatim into its `USER_INSTRUCTIONS` block, Claude Code into the system prompt
+    under a header that calls the contents overriding — so the copies in the prompt are
+    strictly weaker duplicates of themselves. `render_durable` decides what is durable;
+    this cuts exactly that set, and `bench/run.py`'s REPO_EDITS puts the file in the
+    repo, because ablating the text without installing the file measures a shorter
+    prompt rather than a deduplicated one.
+    """
+    text = current(brief, brief_path)
+    if as_list(brief.get("forbidden")):
+        text = _cut_block(text, "Never touch:")
+    if as_list(brief.get("constraints")):
+        text = _cut_block(text, "Keep true:")
+    ts = tests_sentence(brief)
+    if ts:
+        text = _cut_lines(text, ts)
+    return text
+
+
 # Additive variants — the sufficiency counterparts to the ablations above. Each is
 # `bare` plus exactly one section, built by subtraction from `current` rather than
 # hand-written prose, so a surviving section is byte-identical to `current`'s and any
@@ -182,7 +303,20 @@ def plus_bounds(brief, brief_path):
 VARIANTS = {"current": current, "persona": persona, "bare": bare,
             "no_state": no_state, "no_guard": no_guard, "no_bounds": no_bounds,
             "no_acceptance": no_acceptance,
-            "plus_acceptance": plus_acceptance, "plus_bounds": plus_bounds}
+            "plus_acceptance": plus_acceptance, "plus_bounds": plus_bounds,
+            "no_ask_clause": no_ask_clause,
+            "no_redundant_forbidden": no_redundant_forbidden,
+            "durable_dedupe": durable_dedupe}
+
+
+def _keep_forbidden(brief, kept):
+    """`forbidden: []` is not the same brief as one without the key — drop it empty."""
+    out = copy.deepcopy(brief)
+    if kept:
+        out["forbidden"] = kept
+    else:
+        out.pop("forbidden", None)
+    return out
 
 
 def _strip_state(brief):
@@ -216,4 +350,38 @@ BRIEF_EDITS = {
     # criteria's contract strings for a variant whose prompt withholds them.
     "plus_bounds": lambda b: _drop(b, "acceptance", "baseline", "constraints",
                                    "manual_checks", "tests_policy", "autonomy"),
+    # `autonomy: ask` is the enum the cut clause is rendered from, so it goes with the
+    # clause. The half the variant keeps survives verbatim in the prompt, so nothing
+    # the agent is still meant to know leaves with the key.
+    "no_ask_clause": lambda b: _drop(b, "autonomy"),
+    # Only the entries the prompt stopped naming. The rest of `forbidden` stays, and
+    # measurement restores the author's file anyway — the boundary judged afterwards is
+    # the full one, which is exactly the claim under test: the allowlist already covers
+    # these, so withholding them should cost nothing.
+    "no_redundant_forbidden": lambda b: _keep_forbidden(
+        b, [f for f in as_list(b.get("forbidden"))
+            if str(f) not in redundant_forbidden(b)]),
+    # No edit for durable_dedupe on purpose: the durable file REPO_FILES installs is
+    # where those rules now live, so the agent is *supposed* to be able to find them.
 }
+
+
+def _durable_files(brief):
+    """AGENTS.md and CLAUDE.md carrying what `durable_dedupe` cut out of the prompt.
+
+    Both, not one: `render_durable` emits the same rules under either heading
+    (references/rendering.md), and writing both means the variant does not silently
+    become a test of which host reads which filename.
+    """
+    return {"AGENTS.md": render_durable(brief, "# AGENTS.md — durable rules for "
+                                               "this repo"),
+            "CLAUDE.md": render_durable(brief, "<!-- Prompire: append to CLAUDE.md. "
+                                               "Nothing here expires with the task. -->")}
+
+
+# Files a variant needs sitting in the repo before the agent starts, as
+# {relative path: contents}. bench/run.py writes and commits them inside `prepare()`,
+# ahead of `baseline.py --write`, so they land inside `base_rev` — a durable file
+# committed after the base would show up in the diff as the agent's own out-of-scope
+# write. Writing is run.py's job; this module stays pure text.
+REPO_FILES = {"durable_dedupe": _durable_files}
