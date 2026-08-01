@@ -425,6 +425,20 @@ def main():
     extra_cases.append(("forbidden-normalization-variant",
                         run_hook(repo, "Write", f"docs/{nfd_dir}/x.txt", "."), *norm_want))
 
+    # The hook judges the requested path against the brief; it never consults
+    # gitignore. An out-of-scope write is refused even when `.gitignore` covers the
+    # target — so the ignored-path blind spot documented in
+    # references/threat-model.md is the checker's alone, and this is the case that
+    # keeps that sentence true.
+    repo = fixtures.build(tmp / "gitignored-out-of-scope")
+    fixtures.write(repo, ".gitignore", "vendor/\n")
+    fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
+    subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
+                   cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
+    extra_cases.append(("gitignored-out-of-scope",
+                        run_hook(repo, "Write", "vendor/evil.sh", "."),
+                        2, "outside `scope`"))
+
     for name, (rc, err), want_rc, want_sub in extra_cases:
         why = ""
         if rc != want_rc:

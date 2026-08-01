@@ -2059,6 +2059,42 @@ acceptance:
          f"{prose.returncode} {prose.stderr}")
 
 
+@case("gitignored-paths-are-outside-the-checker-evidence")
+def _(repo, c):
+    """The documented truth boundary, pinned. The checker's evidence is `git diff`
+    against the pinned base plus `git status --untracked-files=all`, and both exclude
+    gitignored paths — so a write under an ignored directory draws no finding at all.
+    references/threat-model.md carries this as a limitation row; this case keeps that
+    row, and the qualified wording in README.md and references/hosts.md, describing
+    the code. If ignored paths ever become visible, the path-set semantics changed
+    and the docs went from truthful to overcautious — both need a deliberate
+    decision, not a drive-by."""
+    (pathlib.Path(repo) / ".gitignore").write_text("vendor/\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "ignore vendor"],
+                   capture_output=True)
+    p = brief(repo, "spec", """
+goal: Fix the off-by-one in src/cart.total().
+scope: [src/cart.py]
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_total
+    expect: exit 0
+    transition: flip
+autonomy: ask
+""")
+    tool("check_scope.py", p, "--activate")
+    evil = pathlib.Path(repo) / "vendor" / "evil.sh"
+    evil.parent.mkdir()
+    evil.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
+    g = guard(p)
+    c.ok(g["violations"] == 0 and g["reviews"] == 0,
+         f"an ignored path must stay outside the diff authority: {g['findings']}")
+    r = tool("check_scope.py", p, "--strict")
+    c.ok(r.returncode == 0,
+         f"--strict must exit 0 when only an ignored path was written: "
+         f"{r.stdout}{r.stderr}")
+
+
 def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="prompire-e2e-"))
     fails = 0
