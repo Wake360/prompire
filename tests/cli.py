@@ -556,6 +556,8 @@ def _(repo, checks):
     checks.ok("Traceback" not in result.stderr, "status discovery must not traceback")
     defaulted = run("status", "--json", cwd=outside)
     checks.equal(defaulted.returncode, 2, "default status outside a repo refuses")
+    checks.equal(json_out(defaulted).get("status"), "refused",
+                 "default status refusal is structured")
 
 
 @case("prepare refuses before mutation when another brief is active")
