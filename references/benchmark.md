@@ -211,8 +211,12 @@ After this campaign the renderer's wording was tightened — "must pass when
 you are done" became "must pass when done", and the autonomy, tests-policy,
 human-review and check-scope sentences lost words to the same pass. The rows
 above quote what actually ran, so their `prompt_sha` values will not
-reproduce against the current renderer, and the table is evidence about the
-old wording until an arm is re-run under the new one.
+reproduce against the current renderer. The control arm was re-run under the
+new wording the same day (`bench/campaigns/2026-08-01/`, pre-registered):
+`current` again took T05 and T06 at 5/5 each, so the control replicates on
+the current renderer. The ablation arms were not repeated — the
+necessity/sufficiency reading above remains a statement about the old
+wording.
 
 ## Running
 

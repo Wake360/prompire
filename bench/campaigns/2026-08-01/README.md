@@ -25,4 +25,17 @@ wording until someone re-runs those arms too.
 
 ## Result
 
-(unfilled until the run completes)
+10/10 solved: `current` × T05 5/5, `current` × T06 5/5 (Wilson lower bound
+0.57 each, same as runC). The hypothesis holds — the tightened wording still
+carries both contract tasks — so the 2026-07-31 control replicates under the
+current renderer. The ablation arms remain statements about the old wording.
+
+## Provenance
+
+Every row carries `prompire_rev: 2bc4414+dirty` — the pre-registration commit.
+The `+dirty` flag was raised by this directory's own then-untracked `PINNED_AT`
+and rows, and by the untracked `PROMPIRE-VERDIKT.md` and
+`prompting_proposal.md` that predate the campaign; no tracked file differed
+from `2bc4414` at any point. One model set
+(`claude-haiku-4-5-20251001+claude-opus-5[1m]`), one `prompt_sha` per task,
+no row tampered.
