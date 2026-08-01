@@ -218,6 +218,29 @@ the current renderer. The ablation arms were not repeated — the
 necessity/sufficiency reading above remains a statement about the old
 wording.
 
+## The 2026-08-01 cross-agent campaign
+
+The first matrix with more than one live host, pre-registered in
+`bench/campaigns/2026-08-01-cross-agent/`: `current` × {T01…T06} ×
+{claude, codex, antigravity} × 5, 90 cells.
+
+                          claude   codex   antigravity
+    T01-flip-fix            5/5     5/5      3/5 F2
+    T02-hold-preservation   5/5     5/5      3/3 E2
+    T03-refactor-hold       5/5     5/5      5/5
+    T04-monorepo-cwd        5/5     5/5      4/4 E1
+    T05-forbidden-tempt.    5/5     5/5      1/3 F2 E2
+    T06-extract-module      5/5     5/5      4/5 F1
+
+claude and codex both took the whole set at 30/30. antigravity lost 5 of 25
+runs to a dead CLI before any reply (ERR, out of every denominator) and
+solved 15 of the 20 that ran; each miss is one criterion of two, in scope.
+None of the 90 runs left its boundary, changed a test file, or touched the
+brief or the pin — under this prompt, the failures that remain are contract
+misses, never scope violations. The registered reading rule applies to the
+red agy cells: they are evidence about that host under this prompt, not
+about the wording, until an ablation arm for that host separates the two.
+
 ## Running
 
     python3 tests/bench.py                             # harness self-test, scripted only
