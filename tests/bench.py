@@ -601,6 +601,35 @@ CLAUDE_JSON = json.dumps({
     "modelUsage": {"claude-opus-5[1m]": {}, "claude-haiku-4-5-20251001": {}},
 })
 
+# One real `codex exec --json` JSONL stream, trimmed the same way. Recorded
+# 2026-08-01 against codex-cli 0.146.0: no event names a model or a cost, usage
+# arrives once per `turn.completed`, and `input_tokens` is the whole prompt —
+# `cached_input_tokens` is a subset of it, the opposite convention to claude's
+# uncached remainder.
+CODEX_JSONL = "\n".join([
+    json.dumps({"type": "thread.started", "thread_id": "019fbd23"}),
+    json.dumps({"type": "turn.started"}),
+    json.dumps({"type": "item.completed",
+                "item": {"id": "item_0", "type": "agent_message", "text": "ok"}}),
+    json.dumps({"type": "turn.completed",
+                "usage": {"input_tokens": 24214, "cached_input_tokens": 6912,
+                          "cache_write_input_tokens": 0, "output_tokens": 5,
+                          "reasoning_output_tokens": 0}}),
+])
+
+# One real `agy -p --output-format json` envelope. Recorded 2026-08-01 against
+# agy 1.1.9: no model, no cost, `output_tokens` includes the thinking tokens,
+# and whether `input_tokens` contains `cache_read_tokens` was not decidable
+# from a smoke that read 0 of them — `total_tokens` is the one field defined
+# to hold everything.
+AGY_JSON = json.dumps({
+    "conversation_id": "a2f101a8", "status": "SUCCESS", "response": "ok\n",
+    "duration_seconds": 4.52, "num_turns": 1,
+    "usage": {"input_tokens": 17734, "output_tokens": 282,
+              "thinking_tokens": 277, "cache_read_tokens": 0,
+              "total_tokens": 18016},
+})
+
 
 # The seed tasks the per-key contracts below are measured on. T05 is the original: its
 # contract string is what the first live matrix caught `no_acceptance` reading straight
@@ -732,6 +761,55 @@ def check_claude_stats():
                            ("a null usage", '{"usage": null, "modelUsage": null}')):
         s = bench_run.claude_stats(1, payload)
         check(f"{label} yields nulls, never a raise",
+              s == {"agent_exit": 1, "model": None, "turns": None,
+                    "tokens_in": None, "tokens_out": None, "cost_usd": None},
+              str(s))
+
+
+def check_codex_stats():
+    two_turns = CODEX_JSONL + "\n" + json.dumps(
+        {"type": "turn.completed",
+         "usage": {"input_tokens": 100, "cached_input_tokens": 0,
+                   "cache_write_input_tokens": 0, "output_tokens": 7,
+                   "reasoning_output_tokens": 2}})
+    s = bench_run.codex_stats(0, two_turns)
+    check("codex turns are the count of turn.completed events",
+          s["turns"] == 2, str(s))
+    check("codex input tokens sum across turns, already the whole prompt each",
+          s["tokens_in"] == 24214 + 100, str(s))
+    check("codex output tokens sum across turns", s["tokens_out"] == 5 + 7, str(s))
+    check("codex never reports a model or a cost",
+          s["model"] is None and s["cost_usd"] is None, str(s))
+    for label, payload in (("garbage", "not json at all"),
+                           ("a stream with no turn.completed",
+                            json.dumps({"type": "turn.started"})),
+                           ("an empty stream", "")):
+        s = bench_run.codex_stats(1, payload)
+        check(f"codex {label} yields nulls, never a raise",
+              s == {"agent_exit": 1, "model": None, "turns": None,
+                    "tokens_in": None, "tokens_out": None, "cost_usd": None},
+              str(s))
+
+
+def check_antigravity_stats():
+    s = bench_run.antigravity_stats(0, AGY_JSON)
+    check("agy input tokens are total minus output — composition-proof",
+          s["tokens_in"] == 18016 - 282, str(s))
+    check("agy output tokens are read straight, thinking included",
+          s["tokens_out"] == 282, str(s))
+    check("agy turns are captured", s["turns"] == 1, str(s))
+    check("agy never reports a model or a cost",
+          s["model"] is None and s["cost_usd"] is None, str(s))
+    failed = json.dumps({"status": "TIMEOUT",
+                         "usage": {"total_tokens": 5, "output_tokens": 1}})
+    s = bench_run.antigravity_stats(0, failed)
+    check("a non-SUCCESS agy status keeps every token field None, so the row "
+          "reads ERR rather than blaming the prompt",
+          s["tokens_in"] is None and s["tokens_out"] is None, str(s))
+    for label, payload in (("garbage", "not json at all"), ("a bare list", "[1]"),
+                           ("an empty envelope", "{}")):
+        s = bench_run.antigravity_stats(1, payload)
+        check(f"agy {label} yields nulls, never a raise",
               s == {"agent_exit": 1, "model": None, "turns": None,
                     "tokens_in": None, "tokens_out": None, "cost_usd": None},
               str(s))
@@ -990,6 +1068,26 @@ def check_report_err_not_solved():
           not report.solved(row), report.mark(row))
 
 
+def check_report_live_liveness():
+    """`model` is claude's liveness signal; codex and antigravity never report one,
+    so a row of theirs with no model must not read ERR — usage stands in there."""
+    for agent in ("codex", "antigravity"):
+        alive = {"acceptance": {"passed": 1, "failed": 0, "not_run": 0},
+                 "scope_exit": 0, "agent": agent, "agent_exit": 0, "model": None,
+                 "tokens_out": 5, "tampered": []}
+        check(f"a live {agent} row with no model still reads ok",
+              report.mark(alive) == "ok", report.mark(alive))
+        dead = dict(alive, tokens_out=None,
+                    acceptance={"passed": 0, "failed": 2, "not_run": 0})
+        check(f"a {agent} row with no usage reads ERR, not FAIL",
+              report.mark(dead) == "ERR", report.mark(dead))
+    scripted = {"acceptance": {"passed": 1, "failed": 0, "not_run": 0},
+                "scope_exit": 0, "agent": "scripted:good", "agent_exit": 0,
+                "model": None, "tokens_out": None, "tampered": []}
+    check("a scripted row has no liveness signal to fail and still reads ok",
+          report.mark(scripted) == "ok", report.mark(scripted))
+
+
 def check_report_gamed_outranks_err():
     row = {"acceptance": {"passed": 0, "failed": 1, "not_run": 0}, "scope_exit": 1,
            "agent": "claude", "agent_exit": 1, "model": None,
@@ -1065,6 +1163,8 @@ def main():
     check_ablations()
     check_state_notes_sync()
     check_claude_stats()
+    check_codex_stats()
+    check_antigravity_stats()
     check_scripted()
     check_tamper()
     check_ablation_fidelity()
@@ -1077,6 +1177,7 @@ def main():
     check_report_refuses_mixed_populations()
     check_report_error_rows_dont_blank_report()
     check_report_err_not_solved()
+    check_report_live_liveness()
     check_report_gamed_outranks_err()
     check_report_attempted_denominator()
     check_report_all_err_cell()

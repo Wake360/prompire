@@ -48,6 +48,12 @@ def wilson_lo(k, n, z=1.96):
     return max(0.0, (centre - radius) / d)
 
 
+# Per live CLI, the field a completed run always reports: claude names the models
+# that ran; codex and antigravity never report one, so their usage stands in. A row
+# missing its signal is a run that never happened, not a prompt that failed.
+LIVE_SIGNAL = {"claude": "model", "codex": "tokens_out", "antigravity": "tokens_out"}
+
+
 def mark(row):
     """The single classifier: solved() is defined off this, not the other way round,
     so the two can never disagree about one row."""
@@ -57,7 +63,8 @@ def mark(row):
         return "GAMED"
     # A rate-limited or crashed CLI leaves an untouched repo: acceptance is red and the
     # row would otherwise read FAIL, blaming the prompt for a run that never happened.
-    if row.get("agent") == "claude" and (row.get("agent_exit") or row.get("model") is None):
+    signal = LIVE_SIGNAL.get(row.get("agent"))
+    if signal and (row.get("agent_exit") or row.get(signal) is None):
         return "ERR"
     a = row.get("acceptance") or {}
     ok = (a.get("passed", 0) >= 1 and a.get("failed") == 0 and a.get("not_run") == 0

@@ -89,15 +89,19 @@ A cell is task × variant × agent:
   alone were". Separating those two needs a further variant that nothing
   in this plan builds.
 - **agent** — `scripted:<behavior>` (deterministic write-sets from
-  `bench/behaviors.py`; the only kind CI ever runs) or a live CLI (`claude`).
+  `bench/behaviors.py`; the only kind CI ever runs) or a live CLI
+  (`claude`, `codex`, `antigravity`).
 
 Metrics per run (one JSONL row): acceptance passed/failed/not_run, check_scope
 exit, changed test files, wall seconds, prompt word count, and — when the
-agent's CLI reports them — turns, tokens, cost and the model id. `tokens_in`
-sums the cached and uncached input fields: the CLI's `usage.input_tokens` alone
-counts only the uncached remainder and reads near zero on a cached run.
-`model` is joined from the keys of `modelUsage`, which is where the CLI records
-what actually ran — there is no top-level `model` field. Every row also
+agent's CLI reports them — turns, tokens, cost and the model id. For `claude`,
+`tokens_in` sums the cached and uncached input fields: the CLI's
+`usage.input_tokens` alone counts only the uncached remainder and reads near
+zero on a cached run. `model` is joined from the keys of `modelUsage`, which is
+where the CLI records what actually ran — there is no top-level `model` field.
+`codex` and `antigravity` report neither a model nor a cost, and each counts
+input its own way — the per-CLI docstrings in `bench/run.py` pin the exact
+reading, each from a live smoke against a named version. Every row also
 carries its provenance: a timestamp, the Prompire commit (`prompire_rev`) and a
 sha256 prefix of the exact prompt text (`prompt_sha`). Rows whose `prompt_sha`
 or `model` differ are different populations — never average across them.
@@ -106,8 +110,10 @@ is green AND check_scope exits 0. An agent that greens the acceptance by
 editing a frozen test shows up as SCOPE, not ok, and one that edited the brief
 or the pin shows up as GAMED — `tampered` lists what it touched — even if that
 same run also crashed on the way out. A `bench/run.py` exception row, or a
-live `claude` row that crashed or never reported a model, reads ERR instead:
-an empty diff there means the run never happened, not that the prompt failed.
+live row that crashed or never reported its liveness signal (`model` for
+`claude`; usage for `codex` and `antigravity`, which never name a model),
+reads ERR instead: an empty diff there means the run never happened, not that
+the prompt failed.
 Live agents are stochastic: one run per cell is noise, so real comparisons use
 `--repeats N`, and the report renders such cells as their solved rate among
 the rows that actually ran ("4/4≥0.51 E1" for a cell of 5 with one ERR),
@@ -240,7 +246,16 @@ Live cells run `claude` with `--setting-sources project`, so the user-level
 CLAUDE.md, behaviour profile and skills stay out of the measurement — the
 benchmark compares prompts, not one machine's personal instructions. The cell
 still inherits the CLI's auth and default model; whatever model actually ran is
-recorded in the row's `model` field.
+recorded in the row's `model` field. The other two hosts cannot be stripped
+that cleanly, and the residue is documented rather than pretended away:
+`codex` runs with `--ignore-user-config --ephemeral` in the workspace-write
+sandbox, but codex-cli 0.146.0 has no flag against personal skills, so
+anything under `~/.codex/skills/` or `~/.agents/skills/` loads into the cell;
+`agy` runs with `--mode accept-edits` and the cell added via `--add-dir`, and
+has no flag to shed its user-level configuration at all. Neither reports which
+model ran, so a codex or antigravity arm is a population only by `prompt_sha`
+and `prompire_rev` — hold the CLI's configured model constant yourself for the
+duration of an arm, because no field in the row will catch a mid-arm change.
 
 ## Growing the set
 

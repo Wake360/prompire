@@ -42,6 +42,14 @@ lints clean today can fail on the next minor, and this file is where that is rec
   the draft when the tree changed, naming the changed paths: claude drafts under
   write-permission denials and codex under a read-only sandbox, but headless agy has
   no read-only mode, and `--agent-cmd` can name anything.
+- `bench/run.py` accepts `codex` and `antigravity` as live agents beside `claude`.
+  Each CLI's stats reader is pinned from a live smoke (codex-cli 0.146.0, agy 1.1.9;
+  neither reports a model or a cost), one live cell of each ran end-to-end on T01,
+  and `bench/report.py` reads liveness per agent — `model` for claude, usage for the
+  other two — so a codex row is never marked ERR for a field its CLI cannot report.
+  What the cells cannot be stripped of is documented in `references/benchmark.md`:
+  codex loads personal skills despite `--ignore-user-config`, and agy cannot shed
+  its user-level configuration at all.
 
 ## 0.8.0 — 2026-07-30
 

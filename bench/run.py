@@ -96,6 +96,58 @@ def claude_stats(returncode, stdout):
     return stats
 
 
+def codex_stats(returncode, stdout):
+    """Read a `codex exec --json` JSONL stream. Pinned from a live smoke against
+    codex-cli 0.146.0 (2026-08-01): no event names a model or a cost, usage arrives
+    once per `turn.completed`, and `input_tokens` is the whole prompt —
+    `cached_input_tokens` is a subset of it, the opposite convention to claude's
+    uncached remainder, so nothing is added back. A stream with no `turn.completed`
+    (crash, rate limit) leaves every field None, which is what the report reads as
+    a run that never happened."""
+    stats = {"agent_exit": returncode, "model": None, "turns": None,
+             "tokens_in": None, "tokens_out": None, "cost_usd": None}
+    turns = []
+    for line in stdout.splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "turn.completed":
+            turns.append(data.get("usage") or {})
+    if turns:
+        stats["turns"] = len(turns)
+        stats["tokens_in"] = sum(u.get("input_tokens") or 0 for u in turns)
+        stats["tokens_out"] = sum(u.get("output_tokens") or 0 for u in turns)
+    return stats
+
+
+def antigravity_stats(returncode, stdout):
+    """Read one `agy -p --output-format json` envelope. Pinned from a live smoke
+    against agy 1.1.9 (2026-08-01): no model, no cost, `output_tokens` includes the
+    thinking tokens. tokens_in is total minus output rather than `input_tokens`,
+    because whether `input_tokens` contains `cache_read_tokens` was not decidable
+    from a smoke that read 0 of them, and `total_tokens` is the one field defined
+    to hold everything. A reply whose `status` is not SUCCESS keeps every token
+    field None, so the report reads it ERR rather than blaming the prompt."""
+    stats = {"agent_exit": returncode, "model": None, "turns": None,
+             "tokens_in": None, "tokens_out": None, "cost_usd": None}
+    try:
+        data = json.loads(stdout)
+    except ValueError:
+        return stats
+    if not isinstance(data, dict) or data.get("status") != "SUCCESS":
+        return stats
+    usage = data.get("usage") or {}
+    stats["turns"] = data.get("num_turns")
+    stats["tokens_out"] = usage.get("output_tokens")
+    total = usage.get("total_tokens")
+    if total is not None and stats["tokens_out"] is not None:
+        stats["tokens_in"] = total - stats["tokens_out"]
+    else:
+        stats["tokens_in"] = usage.get("input_tokens")
+    return stats
+
+
 def run_agent(spec, prompt, repo, task):
     if spec.startswith("scripted:"):
         behavior = spec.split(":", 1)[1]
@@ -116,7 +168,32 @@ def run_agent(spec, prompt, repo, task):
                            cwd=str(repo), input=prompt, capture_output=True,
                            text=True, encoding="utf-8", timeout=900)
         return claude_stats(r.returncode, r.stdout)
-    raise RuntimeError(f"unknown agent {spec!r} — scripted:<behavior> or claude")
+    if spec == "codex":
+        # --ignore-user-config keeps ~/.codex/config.toml out of the cell — the
+        # closest codex gets to claude's --setting-sources project. Personal skills
+        # under ~/.codex/skills/ and ~/.agents/skills/ still load; codex 0.146.0 has
+        # no flag against that, so it is a documented contamination, not a
+        # controlled one (references/benchmark.md).
+        r = subprocess.run(["codex", "exec", "--json", "--sandbox",
+                            "workspace-write", "--ignore-user-config",
+                            "--ephemeral", "--color", "never", "-"],
+                           cwd=str(repo), input=prompt, capture_output=True,
+                           text=True, encoding="utf-8", timeout=900)
+        return codex_stats(r.returncode, r.stdout)
+    if spec == "antigravity":
+        # agy cannot read the prompt from stdin and does not treat an untrusted cwd
+        # as a workspace — the same two facts DRAFT_AGENTS in prompire.py records —
+        # so the prompt is argv and the cell is added via --add-dir. --mode
+        # accept-edits is the analogue of claude's acceptEdits; never raise it to
+        # --dangerously-skip-permissions.
+        r = subprocess.run(["agy", "-p", prompt, "--add-dir", str(repo),
+                            "--output-format", "json", "--mode", "accept-edits",
+                            "--print-timeout", "840s"],
+                           cwd=str(repo), capture_output=True, text=True,
+                           encoding="utf-8", timeout=900)
+        return antigravity_stats(r.returncode, r.stdout)
+    raise RuntimeError(f"unknown agent {spec!r} — scripted:<behavior>, claude, "
+                       "codex or antigravity")
 
 
 def measure(repo, base):
