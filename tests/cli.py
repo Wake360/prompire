@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -171,6 +172,170 @@ def _(repo, checks):
     checks.equal(typed.returncode, 0, "explicit --out exit")
     checks.ok((inner / ".prompire" / "typed.yaml").exists(),
               "an explicit --out must not be silently relocated")
+
+
+def fake_agent(repo, reply):
+    """An --agent-cmd stand-in: ignores the drafting prompt, prints a canned reply."""
+    (pathlib.Path(repo) / "fake_agent.py").write_text(
+        "import sys\nsys.stdin.read()\n"
+        "sys.stdout.write(open('fake_reply.txt', encoding='utf-8').read())\n",
+        encoding="utf-8")
+    (pathlib.Path(repo) / "fake_reply.txt").write_text(reply, encoding="utf-8")
+    return f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+
+
+@case("draft --agent-cmd delegates, then marks the boundary and the judge")
+def _(repo, checks):
+    (pathlib.Path(repo) / "package.json").write_text(
+        '{"scripts": {"test": "node test.js"}}', encoding="utf-8")
+    cmd = fake_agent(repo, """```yaml
+# confirmed by the agent itself
+goal: Sharpen the cart maths and keep the table readable.
+scope: [src/cart.py, src/mystery.py]
+forbidden: [tests/**]
+tests_policy: authoring
+acceptance:
+  - cmd: npm test
+    expect: exit 0
+  - cmd: sh scripts/made-up.sh
+autonomy: auto
+manual_checks: [the table still reads well]
+```
+""")
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", ".prompire/agent.yaml", cwd=repo)
+    checks.equal(result.returncode, 0, "draft exit")
+    text = (pathlib.Path(repo) / ".prompire" / "agent.yaml").read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    def line_with(fragment):
+        return next((li for li in lines if fragment in li), "")
+
+    checks.ok("Sharpen the cart maths" in text, "the agent's sharpened goal must be kept")
+    checks.ok("prompire:unconfirmed" in line_with("src/cart.py"),
+              "an agent-proposed boundary entry must carry the marker")
+    checks.ok("nothing tracked" in line_with("src/mystery.py"),
+              "a boundary entry matching no tracked file must say so")
+    checks.ok("detected from package.json scripts.test" in line_with("npm test"),
+              "an evidenced command must carry its evidence")
+    checks.ok("agent-proposed" in line_with("made-up"),
+              "an unevidenced command must be named as the agent's own claim")
+    checks.equal(text.count("expect: exit 0"), 2,
+                 "an entry without expect must get the exit 0 default")
+    checks.ok("prompire:unconfirmed" in line_with("tests_policy: authoring"),
+              "relaxed test protection must carry the marker")
+    checks.ok("autonomy: ask" in text and "autonomy: auto" not in text,
+              "a draft always asks, whatever the agent proposed")
+    checks.ok("confirmed by the agent itself" not in text,
+              "the agent's own comments must not survive into the draft")
+    checks.ok("tests/**" in text, "forbidden must be carried over")
+    checks.ok("the table still reads well" in text, "manual_checks must be carried over")
+    blocked = run("prepare", pathlib.Path(repo) / ".prompire" / "agent.yaml", cwd=repo)
+    checks.equal(blocked.returncode, 2, "prepare must refuse an unconfirmed agent draft")
+
+
+@case("draft --agent-cmd falls back to the sentence and to empty acceptance")
+def _(repo, checks):
+    cmd = fake_agent(repo, "scope: [src/cart.py]\n")
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", ".prompire/agent.yaml", cwd=repo)
+    checks.equal(result.returncode, 0, "draft exit")
+    text = (pathlib.Path(repo) / ".prompire" / "agent.yaml").read_text(encoding="utf-8")
+    checks.ok("Improve the cart" in text,
+              "a reply without a goal must fall back to the request sentence")
+    checks.ok("acceptance: []" in text and "prompire:unconfirmed" in text,
+              "a reply without acceptance must state the absence, unconfirmed")
+
+
+@case("draft --agent-cmd refuses output it cannot verify as a brief")
+def _(repo, checks):
+    out = pathlib.Path(repo) / ".prompire" / "agent.yaml"
+    replies = {
+        "prose": "You should widen the scope and trust me.\n",
+        "measured baseline": "goal: x\nbaseline: []\n",
+        "unknown key": "goal: x\nplot_twist: 1\n",
+        "malformed acceptance": "goal: x\nacceptance:\n  - expect: exit 0\n",
+    }
+    for label, reply in replies.items():
+        cmd = fake_agent(repo, reply)
+        result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                     "--out", str(out), cwd=repo)
+        checks.equal(result.returncode, 2, f"{label} must be refused")
+        checks.ok(not out.exists(), f"{label} must not leave a file behind")
+    checks.ok("baseline" in run("draft", "x", "--agent-cmd", fake_agent(
+        repo, "goal: x\nbaseline: []\n"), "--out", str(out), cwd=repo).stdout,
+        "a drafted baseline refusal must say what was refused")
+
+    (pathlib.Path(repo) / "fake_agent.py").write_text(
+        "import sys\nsys.exit(3)\n", encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    failed = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", str(out), cwd=repo)
+    checks.equal(failed.returncode, 2, "a failing agent must be a refusal")
+    checks.ok(not out.exists(), "a failing agent must not leave a file behind")
+    missing = run("draft", "Improve the cart", "--agent-cmd",
+                  "prompire-no-such-binary-xyz", "--out", str(out), cwd=repo)
+    checks.equal(missing.returncode, 2, "a missing agent binary must be a refusal")
+
+
+@case("draft refuses when the agent changed the repository")
+def _(repo, checks):
+    out = pathlib.Path(repo) / ".prompire" / "agent.yaml"
+    # A drafting agent only reads; this one writes a stray file and still answers
+    # with a perfectly valid draft. The valid reply must not buy the mutation a pass.
+    (pathlib.Path(repo) / "fake_agent.py").write_text(
+        "import sys\nsys.stdin.read()\n"
+        "open('stray.txt', 'w', encoding='utf-8').write('oops')\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
+        encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", str(out), cwd=repo)
+    checks.equal(result.returncode, 2, "a writing agent must be a refusal")
+    checks.ok("stray.txt" in result.stdout,
+              "the refusal must name what the agent changed")
+    checks.ok(not out.exists(), "no draft may be written over a mutated tree")
+
+
+@case("draft agent flags are validated before anything runs")
+def _(repo, checks):
+    unknown = run("draft", "x", "--agent", "gemini", cwd=repo)
+    checks.equal(unknown.returncode, 2, "unknown --agent must be refused")
+    checks.ok("claude" in unknown.stdout and "codex" in unknown.stdout,
+              "the refusal must name the known agents")
+    sys.path.insert(0, str(ROOT))
+    try:
+        from prompire import DRAFT_AGENTS
+    finally:
+        sys.path.remove(str(ROOT))
+    argv = DRAFT_AGENTS.get("codex", [])
+    checks.ok("read-only" in argv,
+              "the codex drafting invocation must keep the sandbox read-only")
+    checks.ok("--ignore-user-config" in argv,
+              "the codex drafting invocation must not load personal instructions")
+    checks.ok("antigravity" in unknown.stdout,
+              "the refusal must name the antigravity agent too")
+    agy_argv = DRAFT_AGENTS.get("antigravity", [])
+    checks.ok("{prompt}" in agy_argv and "{root}" in agy_argv,
+              "the antigravity invocation must carry both placeholders — agy reads "
+              "neither the prompt from stdin nor an untrusted cwd as a workspace")
+    sys.path.insert(0, str(ROOT))
+    try:
+        from prompire import agent_argv
+    finally:
+        sys.path.remove(str(ROOT))
+    sub, feed = agent_argv(["agy", "-p", "{prompt}", "--add-dir", "{root}"],
+                           "draft this", pathlib.Path(repo))
+    checks.equal(sub, ["agy", "-p", "draft this", "--add-dir",
+                       str(pathlib.Path(repo))],
+                 "placeholders must be substituted verbatim")
+    checks.equal(feed, "", "an embedded prompt must not also arrive on stdin")
+    sub, feed = agent_argv(["claude", "-p"], "draft this", pathlib.Path(repo))
+    checks.equal(feed, "draft this", "a stdin host still gets the prompt on stdin")
+    both = run("draft", "x", "--agent", "claude", "--agent-cmd", "echo", cwd=repo)
+    checks.equal(both.returncode, 2, "--agent with --agent-cmd must be refused")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "task.yaml").exists(),
+              "a refused draft must not write the default brief")
 
 
 @case("prepare writes baseline, prompt, checklist, then ACTIVE")

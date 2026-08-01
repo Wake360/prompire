@@ -622,10 +622,11 @@ def main():
         print(f"{'pass' if ok else 'FAIL'}  {name}")
 
     copilot_total = copilot_cases(tmp, bad, case_folds, norm_folds)
+    antigravity_total = antigravity_cases(tmp, bad, case_folds, norm_folds)
 
     shutil.rmtree(tmp, ignore_errors=True)
     total = (len(CASES) + len(open_cases) + len(extra_cases) + len(UNARMED_CASES)
-             + len(probe_cases) + len(log_cases) + copilot_total)
+             + len(probe_cases) + len(log_cases) + copilot_total + antigravity_total)
     for b in bad:
         print(f"        {b}")
     print(f"\n{total - len(bad)}/{total} hook cases")
@@ -1258,6 +1259,315 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
         print(f"{'pass' if ok else 'FAIL'}  {name}")
 
     shutil.rmtree(bare, ignore_errors=True)
+    return len(cases) + len(extra)
+
+
+ANTIGRAVITY_HOOK = str(SKILL / "hook_antigravity_guard.py")
+
+
+def agy(tool, args, *workspaces, **extra):
+    """The native protojson camelCase PreToolUse payload agy 1.1.8 sends: the call as
+    `toolCall: {name, args}`, the session roots as `workspacePaths`, metadata besides."""
+    payload = {"conversationId": "0f9c", "modelName": "gemini-pro-agent", "stepIdx": 4,
+               "workspacePaths": [str(w) for w in workspaces],
+               "toolCall": {"name": tool, "args": args}}
+    payload.update(extra)
+    return json.dumps(payload)
+
+
+def run_antigravity(payload, env=None):
+    r = subprocess.run([sys.executable, ANTIGRAVITY_HOOK], input=payload,
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=dict(os.environ, **env) if env else None)
+    return r.returncode, r.stdout, r.stderr
+
+
+def _antigravity_problems(rc, out, err, want):
+    """Every case asserts the whole protocol. Antigravity proceeds on a non-zero exit
+    (measured against agy 1.1.8 — see the adapter's docstring), so exit 0 is
+    discipline rather than survival here; but a traceback on stderr on every watched
+    write is breakage an operator sees, and a non-empty neutral stdout is a decision
+    nobody computed."""
+    problems = []
+    if rc != 0:
+        problems.append(f"exit {rc}, wanted 0: {err.strip()[:200]}")
+    if err.strip():
+        problems.append(f"wrote to stderr: {err.strip()[:200]}")
+    body = out.strip()
+    if want is None:
+        if body:
+            problems.append(f"expected neutral (empty) output, got {body[:200]!r}")
+        return problems
+    if not body:
+        problems.append(f"expected a denial containing {want!r}, got empty output")
+        return problems
+    try:
+        decision = json.loads(body)
+    except ValueError:
+        problems.append(f"denial is not valid JSON: {body[:200]!r}")
+        return problems
+    if not isinstance(decision, dict) or decision.get("decision") != "deny":
+        problems.append(f"decision is not 'deny': {body[:200]!r}")
+        return problems
+    reason = decision.get("reason")
+    if not isinstance(reason, str) or not reason:
+        problems.append("denial carries no reason")
+    elif want not in reason:
+        problems.append(f"reason missing {want!r} — {reason[:200]!r}")
+    return problems
+
+
+def antigravity_cases(tmp, bad, case_folds, norm_folds):
+    """The Antigravity CLI adapter: same boundary, third wire format.
+
+    `TargetFile` arrives absolute in every captured payload, so unlike the other two
+    suites every target here is spelled absolute — the relative spelling is itself a
+    case, and its correct answer is silence.
+    """
+    repo = _armed(tmp, "agy-shapes")
+    cases = []   # (name, payload, want_substring_or_None)
+
+    # --- the three watched tools, both directions --------------------------------
+    cases += [
+        ("agy-write-in-scope",
+         agy("write_to_file", {"TargetFile": str(repo / "src" / "cart.py"),
+                               "CodeContent": "x", "Overwrite": True}, repo), None),
+        ("agy-write-outside-scope",
+         agy("write_to_file", {"TargetFile": str(repo / "src" / "other.py"),
+                               "CodeContent": "x"}, repo), "outside `scope`"),
+        ("agy-replace-outside-scope",
+         agy("replace_file_content",
+             {"TargetFile": str(repo / "src" / "other.py"), "TargetContent": "a",
+              "ReplacementContent": "b", "StartLine": 1, "EndLine": 1}, repo),
+         "outside `scope`"),
+        ("agy-multi-replace-forbidden",
+         agy("multi_replace_file_content",
+             {"TargetFile": str(repo / "golden" / "report.txt")}, repo), "forbidden"),
+        ("agy-forbidden-inside-scope",
+         agy("write_to_file", {"TargetFile": str(repo / "docs" / "secret" / "x.md")},
+             repo), "forbidden"),
+    ]
+
+    # --- tests_policy, through the same tests_verdict check_scope.py uses --------
+    named = _armed(tmp, "agy-tests-named", policy="named", editable=NAMED)
+    cases += [
+        ("agy-tests-immutable-refused",
+         agy("replace_file_content",
+             {"TargetFile": str(repo / "tests" / "test_cart.py")}, repo),
+         "tests_policy"),
+        ("agy-tests-named-listed-allowed",
+         agy("replace_file_content",
+             {"TargetFile": str(named / "tests" / "test_cart.py")}, named), None),
+        ("agy-tests-named-other-refused",
+         agy("replace_file_content",
+             {"TargetFile": str(named / "tests" / "test_total.py")}, named),
+         "tests_editable"),
+    ]
+
+    # --- the state files, unconditionally ----------------------------------------
+    unarmed = fixtures.build(tmp / "agy-never-armed")
+    cases += [
+        ("agy-state-pointer",
+         agy("write_to_file", {"TargetFile": str(repo / ".prompire" / "ACTIVE")}, repo),
+         "guard pointer"),
+        ("agy-state-tombstones",
+         agy("write_to_file",
+             {"TargetFile": str(repo / ".prompire" / "ACTIVE.tombstones")}, repo),
+         "guard pointer"),
+        ("agy-self-edit-the-brief",
+         agy("replace_file_content",
+             {"TargetFile": str(repo / ".prompire" / "spec.yaml")}, repo),
+         "active brief"),
+        ("agy-never-armed-pointer-refused",
+         agy("write_to_file", {"TargetFile": str(unarmed / ".prompire" / "ACTIVE")},
+             unarmed), "guard pointer"),
+        ("agy-never-armed-ordinary-file",
+         agy("write_to_file", {"TargetFile": str(unarmed / "src" / "other.py")},
+             unarmed), None),
+        ("agy-state-notes-allowed",
+         agy("write_to_file",
+             {"TargetFile": str(repo / ".prompire" / "active-notes.md")}, repo), None),
+    ]
+
+    # --- tools that do not write files, including the documented shell gap -------
+    cases += [
+        ("agy-shell-write-not-intercepted",
+         agy("run_command", {"CommandLine": "echo x > src/other.py",
+                             "Cwd": str(repo)}, repo), None),
+        ("agy-view-file-neutral",
+         agy("view_file", {"AbsolutePath": str(repo / "src" / "other.py")}, repo), None),
+        ("agy-unknown-tool-neutral",
+         agy("mcp_tool", {"TargetFile": str(repo / "src" / "other.py")}, repo), None),
+        # Unattested file-changing tools stay unmatched — a guessed argument key would
+        # answer questions the adapter cannot read; check_scope.py sees the change
+        # afterwards, exactly as it sees a shell write.
+        ("agy-delete-directory-not-intercepted",
+         agy("delete_directory", {"DirectoryPath": str(repo / "golden")}, repo), None),
+    ]
+
+    # --- malformed and uninterpretable payloads: neutral, never a verdict --------
+    out_path = str(repo / "src" / "other.py")
+    cases += [
+        ("agy-malformed-json", "not json at all", None),
+        ("agy-empty-stdin", "", None),
+        ("agy-non-object-json", "[1, 2, 3]", None),
+        ("agy-toolcall-missing", json.dumps({"workspacePaths": [str(repo)]}), None),
+        ("agy-toolcall-wrong-type",
+         json.dumps({"workspacePaths": [str(repo)], "toolCall": "write_to_file"}), None),
+        ("agy-args-wrong-type",
+         json.dumps({"workspacePaths": [str(repo)],
+                     "toolCall": {"name": "write_to_file", "args": [out_path]}}), None),
+        ("agy-name-wrong-type",
+         json.dumps({"workspacePaths": [str(repo)],
+                     "toolCall": {"name": 7, "args": {"TargetFile": out_path}}}), None),
+        ("agy-targetfile-missing",
+         agy("write_to_file", {"CodeContent": "x"}, repo), None),
+        ("agy-targetfile-wrong-type",
+         agy("write_to_file", {"TargetFile": ["x"]}, repo), None),
+        # No workspacePaths, no verdict: the workspace is the session's own root, and
+        # judging against a directory nobody named is not this adapter's call to make.
+        ("agy-workspaces-missing",
+         json.dumps({"toolCall": {"name": "write_to_file",
+                                  "args": {"TargetFile": out_path}}}), None),
+        ("agy-workspaces-empty", agy("write_to_file", {"TargetFile": out_path}), None),
+        ("agy-workspaces-wrong-type",
+         json.dumps({"workspacePaths": str(repo),
+                     "toolCall": {"name": "write_to_file",
+                                  "args": {"TargetFile": out_path}}}), None),
+        # A relative TargetFile has never been observed and its resolution rule is not
+        # documented; silence, not a guess against a workspace of our choosing.
+        ("agy-relative-target-neutral",
+         agy("write_to_file", {"TargetFile": "src/other.py"}, repo), None),
+        ("agy-nul-in-target",
+         agy("write_to_file", {"TargetFile": str(repo / "src" / "x\x00.py")}, repo),
+         "unnameable-path"),
+    ]
+
+    # --- an agent bound by repo A must not escape into repo B --------------------
+    a = _armed(tmp, "agy-cross-a")
+    b = _armed(tmp, "agy-cross-b", body=WIDE_BRIEF)
+    outside_ws = pathlib.Path(tempfile.mkdtemp(prefix="prompire-agy-outside-"))
+    cases += [
+        ("agy-cross-repo-escape",
+         agy("write_to_file", {"TargetFile": str(b / "anything.md")}, a),
+         "outside the repository"),
+        # `workspacePaths` is a list, and a session bound by an armed workspace is
+        # bound by it wherever in the list that workspace appears. The first entry
+        # here has no brief and contributes nothing; the second is armed; the target
+        # sits in no repository at all — only the second workspace's brief can refuse
+        # the escape, so this pins that the adapter checks past index 0.
+        ("agy-second-workspace-refuses",
+         agy("write_to_file", {"TargetFile": str(outside_ws / "x.txt")}, unarmed, a),
+         "outside the repository"),
+    ]
+
+    # --- case folding, through the same fs_fold probe ----------------------------
+    fold_repo = _armed(tmp, "agy-fold-case", body=(
+        "goal: Refactor helpers under src/.\nscope:\n  - src/**\n"
+        "forbidden:\n  - src/golden/**\ntests_policy: immutable\n"
+        "acceptance:\n  - cmd: \"true\"\n    expect: exit 0\nautonomy: auto\n"))
+    cases += [
+        ("agy-forbidden-case-variant",
+         agy("write_to_file",
+             {"TargetFile": str(fold_repo / "src" / "GOLDEN" / "x.txt")}, fold_repo),
+         FOLD_CASE),
+    ]
+
+    for name, payload, want in cases:
+        if want == FOLD_CASE:
+            want = "forbidden" if case_folds else None
+        elif want == FOLD_NORM:
+            want = "forbidden" if norm_folds else None
+        rc, out, err = run_antigravity(payload)
+        problems = _antigravity_problems(rc, out, err, want)
+        if problems:
+            bad.append(f"{name}: " + "; ".join(problems))
+        print(f"{'FAIL' if problems else 'pass'}  {name}")
+    shutil.rmtree(outside_ws, ignore_errors=True)
+
+    extra = []
+
+    # --- the exact denial text, byte for byte ------------------------------------
+    # The same sentence the other two hosts hand their agent, through
+    # `hook_policy.deny_reason` — pinned so per-host drift cannot start.
+    _, out, _ = run_antigravity(
+        agy("write_to_file", {"TargetFile": str(repo / "src" / "other.py")}, repo))
+    expected_reason = (
+        "BLOCKED by Prompire scope guard [outside-scope]: src/other.py — changed "
+        "outside `scope` -> revert it, or revise the brief and re-run the baseline — a "
+        "scope change is an edit to the brief, not a confirmation in chat. The brief is "
+        "the contract. Widening `scope` is an edit to the brief followed by a fresh "
+        "baseline, not a decision to make mid-task.")
+    got_reason = json.loads(out).get("reason")
+    extra.append(("agy-denial-reason-is-deterministic", got_reason == expected_reason,
+                  f"reason drifted:\n  got  {got_reason!r}\n  want {expected_reason!r}"))
+    extra.append(("agy-denial-object-is-exactly-the-decision",
+                  set(json.loads(out)) == {"decision", "reason"},
+                  f"unexpected keys in the decision object: {sorted(json.loads(out))}"))
+
+    # --- one boundary, three hosts ------------------------------------------------
+    agree = []
+    for rel in ("src/cart.py", "src/other.py", "golden/report.txt",
+                "tests/test_cart.py", ".prompire/ACTIVE", ".prompire/active-notes.md"):
+        claude_rc, _ = run_hook(repo, "Write", rel, ".")
+        _, agy_out, _ = run_antigravity(
+            agy("write_to_file", {"TargetFile": str(repo / rel)}, repo))
+        agy_denied = bool(agy_out.strip())
+        if (claude_rc == 2) != agy_denied:
+            agree.append(f"{rel}: claude exit {claude_rc}, "
+                         f"antigravity denied={agy_denied}")
+    extra.append(("agy-three-hosts-read-one-boundary", not agree,
+                  f"the adapters disagree about: {agree}"))
+
+    # --- PyYAML unimportable: the same split as the other two hosts ---------------
+    shim = tmp / "agy-import-boom"
+    shim.mkdir(parents=True, exist_ok=True)
+    (shim / "yaml.py").write_text("raise RuntimeError('forced import failure')\n",
+                                  encoding="utf-8")
+    boom = {"PYTHONPATH": str(shim)}
+    for label, rel, want_deny in (
+            ("pointer", ".prompire/ACTIVE", True),
+            ("tombstones", ".prompire/ACTIVE.tombstones", True),
+            ("nul-path", "src/x\x00.py", True),
+            ("ordinary-file", "src/other.py", False)):
+        rc, out, err = run_antigravity(
+            agy("write_to_file", {"TargetFile": str(repo / rel)}, repo), env=boom)
+        denied = bool(out.strip())
+        ok = rc == 0 and not err.strip() and denied == want_deny
+        extra.append((f"broken-import-antigravity-{label}", ok,
+                      f"exit {rc}, denied={denied} (wanted {want_deny}), stdout "
+                      f"{out.strip()[:120]!r}, stderr {err.strip()[:160]!r}"))
+
+    # --- a broken stdout must not grow a traceback --------------------------------
+    proc = subprocess.Popen([sys.executable, ANTIGRAVITY_HOOK], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8")
+    proc.stdout.close()
+    try:
+        proc.stdin.write(agy("write_to_file",
+                             {"TargetFile": str(repo / "golden" / "report.txt")}, repo))
+        proc.stdin.close()
+    except OSError:
+        pass
+    pipe_rc = proc.wait()
+    pipe_err = proc.stderr.read()
+    proc.stderr.close()
+    extra.append(("agy-closed-stdout-is-quiet",
+                  pipe_rc == 0 and not pipe_err.strip(),
+                  f"exit {pipe_rc}, stderr {pipe_err.strip()[:160]!r}"))
+
+    # `allow` must not be constructible at all — Antigravity's `allow` skips the
+    # host's own permission flow, an approval bought with this hook's silence.
+    guard_src = pathlib.Path(ANTIGRAVITY_HOOK).read_text(encoding="utf-8")
+    decisions = re.findall(r'"decision":\s*"(\w+)"', guard_src)
+    extra.append(("agy-only-deny-is-ever-constructed", decisions == ["deny"],
+                  f"the adapter constructs {decisions} — only ['deny'] is permitted"))
+
+    for name, ok, msg in extra:
+        if not ok:
+            bad.append(f"{name}: {msg}")
+        print(f"{'pass' if ok else 'FAIL'}  {name}")
+
     return len(cases) + len(extra)
 
 

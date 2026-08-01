@@ -212,22 +212,6 @@ def _as_args(raw):
     return None
 
 
-def deny_reason(rel, rule, message, fix, contract_line):
-    """The Claude adapter's three sentences, on one line.
-
-    Same words on both hosts on purpose, and `contract_line` comes from
-    `hook_policy.CONTRACT_LINE` rather than being repeated here — the wording is the part
-    an agent reads and acts on, and a second copy is how the two hosts' explanations
-    quietly stop agreeing. Only the framing differs: Claude Code takes this on stderr
-    with exit 2, Copilot CLI takes it in `permissionDecisionReason`. Deterministic to the
-    byte, so tests can pin it.
-    """
-    text = f"BLOCKED by Prompire scope guard [{rule}]: {rel} — {message}"
-    if fix:
-        text += f" -> {fix}"
-    return f"{text}. {contract_line}"
-
-
 def decide(state):
     """The decision as a string to write to stdout — `""` for neutral. Writes nothing
     itself, so a later exception cannot leave a half-emitted JSON object behind."""
@@ -255,9 +239,12 @@ def decide(state):
     verdict = hook_policy.verdict_for(targets, cwd)
     if not verdict:
         return ""
+    # `hook_policy.deny_reason` is the Claude adapter's three sentences on one line —
+    # the shared wording, kept beside CONTRACT_LINE so the hosts' explanations cannot
+    # quietly stop agreeing. Only the framing differs: Claude Code takes it on stderr
+    # with exit 2, this host takes it in `permissionDecisionReason`.
     return json.dumps({"permissionDecision": "deny",
-                       "permissionDecisionReason": deny_reason(
-                           *verdict, contract_line=hook_policy.CONTRACT_LINE)})
+                       "permissionDecisionReason": hook_policy.deny_reason(*verdict)})
 
 
 def _emit(out):

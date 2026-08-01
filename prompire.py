@@ -4,13 +4,16 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 
-from brief_common import utf8_stdio
+import yaml
+
+from brief_common import ACCEPTANCE_KEYS, as_list, glob_re, norm_path, utf8_stdio
 from check_scope import RepoError, active_brief, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -27,6 +30,46 @@ LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
 # marker, and `prepare` refuses while one remains — deleting it is the confirmation.
 DRAFT_MARKER = "prompire:unconfirmed"
 DEFAULT_DRAFT_OUT = ".prompire/task.yaml"
+DRAFT_AGENT_TIMEOUT = 600
+# Host invocations this tree has actually run. claude is the shape bench/run.py
+# uses, --setting-sources included, so one machine's personal instructions cannot
+# leak into the draft. codex drafts under its read-only sandbox — drafting must
+# never write — with the user config ignored and no session files left behind.
+# antigravity (agy 1.1.8) can neither read the prompt from stdin nor treat an
+# untrusted cwd as a workspace, so its entry carries the two placeholders
+# `agent_argv` substitutes; headless agy has no read-only mode, which is what the
+# repository snapshot in draft() is for. Any other host is spelled by the caller
+# via --agent-cmd.
+DRAFT_AGENTS = {
+    "claude": ["claude", "-p", "--setting-sources", "project"],
+    "codex": ["codex", "exec", "--sandbox", "read-only", "--ignore-user-config",
+              "--ephemeral", "--color", "never", "-"],
+    "antigravity": ["agy", "-p", "{prompt}", "--add-dir", "{root}",
+                    "--print-timeout", "540s"],
+}
+DRAFT_KEYS = ("goal", "scope", "forbidden", "constraints", "tests_policy",
+              "acceptance", "manual_checks", "autonomy")
+DRAFT_MEASURED = ("baseline", "base_rev", "dirty_baseline")
+DRAFT_PROMPT = """\
+Compile the request below into a draft Prompire brief. Inspect this repository
+first; every line must be grounded in what you find, never invented.
+
+Request: {sentence}
+
+Output only a YAML mapping with these keys and no others:
+- goal: one imperative sentence, at most 30 words, sharpened from the request.
+- scope: the exact files or narrow globs the work may edit. Never `.`.
+- forbidden: paths that must not change; [] after considering it.
+- constraints: observable facts that must stay true; omit if none.
+- tests_policy: immutable, unless the request itself is about writing tests.
+- acceptance: commands this repository evidences (a package script, a configured
+  test runner, an existing file). Each item carries cmd and expect. If nothing
+  runnable proves the work, write acceptance: [].
+- manual_checks: what only a human can confirm; omit if none.
+- autonomy: ask
+Never output baseline, base_rev or dirty_baseline; they are measured, not drafted.
+No prose, no code fences.
+"""
 DEMO_PYTHON = "python" if os.name == "nt" else "python3"
 # The demo's acceptance command must not import a module: the bytecode cache it would
 # leave behind is itself a change outside `scope`, and the clean pass would not be clean.
@@ -237,9 +280,159 @@ def draft_text(sentence, detected):
     return "\n".join(out) + "\n"
 
 
+def _yaml_scalar(value):
+    # A scalar dumped as its own document ends with a `...` end marker on the
+    # next line; only the scalar itself belongs on the line being built.
+    text = yaml.safe_dump(value, default_flow_style=True, allow_unicode=True,
+                          width=2 ** 20).strip()
+    return text[:-4].strip() if text.endswith("\n...") else text
+
+
+def strip_fences(text):
+    lines = text.strip().splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+    return "\n".join(lines)
+
+
+def parse_agent_brief(text):
+    """The agent's reply is data, not a brief: whatever survives this parse is
+    re-serialized by agent_draft_text, so the agent's own comments — including a
+    marker it pretends to have confirmed — never reach the file."""
+    try:
+        data = yaml.safe_load(strip_fences(text))
+    except yaml.YAMLError:
+        return None, "the reply is not YAML"
+    if not isinstance(data, dict):
+        return None, "the reply is not a YAML mapping"
+    for key in DRAFT_MEASURED:
+        if key in data:
+            return None, f"`{key}` is measured, never drafted"
+    unknown = sorted(str(k) for k in set(data) - set(DRAFT_KEYS))
+    if unknown:
+        return None, "keys a draft does not carry: " + ", ".join(unknown)
+    entries = []
+    for item in as_list(data.get("acceptance")):
+        if isinstance(item, str):
+            item = {"cmd": item}
+        if not isinstance(item, dict) or "cmd" not in item:
+            return None, "an acceptance item without a cmd cannot be checked"
+        stray = sorted(str(k) for k in set(item) - ACCEPTANCE_KEYS)
+        if stray:
+            return None, "acceptance keys a draft does not carry: " + ", ".join(stray)
+        entries.append(item)
+    data["acceptance"] = entries
+    return data, None
+
+
+def tracked_paths(root):
+    listed = subprocess.run(["git", "-C", str(root), "ls-files"],
+                            capture_output=True, encoding="utf-8", errors="replace")
+    if listed.returncode:
+        return []
+    return [norm_path(line) for line in listed.stdout.splitlines() if line]
+
+
+def matches_tracked(pattern, tracked):
+    try:
+        rx = glob_re(pattern)
+    except re.error:
+        return False
+    return any(rx.match(path) for path in tracked)
+
+
+def agent_draft_text(sentence, data, root):
+    """Same contract as draft_text: the boundary and the judge stay unconfirmed
+    until a human deletes each marker, however fluent the agent's proposal."""
+    detected = dict(detect_acceptance(root))
+    tracked = tracked_paths(root)
+    out = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker.",
+           "goal: |", f"  {' '.join(str(data.get('goal') or sentence).split())}"]
+    scope = [str(s) for s in as_list(data.get("scope"))]
+    if scope:
+        out.append("scope:")
+        for entry in scope:
+            note = ("agent-proposed boundary; confirm it" if matches_tracked(entry, tracked)
+                    else "matches nothing tracked today — new file or typo? confirm it")
+            out.append(f"  - {_yaml_scalar(entry)}  # {DRAFT_MARKER} — {note}")
+    else:
+        out.append(f"scope: []  # {DRAFT_MARKER} — list the exact files the agent may edit")
+    for key in ("forbidden", "constraints"):
+        if key in data:
+            values = [str(v) for v in as_list(data.get(key))]
+            if values:
+                out.append(f"{key}:")
+                out += [f"  - {_yaml_scalar(v)}" for v in values]
+            else:
+                out.append(f"{key}: []")
+    policy = data.get("tests_policy")
+    if policy is not None:
+        line = f"tests_policy: {_yaml_scalar(str(policy))}"
+        if policy != "immutable":
+            line += f"  # {DRAFT_MARKER} — agent proposed relaxing test protection; confirm it"
+        out.append(line)
+    if data["acceptance"]:
+        out.append("acceptance:")
+        for item in data["acceptance"]:
+            cmd = str(item["cmd"])
+            note = (f"detected from {detected[cmd]}; confirm it" if cmd in detected
+                    else "agent-proposed; run it yourself before trusting it")
+            out.append(f"  - cmd: {_yaml_scalar(cmd)}  # {DRAFT_MARKER} — {note}")
+            rest = {str(k): v for k, v in item.items() if k != "cmd"}
+            rest.setdefault("expect", "exit 0")
+            out += [f"    {key}: {_yaml_scalar(rest[key])}" for key in sorted(rest)]
+    else:
+        out.append(f"acceptance: []  # {DRAFT_MARKER} — the agent proposed no runnable "
+                   "check; add one that exists in this repo")
+    manual = [str(m) for m in as_list(data.get("manual_checks"))]
+    if manual:
+        out.append("manual_checks:")
+        out += [f"  - {_yaml_scalar(m)}" for m in manual]
+    out.append("autonomy: ask")
+    return "\n".join(out) + "\n"
+
+
+def agent_argv(entry, prompt, root):
+    """The argv to run and what to feed it on stdin. `{prompt}` and `{root}` are
+    substituted only in DRAFT_AGENTS entries, never in an --agent-cmd — that contract
+    is documented as prompt-on-stdin, and a caller's literal braces stay theirs. A
+    host that takes the prompt as an argument gets an empty stdin: agy answers a
+    piped stdin with its usage error instead of the draft."""
+    embedded = any("{prompt}" in part for part in entry)
+    argv = [part.replace("{prompt}", prompt).replace("{root}", str(root))
+            for part in entry]
+    return argv, ("" if embedded else prompt)
+
+
+def repo_state(root):
+    """`git status --porcelain` as one string, or None when git cannot answer."""
+    listed = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
+                            capture_output=True, encoding="utf-8", errors="replace")
+    return None if listed.returncode else listed.stdout
+
+
+def run_draft_agent(argv, prompt, root):
+    try:
+        return subprocess.run(argv, input=prompt, cwd=str(root), capture_output=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=DRAFT_AGENT_TIMEOUT), None
+    except FileNotFoundError:
+        return None, f"agent command not found: {argv[0]}"
+    except subprocess.TimeoutExpired:
+        return None, f"agent did not answer within {DRAFT_AGENT_TIMEOUT}s"
+
+
 def draft(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra))
+    if args.agent and args.agent_cmd:
+        return report_refusal("--agent and --agent-cmd name the same thing; pick one")
+    if args.agent and args.agent not in DRAFT_AGENTS:
+        known = ", ".join(sorted(DRAFT_AGENTS))
+        return report_refusal(f"unknown agent `{args.agent}`; known: {known} — "
+                              "or spell the whole command with --agent-cmd")
     try:
         root = repo_root(pathlib.Path("."))
     except RepoError as exc:
@@ -249,8 +442,46 @@ def draft(args, extra):
     out = root / DEFAULT_DRAFT_OUT if args.out is None else pathlib.Path(args.out)
     if os.path.lexists(out):  # a dangling symlink counts — never write through one
         return report_refusal(f"`{out}` already exists; pick another --out")
+    if args.agent or args.agent_cmd:
+        prompt = DRAFT_PROMPT.format(sentence=args.sentence)
+        if args.agent:
+            argv, feed = agent_argv(DRAFT_AGENTS[args.agent], prompt, root)
+        else:
+            argv, feed = shlex.split(args.agent_cmd), prompt
+        if not argv:
+            return report_refusal("--agent-cmd is empty")
+        # The tree is snapshotted around the agent run because a drafting agent only
+        # reads: claude -p denies writes by default and codex drafts read-only, but
+        # headless agy has no read-only mode, and --agent-cmd can name anything. A
+        # changed tree is refused, not repaired — the change is the caller's to
+        # inspect, and a draft written on top of it would launder it into the workflow.
+        before = repo_state(root)
+        if before is None:
+            return report_refusal("git cannot report the repository state, so an "
+                                  "agent draft cannot be supervised")
+        answered, trouble = run_draft_agent(argv, feed, root)
+        after = repo_state(root)
+        if after != before:
+            was, now = set(before.splitlines()), set((after or "").splitlines())
+            changed = sorted(line[3:] for line in was ^ now) or ["(unknown paths)"]
+            return report_refusal(
+                "the drafting agent changed the repository ("
+                + ", ".join(changed[:5]) + (", …" if len(changed) > 5 else "")
+                + "); a draft only reads — inspect `git status` and restore before "
+                  "drafting again")
+        if trouble is None and answered.returncode:
+            tail = (answered.stderr or answered.stdout).strip().splitlines()
+            trouble = f"agent exited {answered.returncode}" + (
+                f": {tail[-1]}" if tail else "")
+        if trouble is None:
+            data, trouble = parse_agent_brief(answered.stdout)
+        if trouble:
+            return report_refusal(f"agent draft rejected: {trouble}")
+        text = agent_draft_text(args.sentence, data, root)
+    else:
+        text = draft_text(args.sentence, detect_acceptance(root))
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(draft_text(args.sentence, detect_acceptance(root)), encoding="utf-8")
+    out.write_text(text, encoding="utf-8")
     print(f"drafted {out}")
     print(f"confirm every `# {DRAFT_MARKER}` line, then: prompire prepare {out}")
     return 0
@@ -520,6 +751,12 @@ def build_parser():
     drafted.add_argument("sentence")
     drafted.add_argument("--out", default=None,
                          help=f"default: <repo root>/{DEFAULT_DRAFT_OUT}")
+    drafted.add_argument("--agent", default=None,
+                         help="delegate the drafting to a host CLI: "
+                              + ", ".join(sorted(DRAFT_AGENTS)))
+    drafted.add_argument("--agent-cmd", default=None,
+                         help="any command that reads the drafting prompt on stdin "
+                              "and prints the brief on stdout")
     drafted.set_defaults(handler=draft)
 
     demoed = commands.add_parser("demo")

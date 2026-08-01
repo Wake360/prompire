@@ -17,6 +17,7 @@ pyproject.toml        package metadata and the `prompire` command
 hook_policy.py        the host-neutral hook core: which paths, which roots, which verdict
 hook_scope_guard.py   Claude Code PreToolUse adapter — stderr + exit 2
 hook_copilot_guard.py GitHub Copilot CLI preToolUse adapter — stdout JSON decision
+hook_antigravity_guard.py  Antigravity CLI PreToolUse adapter — stdout JSON decision
 references/
   schema.md           the authoritative field list — one definition per field
   rules.md            what each rule catches, and what it cannot
@@ -25,13 +26,13 @@ references/
   grounding.md        the book passage behind each rule
   maintaining.md      this file
 examples/             five briefs; baselines measured, not written
-  hooks/              hook configurations for both hosts; tests/docs.py parses each one
+  hooks/              hook configurations per hook host; tests/docs.py parses each one
 tests/
   battery.py          adversarial YAML cases: which rule ids fire, as errors or warnings
   e2e.py              real git repos, real commands, real diffs
   examples.py         regenerates and verifies examples/
   golden.py           renderer snapshots + the wording rules
-  hook.py             both hook adapters, as subprocesses, on throwaway repos
+  hook.py             every hook adapter, as subprocesses, on throwaway repos
   verify.py           acceptance verifier integration cases
   cli.py              prepare, verify, and close integration cases
   package.py          installed CLI packaging checks
@@ -53,7 +54,7 @@ python3 tests/battery.py       adversarial linter cases
 python3 tests/e2e.py           end-to-end workflows and attacks (builds temp git repos)
 python3 tests/examples.py      examples lint clean and reproduce their baselines
 python3 tests/golden.py        renderer snapshots
-python3 tests/hook.py          both hook adapters: blocked vs allowed vs neutral
+python3 tests/hook.py          the hook adapters: blocked vs allowed vs neutral
 python3 tests/encoding.py      every tool's stdout is utf-8 under a cp1252 console
 python3 tests/verify.py        acceptance verifier integration cases
 python3 tests/cli.py           prepare, verify, and close integration cases
@@ -76,15 +77,17 @@ diverge. So:
    change in `hook_policy.py`. Both hosts pick it up together.
 3. Only payload parsing and the shape of the answer belong in an adapter.
 
-`tests/hook.py` asserts the two adapters agree (`cp-both-hosts-read-one-boundary`): for
+`tests/hook.py` asserts the adapters agree (`cp-both-hosts-read-one-boundary`,
+`agy-three-hosts-read-one-boundary`): for
 the same repo and the same path, Claude Code's exit code and Copilot's decision must
 match. If a change makes that case fail, the change put a second opinion somewhere.
 
-The two hosts fail in opposite directions and the adapters are not interchangeable:
-Claude Code lets a call through on a crash, Copilot CLI denies on one. `hook_copilot_
-guard.py` therefore never exits non-zero and never emits `permissionDecision: "allow"`.
-Both properties are pinned in `tests/hook.py`; neither is a style choice. The full
-matrix is in `references/hosts.md`.
+The hosts fail in different directions and the adapters are not interchangeable:
+Claude Code and Antigravity CLI let a call through on a crash, Copilot CLI denies on
+one. `hook_copilot_guard.py` therefore never exits non-zero, and neither JSON-speaking
+adapter ever emits its host's allow decision — an allow would skip a permission flow
+this guard has no standing to skip. All of it is pinned in `tests/hook.py`; none of it
+is a style choice. The full matrix is in `references/hosts.md`.
 
 ## Changing a rule
 
@@ -139,10 +142,11 @@ Everything else is downstream and is overwritten by a sync, so a change made any
 else is a change waiting to be deleted.
 
 ```
-<repo>                          canonical — edit here, commit here
-~/.claude/skills/prompire/      installed skill, Claude Code
-~/.copilot/skills/prompire/     installed skill, GitHub Copilot CLI
-~/LifeOS/scripts/prompire/      older mirror, from before the repo existed
+<repo>                              canonical — edit here, commit here
+~/.claude/skills/prompire/          installed skill, Claude Code
+~/.copilot/skills/prompire/         installed skill, GitHub Copilot CLI
+~/.gemini/config/skills/prompire/   installed skill, Antigravity CLI
+~/LifeOS/scripts/prompire/          older mirror, from before the repo existed
 ```
 
 This inverted once already. The canonical copy used to be `~/.claude/skills/prompire/`,
@@ -151,13 +155,16 @@ repository now does. Both installs and the mirror are downstream of the repo tod
 a sync run in the old direction would overwrite the repository with a stale install.
 Check which way you are pointing before running any of these.
 
-Push the repo out to both installs after a change lands:
+Push the repo out to every install after a change lands:
 
 ```
 rsync -a --delete <repo>/ ~/.claude/skills/prompire/ \
   --exclude __pycache__ --exclude .git --exclude .github --exclude .gitignore \
   --exclude CLAUDE.md --exclude .prompire --exclude .agent-brief
 rsync -a --delete <repo>/ ~/.copilot/skills/prompire/ \
+  --exclude __pycache__ --exclude .git --exclude .github --exclude .gitignore \
+  --exclude CLAUDE.md --exclude .prompire --exclude .agent-brief
+rsync -a --delete <repo>/ ~/.gemini/config/skills/prompire/ \
   --exclude __pycache__ --exclude .git --exclude .github --exclude .gitignore \
   --exclude CLAUDE.md --exclude .prompire --exclude .agent-brief
 ```
@@ -185,5 +192,8 @@ proves the install is complete rather than merely recent:
 ```
 python3 ~/.claude/skills/prompire/tests/run_all.py
 ```
+
+`tests/ci.py` prints `skipped` there — the GitHub Action ships with the repository,
+never with an install. Every other suite must actually pass.
 
 Never edit an install or the mirror directly. The next sync deletes the change, silently.

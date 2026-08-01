@@ -642,6 +642,10 @@ def _(tmp, c):
 # --------------------------------------------------------------------------- main
 
 def main():
+    if not ACTION.is_dir():
+        print("skipped — .github/actions/prompire-verify is not here; the Action "
+              "ships with the repository, never with an installed copy")
+        return 0
     failed = []
     for name, fn in CASES:
         tmp = tempfile.mkdtemp(prefix="prompire-ci-")

@@ -10,9 +10,11 @@ outrun.
 early, and it is evadable by design: on Claude Code (`hook_scope_guard.py`) it sees
 `Write`, `Edit`, `MultiEdit` and `NotebookEdit`; on GitHub Copilot CLI
 (`hook_copilot_guard.py`) it sees `create`, `edit`, `str_replace_editor` and
-`apply_patch`. On neither host does it see the shell — not `Bash`, not `powershell`. It
-is a speed bump against accidental and lazy scope drift. It is not a sandbox and must
-not be described as prevention.
+`apply_patch`; on Antigravity CLI (`hook_antigravity_guard.py`) it sees
+`write_to_file`, `replace_file_content` and `multi_replace_file_content`. On no host
+does it see the shell — not `Bash`, not `powershell`, not `run_command`. It is a speed
+bump against accidental and lazy scope drift. It is not a sandbox and must not be
+described as prevention.
 
 **`check_scope.py`** reads the real git diff after the agent stops. This is the
 authority, because git sees the write whatever tool made it. It needs no cooperation
@@ -24,10 +26,11 @@ checker exists because the hook can be walked around. Running only the hook give
 guard with a documented hole; running only the checker gives you a post-mortem. The
 design is both.
 
-Two hosts, one boundary: both adapters are thin protocol shims over `hook_policy.py`,
-which is the only caller of the `boundary_verdict`/`tests_verdict` that `check_scope.py`
-also calls. A second interpretation of `scope` is the one thing that split must never
-grow. Install locations and hook configuration for both hosts: `references/hosts.md`.
+One boundary, however many hosts: every adapter is a thin protocol shim over
+`hook_policy.py`, which is the only caller of the `boundary_verdict`/`tests_verdict`
+that `check_scope.py` also calls. A second interpretation of `scope` is the one thing
+that split must never grow. Install locations and hook configuration per host:
+`references/hosts.md`.
 
 ## The guarantee
 

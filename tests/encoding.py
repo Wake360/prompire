@@ -117,6 +117,17 @@ def denies(r, name):
            f"{type(e).__name__}: {e} ({len(r.stdout)} bytes of stdout)")
 
 
+def agy_denies(r, name):
+    """The Antigravity adapter's refusal rides on stdout too, in agy's own key names."""
+    try:
+        decision = json.loads(r.stdout.decode("utf-8"))
+        ok(decision.get("decision") == "deny", f"{name}: decision is deny",
+           r.stdout.decode("utf-8", "backslashreplace"))
+    except Exception as e:
+        ok(False, f"{name}: decision is deny",
+           f"{type(e).__name__}: {e} ({len(r.stdout)} bytes of stdout)")
+
+
 # ---------------------------------------------------------------- briefs on disk only
 
 NO_ACCEPTANCE = """goal: Add a --json flag to the report CLI.
@@ -334,6 +345,25 @@ base_rev: {head}
                    stdin=json.dumps({"toolName": "create", "cwd": str(root),
                                      "toolArgs": {"path": pointer}}).encode("utf-8"))
     denies(r, "hook-copilot-guard/denies-pointer-write-without-pyyaml")
+
+    # Antigravity proceeds on a non-zero exit, so like Copilot the decision rides on
+    # stdout — same two cases: an unspellable path still refused, and the pointer
+    # protection surviving an unimportable PyYAML.
+    agy = json.dumps({"workspacePaths": [str(root)],
+                      "toolCall": {"name": "write_to_file",
+                                   "args": {"TargetFile": blocked}}}).encode("utf-8")
+    r = emits_utf8("hook-antigravity-guard/czech-path-denies-on-stdout",
+                   tool("hook_antigravity_guard.py"), stdin=agy, cwd=root,
+                   expect_exit=0)
+    agy_denies(r, "hook-antigravity-guard/czech-path-denies-on-stdout")
+    r = emits_utf8("hook-antigravity-guard/denies-pointer-write-without-pyyaml",
+                   tool("hook_antigravity_guard.py"), cwd=root, expect_exit=0,
+                   env_extra=no_yaml,
+                   stdin=json.dumps({"workspacePaths": [str(root)],
+                                     "toolCall": {"name": "write_to_file",
+                                                  "args": {"TargetFile": pointer}}
+                                     }).encode("utf-8"))
+    agy_denies(r, "hook-antigravity-guard/denies-pointer-write-without-pyyaml")
 
 
 def runner_cases(tmp, root, head):

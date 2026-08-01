@@ -47,6 +47,18 @@ CONTRACT_LINE = ("The brief is the contract. Widening `scope` is an edit to the 
                  "followed by a fresh baseline, not a decision to make mid-task.")
 
 
+def deny_reason(rel, rule, message, fix):
+    """The Claude adapter's three sentences, on one line — the wording every
+    JSON-refusing host (Copilot CLI, Antigravity CLI) hands its agent. One copy, next
+    to CONTRACT_LINE and for the same reason: the wording is the part an agent reads
+    and acts on, and per-adapter copies are how two hosts' explanations quietly stop
+    agreeing. Deterministic to the byte, so tests can pin it."""
+    text = f"BLOCKED by Prompire scope guard [{rule}]: {rel} — {message}"
+    if fix:
+        text += f" -> {fix}"
+    return f"{text}. {CONTRACT_LINE}"
+
+
 def find_root(start):
     """The FARTHEST ancestor of `start` holding a `.prompire/ACTIVE` file, or None —
     regardless of whether that pointer's own brief loads. Used only to pick a location

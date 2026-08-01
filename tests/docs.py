@@ -31,6 +31,10 @@ from brief_common import (  # noqa: E402
     TRANSITIONS,
 )
 from check_scope import BASE_SOURCE  # noqa: E402
+from hook_antigravity_guard import (  # noqa: E402
+    FILE_TOOLS as AGY_FILE_TOOLS,
+    TARGET_KEY as AGY_TARGET_KEY,
+)
 from hook_copilot_guard import (  # noqa: E402
     CLAUDE_FILE_TOOLS,
     PATCH_KEYS,
@@ -47,10 +51,11 @@ BASE_SOURCE_LABELS = [k for k in BASE_SOURCE if k] + ["base uncorroborated"]
 TOOLS = ("lint_brief.py", "baseline.py", "check_scope.py", "render_brief.py",
          "brief_common.py")
 
-# The two host adapters and the core they share. Listed separately from TOOLS because
+# The host adapters and the core they share. Listed separately from TOOLS because
 # these are not part of the compile→lint→measure→render workflow SKILL.md walks through;
 # they are the enforcement half, and `references/hosts.md` is where they are explained.
-HOOKS = ("hook_policy.py", "hook_scope_guard.py", "hook_copilot_guard.py")
+HOOKS = ("hook_policy.py", "hook_scope_guard.py", "hook_copilot_guard.py",
+         "hook_antigravity_guard.py")
 
 # Claims this project does not get to make about itself. `check_scope.py` reads a git
 # diff and the hook is an evadable speed bump over four tool names; neither is a
@@ -348,11 +353,20 @@ def host_problems():
         if f"`{k}`" not in hosts:
             out.append(f"hook_copilot_guard.py reads the `{k}` argument, which hosts.md "
                        "does not document")
+    for t in AGY_FILE_TOOLS:
+        if f"`{t}`" not in hosts:
+            out.append(f"hook_antigravity_guard.py reads the `{t}` tool, but hosts.md "
+                       "does not list it as supported")
+    if f"`{AGY_TARGET_KEY}`" not in hosts:
+        out.append(f"hook_antigravity_guard.py reads the `{AGY_TARGET_KEY}` argument, "
+                   "which hosts.md does not document")
 
     for loc in ("~/.claude/skills/prompire/", "~/.copilot/skills/prompire/",
                 ".github/skills/prompire/", ".claude/skills/prompire/",
                 ".agents/skills/prompire/", ".github/hooks/", "~/.copilot/hooks/",
-                "%USERPROFILE%\\.copilot\\hooks\\", "$COPILOT_HOME/hooks/"):
+                "%USERPROFILE%\\.copilot\\hooks\\", "$COPILOT_HOME/hooks/",
+                "~/.gemini/config/skills/prompire/", ".agents/hooks.json",
+                "~/.gemini/config/hooks.json"):
         if loc not in hosts:
             out.append(f"references/hosts.md does not document the `{loc}` location")
 
@@ -389,6 +403,11 @@ def hook_config_problems():
             continue
         if f"examples/hooks/{f.name}" not in hosts:
             out.append(f"examples/hooks/{f.name} ships but hosts.md never points at it")
+        if f.name.startswith("antigravity"):
+            # Antigravity's schema has no top-level `hooks` object: named hook groups,
+            # each mapping event names to matcher groups. Validated on its own terms.
+            out += _antigravity_config_problems(f, cfg)
+            continue
         if not isinstance(cfg, dict) or not isinstance(cfg.get("hooks"), dict):
             out.append(f"examples/hooks/{f.name} has no `hooks` object")
             continue
@@ -422,6 +441,41 @@ def hook_config_problems():
     return out
 
 
+def _antigravity_config_problems(f, cfg):
+    """One named group per file, PreToolUse only, the matcher naming exactly the tools
+    the adapter reads, the command invoking the adapter. Same reasoning as the Copilot
+    checks: a matcher that omits a handled tool is a silent hole, and a matcher that
+    names the shell claims an interception that does not happen."""
+    out = []
+    if not isinstance(cfg, dict) or not cfg or not all(
+            isinstance(group, dict) for group in cfg.values()):
+        return [f"examples/hooks/{f.name} is not a mapping of named hook groups"]
+    for group_name, group in cfg.items():
+        for event, entries in group.items():
+            if event == "enabled":
+                continue
+            if event != "PreToolUse":
+                out.append(f"examples/hooks/{f.name} configures `{event}` in "
+                           f"`{group_name}`; Prompire is a pre-tool-use guard only")
+                continue
+            for entry in entries:
+                tokens = {t for t in str(entry.get("matcher", "")).split("|") if t}
+                if tokens != set(AGY_FILE_TOOLS):
+                    out.append(f"examples/hooks/{f.name} matches {sorted(tokens)}, but "
+                               f"the adapter reads {sorted(AGY_FILE_TOOLS)} — a tool "
+                               "the matcher omits is one the hook never runs for")
+                if tokens & {"run_command", "bash", "powershell"}:
+                    out.append(f"examples/hooks/{f.name} configures a shell tool. Shell "
+                               "writes are not intercepted; claiming otherwise in a "
+                               "shipped config is worse than the documented gap")
+                for handler in entry.get("hooks", []) or [{}]:
+                    cmd = handler.get("command")
+                    if not cmd or "hook_antigravity_guard.py" not in cmd:
+                        out.append(f"examples/hooks/{f.name}'s command does not invoke "
+                                   "hook_antigravity_guard.py")
+    return out
+
+
 def overclaim_problems():
     """The project's own stance, enforced against the project's own prose.
 
@@ -446,9 +500,15 @@ BINARY_MODES = {"rb", "wb", "ab", "rb+", "wb+", "ab+", "r+b", "w+b", "a+b", "xb"
 
 
 def tracked_py():
-    return subprocess.run(
+    # An installed copy has no `.git` — the sync ships the same tracked `*.py`
+    # set minus the repo scaffolding, so a glob scans the same files there.
+    listed = subprocess.run(
         ["git", "-C", str(SKILL), "ls-files", "*.py"], capture_output=True,
-        encoding="utf-8", check=True).stdout.splitlines()
+        encoding="utf-8")
+    if listed.returncode == 0:
+        return listed.stdout.splitlines()
+    return sorted(p.relative_to(SKILL).as_posix()
+                  for p in SKILL.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def tokens_of(rel):

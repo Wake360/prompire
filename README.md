@@ -37,9 +37,18 @@ Optional step 0: `prompire draft "one sentence"` writes a draft brief to
 `.prompire/task.yaml`. The heuristic is deterministic, not a model — it proposes an
 acceptance command only where the repo evidences one (`package.json` `scripts.test`, a
 pytest config, a `Makefile` `test:` target, `Cargo.toml`, `go.mod`), and states the
-absence rather than inventing a command. Read every `# prompire:unconfirmed` line, fix
-it, then delete the marker: `prompire prepare` refuses while one remains. Under Claude
-Code or Copilot CLI the host model fills this step instead, following `SKILL.md`.
+absence rather than inventing a command. `--agent claude`, `--agent codex`, `--agent
+antigravity` — or any CLI via `--agent-cmd`, drafting prompt on stdin, brief on
+stdout — delegates the drafting to a host model that can read the repo. The reply is
+parsed as data and re-serialized: the model's own comments are dropped, `baseline` and
+`base_rev` are refused as measured rather than drafted, and the boundary, every
+acceptance command and any relaxed `tests_policy` come back marked
+`# prompire:unconfirmed` however confident the model sounded. A draft run that changed
+the repository is refused outright — a drafting agent only reads, and `draft` checks
+`git status` afterwards rather than trusting that. Read every `# prompire:unconfirmed`
+line, fix it, then delete the marker: `prompire prepare` refuses while one remains.
+Under Claude Code, Copilot CLI, Codex CLI or Antigravity CLI the host model fills this
+step instead, following `SKILL.md`.
 
 ### Prepare
 
@@ -133,12 +142,13 @@ cooperation from the agent — nothing it could claim would hide the extra file.
 
 ## Limitations
 
-The hook does not watch `Bash` or `powershell`, on either the Claude Code adapter
-(`hook_scope_guard.py`) or the Copilot CLI one (`hook_copilot_guard.py`) — an agent with
+The hook does not watch the shell — not `Bash` or `powershell` on the Claude Code
+adapter (`hook_scope_guard.py`) or the Copilot CLI one (`hook_copilot_guard.py`), not
+`run_command` on the Antigravity CLI one (`hook_antigravity_guard.py`) — an agent with
 shell access can write anywhere the hook would otherwise refuse. It is a speed bump
 against accidental drift, not a sandbox. The authority is `check_scope.py` reading the
 git diff after the agent stops, because git sees a write whatever tool made it. Install
-locations for both adapters: `references/hosts.md`. Every other known gap — symlink and
+locations for every adapter: `references/hosts.md`. Every other known gap — symlink and
 casefold edge cases, log forgeability, alarm fatigue with two briefs on one branch, what
 one `--deactivate` does to `--strict` forever — is measured and explained in
 `references/threat-model.md`.
@@ -154,8 +164,8 @@ what was declared was pinned before the work began.
 ## Documentation
 
 - `SKILL.md` — the workflow, the brief shape, the hard rules.
-- `references/hosts.md` — running on Claude Code and GitHub Copilot CLI: install
-  locations, hook configuration, the failure-semantics table.
+- `references/hosts.md` — running on Claude Code, GitHub Copilot CLI, Codex CLI and
+  Antigravity CLI: install locations, hook configuration, the failure-semantics table.
 - `references/threat-model.md` — the two-layer design, the guarantee, and the full
   limitations table.
 - `references/ci.md` — the GitHub Action: what the base means in CI, and what the

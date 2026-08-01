@@ -21,7 +21,11 @@ prompire prepare .prompire/<slug>.yaml --target generic
 Write the brief yourself — that is this skill's job. `prompire draft "<one sentence>"`
 exists for callers without a model: it proposes only acceptance commands the repo
 evidences and marks everything else `# prompire:unconfirmed`, which `prepare` refuses
-until the line is fixed and the marker deleted.
+until the line is fixed and the marker deleted. `draft --agent claude`, `--agent
+codex`, `--agent antigravity` (or any CLI via `--agent-cmd`) borrows a host model for
+the same step; the reply is re-serialized without the model's comments, the boundary
+and the acceptance commands stay marked until a human confirms each line, and a draft
+run that changed the repository is refused outright — a drafting agent only reads.
 
 ### Hand off — Prompire does not launch the agent
 

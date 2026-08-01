@@ -3,6 +3,46 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.9.0 — 2026-08-01
+
+**`prompire draft` can delegate the drafting to a host model.**
+
+### Added
+
+- `prompire draft --agent claude`, `--agent codex`, and `--agent-cmd "<command>"` for
+  any other CLI: the drafting prompt goes to the host on stdin, the reply must be a
+  YAML mapping and is treated as data — parsed, checked, and re-serialized, so the
+  model's own comments never reach the file. `baseline`, `base_rev` and `dirty_baseline` in the reply are
+  refused as measured rather than drafted, unknown keys are refused, and `autonomy` is
+  always written as `ask`.
+- The re-serialized draft keeps the confirmation gate: every scope entry, every
+  acceptance command and any `tests_policy` other than `immutable` is marked
+  `# prompire:unconfirmed`, and `prepare` refuses until a human deletes each marker.
+  Commands the repository evidences keep their evidence in the marker note; the rest
+  are labelled agent-proposed. Scope entries matching nothing tracked say so.
+- Codex CLI is a documented host in `references/hosts.md`: skill discovery at
+  `~/.codex/skills/`, `~/.agents/skills/` and repository `.agents/skills/`, the
+  existing `codex` renderer target for the handoff, and no pre-write hook — the
+  post-hoc git-diff check is the whole enforcement there. The full lifecycle
+  (`draft --agent codex`, `prepare --target codex`, `codex exec`, `verify`, `close`)
+  was run live against codex-cli 0.146.0 on 2026-08-01.
+- Antigravity CLI (`agy`) is a documented host with a third PreToolUse adapter,
+  `hook_antigravity_guard.py`: skill discovery at repository `.agents/skills/` and
+  global `~/.gemini/config/skills/`, hooks at `.agents/hooks.json` and
+  `~/.gemini/config/hooks.json`, `draft --agent antigravity`. The adapter reads
+  `write_to_file`, `replace_file_content` and `multi_replace_file_content` and speaks
+  agy's deny-decision JSON; the boundary is the same `hook_policy.verdict_for()` the
+  other two adapters call. Failure direction measured against agy 1.1.8 on
+  2026-08-01 — crash, non-zero exit, unparseable output and timeout all let the call
+  proceed, so the host's native convention already fails open — and the full
+  lifecycle (skill discovery, `draft --agent antigravity`, `prepare`, an `agy` run
+  under the armed hook with an out-of-scope write refused, `verify`, `close`) was run
+  live against the same version.
+- `draft` with any agent now snapshots `git status` around the agent run and refuses
+  the draft when the tree changed, naming the changed paths: claude drafts under
+  write-permission denials and codex under a read-only sandbox, but headless agy has
+  no read-only mode, and `--agent-cmd` can name anything.
+
 ## 0.8.0 — 2026-07-30
 
 **The brief now enforces its own scope at write time, and supports live demonstration.**

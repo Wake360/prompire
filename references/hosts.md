@@ -1,24 +1,41 @@
 # Agent hosts
 
-Prompire runs as an agent skill on **Claude Code** and on **GitHub Copilot CLI**. The
-brief, the linter, the baseline, the checker and the boundary are the same on both. What
-differs is where the skill is installed, which renderer target you hand the agent, and
-how the PreToolUse hook reports a refusal — and the third one differs enough to need two
-adapters.
+Prompire runs as an agent skill on **Claude Code**, on **GitHub Copilot CLI**, on
+**Codex CLI** and on **Antigravity CLI**. The brief, the linter, the baseline, the
+checker and the boundary are the same on all of them. What differs is where the skill
+is installed, which renderer target you hand the agent, and how a pre-write hook
+reports a refusal — Claude Code, Copilot CLI and Antigravity CLI differ enough about
+that to need three adapters, and Codex CLI has no hook adapter at all: there, the
+post-hoc checker is the entire enforcement.
 
 Copilot support here is **CLI only**. Copilot cloud agent is not supported: it loads
 hooks only from `.github/hooks/*.json` on the default branch, and nothing in this tree
 has been run or tested against it. Do not configure Prompire for it on the strength of
 the CLI instructions below.
 
+Antigravity support is **CLI only** for the same reason: the Antigravity IDE and the
+Antigravity 2.0 desktop app load customizations from their own roots, and nothing in
+this tree has been run or tested against either. Everything below about Antigravity
+was measured against `agy` 1.1.8 on 2026-08-01.
+
 ## Host support matrix
 
-| Surface | Any agent | Claude Code | Copilot CLI |
-|---|---:|---:|---:|
-| Generic rendered prompt | yes | yes | yes |
-| Post-run git diff verdict | yes | yes | yes |
-| Pre-write hook | no | yes | yes |
-| Agent launching | no | no | no |
+| Surface | Any agent | Claude Code | Copilot CLI | Codex CLI | Antigravity CLI |
+|---|---:|---:|---:|---:|---:|
+| Generic rendered prompt | yes | yes | yes | yes | yes |
+| Post-run git diff verdict | yes | yes | yes | yes | yes |
+| Pre-write hook | no | yes | yes | no | yes |
+| Agent launching | no | no | no | no | no |
+
+Agent launching means the work itself: Prompire never starts the agent that edits the
+repo. `prompire draft --agent claude`, `--agent codex`, `--agent antigravity` (or
+`--agent-cmd`) does run a host CLI once, but only to propose a draft brief — the reply
+is re-serialized with `prompire:unconfirmed` markers, and the handoff below stays
+manual. The codex drafting invocation runs `codex exec` under its read-only sandbox
+with the user config ignored; drafting reads the repo and must never write it.
+Headless `agy` has no read-only mode at all, so `draft` snapshots `git status` around
+every agent run — any host's, `--agent-cmd` included — and refuses the draft if the
+tree changed.
 
 ## Primary workflow
 
@@ -55,18 +72,19 @@ prompire close .prompire/task.yaml
 ## One tree, one boundary
 
 ```
-brief_common.py        the schema and the boundary — boundary_verdict, tests_verdict
-hook_policy.py         the host-neutral hook core: which paths, which roots, which verdict
-hook_scope_guard.py    Claude Code adapter — stdin JSON in, stderr + exit 2 out
-hook_copilot_guard.py  Copilot CLI adapter — stdin JSON in, stdout JSON decision out
-check_scope.py         the authority, afterwards, on the real git diff
+brief_common.py            the schema and the boundary — boundary_verdict, tests_verdict
+hook_policy.py             the host-neutral hook core: which paths, which roots, which verdict
+hook_scope_guard.py        Claude Code adapter — stdin JSON in, stderr + exit 2 out
+hook_copilot_guard.py      Copilot CLI adapter — stdin JSON in, stdout JSON decision out
+hook_antigravity_guard.py  Antigravity CLI adapter — stdin JSON in, stdout JSON decision out
+check_scope.py             the authority, afterwards, on the real git diff
 ```
 
-Both adapters call `hook_policy.verdict_for()`, which calls the same `boundary_verdict`
-and `tests_verdict` that `check_scope.py` calls. There is no second interpretation of
-`scope` in this tree and there must never be one: an adapter is allowed to know its
-host's wire format and nothing else. If you find yourself deciding what a path means
-inside an adapter, the decision belongs in `brief_common.py`.
+Every adapter calls `hook_policy.verdict_for()`, which calls the same
+`boundary_verdict` and `tests_verdict` that `check_scope.py` calls. There is no second
+interpretation of `scope` in this tree and there must never be one: an adapter is
+allowed to know its host's wire format and nothing else. If you find yourself deciding
+what a path means inside an adapter, the decision belongs in `brief_common.py`.
 
 ## Installing the skill
 
@@ -79,9 +97,11 @@ tolerates.
 Personal, available in every repository you open:
 
 ```
-~/.claude/skills/prompire/      Claude Code
-~/.copilot/skills/prompire/     Copilot CLI
-~/.agents/skills/prompire/      Copilot CLI, host-neutral location
+~/.claude/skills/prompire/          Claude Code
+~/.copilot/skills/prompire/         Copilot CLI
+~/.codex/skills/prompire/           Codex CLI
+~/.gemini/config/skills/prompire/   Antigravity CLI, its documented global root
+~/.agents/skills/prompire/          Copilot CLI and Codex CLI, host-neutral location
 ```
 
 Repository, committed and available to everyone who clones it:
@@ -89,8 +109,13 @@ Repository, committed and available to everyone who clones it:
 ```
 .claude/skills/prompire/        Claude Code
 .github/skills/prompire/        Copilot CLI
-.agents/skills/prompire/        both, host-neutral location
+.agents/skills/prompire/        Copilot CLI, Codex CLI and Antigravity CLI — host-neutral
 ```
+
+Antigravity walks from the working directory up to the repository root for `.agents/`,
+so the host-neutral repository location serves it with no extra copy; discovery from
+there was verified live (the skill's name and description appear in the model's skill
+list).
 
 A repository install is the right choice when the briefs are part of how the project is
 worked on and you want every contributor's agent to compile them the same way. A personal
@@ -98,9 +123,11 @@ install is the right choice when it is your habit rather than the project's rule
 exist, both are discovered; they are the same skill, so that is harmless, but keep one of
 them authoritative so a stale copy cannot answer first.
 
-`SKILL.md` is a valid Agent Skill for both hosts as it stands — YAML frontmatter with
-`name` and `description`, then the workflow. Neither host needs a host-specific copy of
-it, and there isn't one.
+`SKILL.md` is a valid Agent Skill for every host above as it stands — YAML frontmatter
+with `name` and `description`, then the workflow. No host needs a host-specific copy of
+it, and there isn't one. `agents/openai.yaml` carries the interface metadata OpenAI
+hosts read — display name, short description, default prompt — and is inert everywhere
+else.
 
 ### Naming the scripts in instructions
 
@@ -298,22 +325,131 @@ behaviour rather than by introspection, in a scratch repository:
    A denial prints one JSON object; anything allowed or unknown prints nothing. Either
   way it exits 0.
 
-## Why there are two adapters: the hosts fail in opposite directions
+## Installing the hook — Antigravity CLI
 
-| | Claude Code | GitHub Copilot CLI |
-|---|---|---|
-| Refuse | exit 2, reason on stderr | exit 0, `{"permissionDecision":"deny","permissionDecisionReason":…}` on stdout |
-| Allow through | exit 0 | exit 0, empty stdout |
-| Hook crashes | call proceeds | **call is denied** |
-| Hook exits non-zero | call proceeds | **call is denied** |
-| Hook times out | call proceeds | call proceeds |
+Antigravity configures hooks in a `hooks.json` at the root of a customization
+directory — named hook groups, not Copilot's flat schema, and no `version` field.
+
+**Where the file goes.** Both locations verified against agy 1.1.8:
+
+```
+.agents/hooks.json                  repository — committed, applies to everyone
+~/.gemini/config/hooks.json         user — Antigravity's global customization root
+```
+
+**Repository-level** (`examples/hooks/antigravity-repo.json`) — the hook command runs
+with its working directory set to the directory containing `hooks.json`, so a
+repository install at `.agents/skills/prompire/` is reachable with a relative path:
+
+```json
+{
+  "prompire": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 skills/prompire/hook_antigravity_guard.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**User-level** (`examples/hooks/antigravity-user.json`) — same entry, pointing at a
+global install; `~` is expanded by the host:
+
+```json
+{
+  "prompire": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.gemini/config/skills/prompire/hook_antigravity_guard.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The matcher is a regex over tool names and must name exactly the tools the adapter
+reads — a tool the adapter handles but the matcher omits is a tool the hook is never
+invoked for at all. `run_command` is deliberately absent; see the gap section at the
+end of this file.
+
+**Removing it.** Delete the file, or set `"enabled": false` inside the `prompire`
+entry.
+
+**Checking Antigravity found it.** Same behavioural check as Copilot, in a scratch
+repository: arm a brief whose `scope` excludes some path, ask `agy` to create that
+path, and expect the model to quote `BLOCKED by Prompire scope guard`. The adapter can
+also be run by hand, no Antigravity needed:
+
+```bash
+echo '{"workspacePaths":["'"$PWD"'"],"toolCall":{"name":"write_to_file","args":{"TargetFile":"'"$PWD"'/scratch.txt"}}}' \
+  | python3 hook_antigravity_guard.py
+```
+
+A denial prints one JSON object; anything allowed or unknown prints nothing. Either
+way it exits 0.
+
+## Codex CLI — no hook, checker only
+
+There is no pre-write hook adapter for Codex CLI, deliberately. Codex constrains
+model-run commands with its own sandbox (`read-only`, `workspace-write`), and that
+boundary is the workspace, not the brief: inside the repository it allows any write the
+`scope` forbids. Nothing in Codex's hook surface has been evaluated against the
+fail-open requirement below, so no adapter ships until one is. What enforces the brief
+under Codex is the same thing that enforces it against `bash` on the other hosts —
+`check_scope.py` reading the real git diff afterwards, which needs no cooperation from
+the host at all.
+
+The lifecycle is the standard one with the `codex` renderer target:
+
+```bash
+prompire draft "one sentence" --agent codex      # optional; codex exec, read-only
+prompire prepare .prompire/task.yaml --target codex
+codex exec --sandbox workspace-write - < .prompire/task.codex.md
+prompire verify .prompire/task.yaml
+prompire close .prompire/task.yaml
+```
+
+Skill discovery was verified against codex-cli 0.146.0: the loader reads
+`~/.codex/skills/`, `~/.agents/skills/` and the repository's `.agents/skills/`. The
+full lifecycle above, drafting included, was run live against the same version on
+2026-08-01.
+
+## Why there are three adapters: the hosts fail in different directions
+
+| | Claude Code | GitHub Copilot CLI | Antigravity CLI |
+|---|---|---|---|
+| Refuse | exit 2, reason on stderr | exit 0, `{"permissionDecision":"deny","permissionDecisionReason":…}` on stdout | exit 0, `{"decision":"deny","reason":…}` on stdout |
+| Allow through | exit 0 | exit 0, empty stdout | exit 0, empty stdout |
+| Hook crashes | call proceeds | **call is denied** | call proceeds |
+| Hook exits non-zero | call proceeds | **call is denied** | call proceeds |
+| Hook times out | call proceeds | call proceeds | call proceeds |
+
+Every Antigravity cell was measured against agy 1.1.8 on 2026-08-01, not read off a
+docs page: a `sh -c "exit 1"` hook, an `echo not-json` hook and a hook sleeping past
+its `timeout` each let a `write_to_file` proceed; a valid deny decision blocked it,
+with the reason quoted back to the model verbatim.
 
 Prompire's hook is required to fail open on its own trouble — a missing repo, an
 unreadable brief, a parse error, an unexpected exception. It runs on every watched write
 in every project on the machine, and a guard that breaks unrelated sessions gets
 uninstalled, which protects nothing. Claude Code's convention already matches that
-requirement; Copilot CLI's is the reverse of it. So `hook_copilot_guard.py` translates
-explicitly, and never exits non-zero:
+requirement, and so does Antigravity's; Copilot CLI's is the reverse of both. So
+`hook_copilot_guard.py` translates explicitly, and never exits non-zero:
 
 - **A definite violation** — exit 0, one JSON object, `permissionDecision: "deny"`, with
   a reason naming the path and the rule.
@@ -327,8 +463,14 @@ the hook's silence, granted for the reason that the hook did not understand the 
 Emitting nothing leaves the call in Copilot's normal permission flow, where the human is
 still asked.
 
-Diagnostics go to `.prompire/hook-errors.log`, same file and same limitations as on
-Claude Code: agent-writable, truncatable and forgeable, so it is a diagnostic trail and
+`hook_antigravity_guard.py` answers in the same two shapes — a deny decision or
+silence, exit 0 both ways — for the same reasons: Antigravity's `allow` skips the
+host's own permission flow for the call, an approval this hook has no standing to
+grant, and although a crash would fail open natively, an adapter that exits 0 and logs
+its own trouble leaves a mark instead of looking exactly like a compliant agent.
+
+Diagnostics go to `.prompire/hook-errors.log` on all three hosts, same file and same
+limitations: agent-writable, truncatable and forgeable, so it is a diagnostic trail and
 not an audit log. The audit trail is `check_scope.py` plus git history.
 
 ## What the Copilot adapter reads
@@ -368,15 +510,49 @@ contains none of the keys above, a payload without `cwd`, an unknown tool. All o
 are silence, never a guess. A multi-file patch is not approved because its first path was
 allowed, and an operation the adapter does not recognise is not reported as checked.
 
-## What the hook does not cover, on either host
+## What the Antigravity adapter reads
 
-`bash` and `powershell` are deliberately not matched, and must not be. A shell write
-bypasses the early guard entirely; `check_scope.py` on the real git diff is what sees it
-afterwards, because git sees the write whatever tool made it. This is the two-layer
-design, not an oversight — see the limitations table in `references/threat-model.md`,
-which applies unchanged to Copilot. Inspecting a command line for the files it will touch
-is a much weaker claim than reading a diff, and a guard that made it would be worse than
-one with a stated hole.
+**Payload shape.** One JSON object on stdin, protojson camelCase: the call as
+`toolCall: {name, args}`, the session's roots as `workspacePaths` — a list; there is
+no `cwd` field. Every workspace path is checked as a governing root and the target's
+own repository is checked regardless, so an agent bound by one workspace's brief
+cannot escape into another repository; any verdict refuses the whole call.
+
+**Tools and the argument they are read from.**
+
+| Tool | Paths read from |
+|---|---|
+| `write_to_file` | `TargetFile` |
+| `replace_file_content` | `TargetFile` |
+| `multi_replace_file_content` | `TargetFile` |
+
+`TargetFile` is attested by captured payloads (agy 1.1.8), which carry it as an
+absolute path; `multi_replace_file_content` is named by the host's own prompt text as
+the same editing family as `replace_file_content`. Only an absolute `TargetFile` is
+judged: the host's rule for resolving a relative spelling is not documented, and
+resolving it against a workspace path of the adapter's own choosing would judge a file
+nobody named.
+
+**What draws no verdict.** A payload without a usable `workspacePaths`, a relative or
+missing `TargetFile`, an unknown tool, malformed stdin. All of them are silence, never
+a guess — and never an allow, which would skip the host's own permission flow for the
+call.
+
+**Unmatched file-changing operations.** `delete_directory`, `move` and notebook edits
+change files but are not matched: their argument shapes are unattested — no public
+per-tool schema, never observed in a captured payload — and a guard that guessed at
+them would answer questions it cannot read. Every one of them still meets
+`check_scope.py`, because git sees the change whatever tool made it.
+
+## What the hook does not cover, on any hook host
+
+`bash`, `powershell` and `run_command` are deliberately not matched, and must not be. A
+shell write bypasses the early guard entirely; `check_scope.py` on the real git diff is
+what sees it afterwards, because git sees the write whatever tool made it. This is the
+two-layer design, not an oversight — see the limitations table in
+`references/threat-model.md`, which applies unchanged to Copilot and Antigravity.
+Inspecting a command line for the files it will touch is a much weaker claim than
+reading a diff, and a guard that made it would be worse than one with a stated hole.
 
 The hook is not a sandbox and not a permission system. Nothing here binds an agent with
 shell access. The reviewer still runs `check_scope.py BRIEF --strict` after the agent

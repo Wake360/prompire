@@ -1,0 +1,16 @@
+{
+  "prompire": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.gemini/config/skills/prompire/hook_antigravity_guard.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
