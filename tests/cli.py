@@ -45,9 +45,11 @@ class Checks:
         self.ok(got == want, f"{message}: got {got!r}, want {want!r}")
 
 
-def run(*args, cwd=None):
+def run(*args, cwd=None, env=None):
+    child_env = dict(ENV, **(env or {}))
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
-                          capture_output=True, text=True, encoding="utf-8", env=ENV,
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=child_env,
                           cwd=None if cwd is None else str(cwd))
 
 
@@ -278,23 +280,42 @@ def _(repo, checks):
     checks.equal(missing.returncode, 2, "a missing agent binary must be a refusal")
 
 
-@case("draft refuses when the agent changed the repository")
+@case("draft agent writes only inside a disposable snapshot")
 def _(repo, checks):
-    out = pathlib.Path(repo) / ".prompire" / "agent.yaml"
-    # A drafting agent only reads; this one writes a stray file and still answers
-    # with a perfectly valid draft. The valid reply must not buy the mutation a pass.
-    (pathlib.Path(repo) / "fake_agent.py").write_text(
-        "import sys\nsys.stdin.read()\n"
-        "open('stray.txt', 'w', encoding='utf-8').write('oops')\n"
+    root = pathlib.Path(repo)
+    cart = root / "src" / "cart.py"
+    cart.write_text("dirty source\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".prompire/\n__pycache__/\n.env\n",
+                                     encoding="utf-8")
+    ignored = root / ".env"
+    ignored.write_text("source secret\n", encoding="utf-8")
+    note = root / "notes.txt"
+    note.write_text("source note\n", encoding="utf-8")
+    (root / "fake_agent.py").write_text(
+        "import pathlib, sys\n"
+        "sys.stdin.read()\n"
+        "assert pathlib.Path('src/cart.py').read_text() == 'dirty source\\n'\n"
+        "pathlib.Path('src/cart.py').write_text('agent cart\\n')\n"
+        "pathlib.Path('.env').write_text('agent secret\\n')\n"
+        "pathlib.Path('notes.txt').write_text('agent note\\n')\n"
         "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
         encoding="utf-8")
     cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    temp_root = root / "draft-temp"
+    temp_root.mkdir()
     result = run("draft", "Improve the cart", "--agent-cmd", cmd,
-                 "--out", str(out), cwd=repo)
-    checks.equal(result.returncode, 2, "a writing agent must be a refusal")
-    checks.ok("stray.txt" in result.stdout,
-              "the refusal must name what the agent changed")
-    checks.ok(not out.exists(), "no draft may be written over a mutated tree")
+                 "--out", root / ".prompire" / "agent.yaml", cwd=root,
+                 env={"TMPDIR": str(temp_root), "TMP": str(temp_root),
+                      "TEMP": str(temp_root)})
+
+    checks.equal(result.returncode, 0, "snapshot draft exit")
+    checks.equal(cart.read_text(encoding="utf-8"), "dirty source\n",
+                 "tracked dirty source stays unchanged")
+    checks.equal(ignored.read_text(encoding="utf-8"), "source secret\n",
+                 "ignored source stays unchanged")
+    checks.equal(note.read_text(encoding="utf-8"), "source note\n",
+                 "untracked source stays unchanged")
+    checks.equal(list(temp_root.iterdir()), [], "draft snapshot is removed")
 
 
 @case("draft agent flags are validated before anything runs")
@@ -321,9 +342,18 @@ def _(repo, checks):
               "neither the prompt from stdin nor an untrusted cwd as a workspace")
     sys.path.insert(0, str(ROOT))
     try:
-        from prompire import agent_argv
+        from prompire import agent_argv, draft_snapshot
     finally:
         sys.path.remove(str(ROOT))
+    snapshot_path = None
+    try:
+        with draft_snapshot(pathlib.Path(repo)) as made:
+            snapshot_path = made
+            raise RuntimeError("stop inside snapshot")
+    except RuntimeError:
+        pass
+    checks.ok(snapshot_path is not None and not snapshot_path.exists(),
+              "snapshot cleanup runs when draft processing raises")
     sub, feed = agent_argv(["agy", "-p", "{prompt}", "--add-dir", "{root}"],
                            "draft this", pathlib.Path(repo))
     checks.equal(sub, ["agy", "-p", "draft this", "--add-dir",

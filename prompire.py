@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -406,11 +407,54 @@ def agent_argv(entry, prompt, root):
     return argv, ("" if embedded else prompt)
 
 
-def repo_state(root):
-    """`git status --porcelain` as one string, or None when git cannot answer."""
-    listed = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
-                            capture_output=True, encoding="utf-8", errors="replace")
-    return None if listed.returncode else listed.stdout
+def _git_visible_paths(root):
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--cached", "--others",
+         "--exclude-standard", "-z"],
+        capture_output=True,
+    )
+    if listed.returncode:
+        message = listed.stderr.decode("utf-8", "replace").strip()
+        raise OSError(message or "git could not list the repository files")
+    # os.fsdecode, not decode(errors="replace"): an undecodable filesystem byte must
+    # survive as a path that can be reopened, not as a replacement character.
+    return [pathlib.Path(os.fsdecode(raw))
+            for raw in listed.stdout.split(b"\0") if raw]
+
+
+def _copy_snapshot_entry(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        target.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+    else:
+        shutil.copy2(source, target)
+
+
+@contextlib.contextmanager
+def draft_snapshot(root):
+    """A throwaway git repo holding the tree's Git-visible files, for the agent to
+    run in. A drafting agent only reads — claude -p denies writes by default and codex
+    drafts read-only — but headless agy has no read-only mode and --agent-cmd can name
+    anything, so the writes land here instead of in the caller's checkout."""
+    snapshot = pathlib.Path(tempfile.mkdtemp(prefix="prompire-draft-"))
+    try:
+        for rel in _git_visible_paths(root):
+            source = root / rel
+            if os.path.lexists(source):
+                _copy_snapshot_entry(source, snapshot / rel)
+        commands = (
+            ["git", "init", "-q"],
+            ["git", "add", "-A"],
+            ["git", "-c", "user.email=draft@prompire",
+             "-c", "user.name=prompire-draft", "-c", "commit.gpgsign=false",
+             "commit", "--allow-empty", "-qm", "draft snapshot"],
+        )
+        for command in commands:
+            subprocess.run(command, cwd=str(snapshot), check=True,
+                           capture_output=True)
+        yield snapshot
+    finally:
+        _rmtree(snapshot)
 
 
 def run_draft_agent(argv, prompt, root):
@@ -444,31 +488,19 @@ def draft(args, extra):
         return report_refusal(f"`{out}` already exists; pick another --out")
     if args.agent or args.agent_cmd:
         prompt = DRAFT_PROMPT.format(sentence=args.sentence)
-        if args.agent:
-            argv, feed = agent_argv(DRAFT_AGENTS[args.agent], prompt, root)
-        else:
-            argv, feed = shlex.split(args.agent_cmd), prompt
-        if not argv:
-            return report_refusal("--agent-cmd is empty")
-        # The tree is snapshotted around the agent run because a drafting agent only
-        # reads: claude -p denies writes by default and codex drafts read-only, but
-        # headless agy has no read-only mode, and --agent-cmd can name anything. A
-        # changed tree is refused, not repaired — the change is the caller's to
-        # inspect, and a draft written on top of it would launder it into the workflow.
-        before = repo_state(root)
-        if before is None:
-            return report_refusal("git cannot report the repository state, so an "
-                                  "agent draft cannot be supervised")
-        answered, trouble = run_draft_agent(argv, feed, root)
-        after = repo_state(root)
-        if after != before:
-            was, now = set(before.splitlines()), set((after or "").splitlines())
-            changed = sorted(line[3:] for line in was ^ now) or ["(unknown paths)"]
-            return report_refusal(
-                "the drafting agent changed the repository ("
-                + ", ".join(changed[:5]) + (", …" if len(changed) > 5 else "")
-                + "); a draft only reads — inspect `git status` and restore before "
-                  "drafting again")
+        try:
+            # The host arguments are built inside the snapshot, so a `{root}` a host
+            # takes as its workspace names the disposable repository too.
+            with draft_snapshot(root) as agent_root:
+                if args.agent:
+                    argv, feed = agent_argv(DRAFT_AGENTS[args.agent], prompt, agent_root)
+                else:
+                    argv, feed = shlex.split(args.agent_cmd), prompt
+                if not argv:
+                    return report_refusal("--agent-cmd is empty")
+                answered, trouble = run_draft_agent(argv, feed, agent_root)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            return report_refusal(f"could not build the draft snapshot: {exc}")
         if trouble is None and answered.returncode:
             tail = (answered.stderr or answered.stdout).strip().splitlines()
             trouble = f"agent exited {answered.returncode}" + (
