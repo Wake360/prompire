@@ -14,6 +14,8 @@ import sys
 import tempfile
 import time
 
+import yaml
+
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 CLI = ROOT / "prompire.py"
@@ -291,9 +293,14 @@ def _(repo, checks):
     ignored.write_text("source secret\n", encoding="utf-8")
     note = root / "notes.txt"
     note.write_text("source note\n", encoding="utf-8")
+    # The agent records where it ran, by absolute path: an empty temp root at the end
+    # is equally true of a snapshot that was never made there, so the emptiness check
+    # only means "removed" once this one says a snapshot was really made there.
+    where = root / "agent-cwd.txt"
     (root / "fake_agent.py").write_text(
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
         "sys.stdin.read()\n"
+        f"pathlib.Path({where.as_posix()!r}).write_text(os.getcwd())\n"
         "assert pathlib.Path('src/cart.py').read_text() == 'dirty source\\n'\n"
         "pathlib.Path('src/cart.py').write_text('agent cart\\n')\n"
         "pathlib.Path('.env').write_text('agent secret\\n')\n"
@@ -315,7 +322,92 @@ def _(repo, checks):
                  "ignored source stays unchanged")
     checks.equal(note.read_text(encoding="utf-8"), "source note\n",
                  "untracked source stays unchanged")
+    ran_in = where.read_text(encoding="utf-8").strip() if where.exists() else ""
+    checks.ok(bool(ran_in) and pathlib.Path(ran_in).resolve().is_relative_to(
+        temp_root.resolve()), f"the agent must run in a snapshot under {temp_root}, "
+        f"not in {ran_in or '(nothing recorded)'}")
     checks.equal(list(temp_root.iterdir()), [], "draft snapshot is removed")
+
+
+@case("draft snapshots a repo holding a submodule and a nested checkout")
+def _(repo, checks):
+    # `git ls-files` reports both as one *directory* entry: a gitlink under --cached, a
+    # nested checkout under --others. Copying either as a file is an OSError, which the
+    # draft turns into a refusal — every repo with a submodule would lose agent drafting.
+    root = pathlib.Path(repo)
+
+    def git(*command, cwd):
+        subprocess.run(["git", "-c", "user.email=t@example", "-c", "user.name=t",
+                        "-c", "commit.gpgsign=false", *command],
+                       cwd=str(cwd), check=True, capture_output=True)
+
+    nested = root / "nested"
+    nested.mkdir()
+    (nested / "inner.txt").write_text("inner\n", encoding="utf-8")
+    git("init", "-q", cwd=nested)
+    sub = root / "sub"
+    sub.mkdir()
+    (sub / "file.txt").write_text("sub\n", encoding="utf-8")
+    git("init", "-q", cwd=sub)
+    git("add", "-A", cwd=sub)
+    git("commit", "-qm", "sub", cwd=sub)
+    head = subprocess.run(["git", "-C", str(sub), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, encoding="utf-8",
+                          check=True).stdout.strip()
+    git("update-index", "--add", "--cacheinfo", f"160000,{head},sub", cwd=root)
+
+    out = root / ".prompire" / "agent.yaml"
+    # The snapshot deliberately carries neither: a submodule's contents belong to its
+    # own repository, and a nested checkout is not this repository's to copy.
+    (root / "fake_agent.py").write_text(
+        "import pathlib, sys\n"
+        "sys.stdin.read()\n"
+        "assert not pathlib.Path('sub').exists()\n"
+        "assert not pathlib.Path('nested').exists()\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
+        encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", out, cwd=root)
+    checks.equal(result.returncode, 0,
+                 f"draft exit beside a submodule: {result.stdout}{result.stderr}")
+    checks.ok(out.exists(), "the draft must still be written")
+
+
+@case("draft snapshot does not run the caller's global git hooks")
+def _(repo, checks):
+    # The snapshot's own commit is machinery, not the caller's commit. A global
+    # `core.hooksPath` or `init.templateDir` — what `pre-commit init-templatedir`
+    # writes — would otherwise run the caller's hooks against a synthetic tree, and a
+    # hook that exits non-zero would make agent drafting impossible on that machine.
+    root = pathlib.Path(repo)
+    home = root / "fake-home"
+    marker = root / "hook-ran.txt"
+    body = f"#!/bin/sh\necho ran >> {marker.as_posix()}\nexit 1\n"
+    for rel in ("hooks/pre-commit", "hooks/post-commit", "template/hooks/pre-commit"):
+        hook = home / rel
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text(body, encoding="utf-8")
+        hook.chmod(0o755)
+    (home / ".gitconfig").write_text(
+        f"[core]\n\thooksPath = {(home / 'hooks').as_posix()}\n"
+        f"[init]\n\ttemplateDir = {(home / 'template').as_posix()}\n", encoding="utf-8")
+    out = root / ".prompire" / "agent.yaml"
+    (root / "fake_agent.py").write_text(
+        "import sys\nsys.stdin.read()\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n", encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    # A synthetic HOME is how git is made to read that config; it also hides a PyYAML
+    # installed under the real home, so the child is told where to find it again.
+    site = str(pathlib.Path(yaml.__file__).resolve().parent.parent)
+    path = os.pathsep.join([site] + ([ENV["PYTHONPATH"]] if ENV.get("PYTHONPATH") else []))
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd, "--out", out,
+                 cwd=root, env={"HOME": str(home), "PYTHONPATH": path,
+                                "GIT_CONFIG_GLOBAL": str(home / ".gitconfig")})
+    checks.equal(result.returncode, 0,
+                 f"draft exit under a failing global hook: {result.stdout}{result.stderr}")
+    checks.ok(not marker.exists(), "no hook of the caller's may run for the snapshot")
+    checks.ok(out.exists(), "the draft must still be written")
 
 
 @case("draft agent flags are validated before anything runs")

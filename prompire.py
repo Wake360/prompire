@@ -440,14 +440,23 @@ def draft_snapshot(root):
     try:
         for rel in _git_visible_paths(root):
             source = root / rel
+            # git lists a submodule gitlink and an untracked nested checkout as single
+            # directory entries. Their contents belong to their own repository, so the
+            # snapshot carries neither — copying one as a file would refuse the draft.
+            if source.is_dir() and not source.is_symlink():
+                continue
             if os.path.lexists(source):
                 _copy_snapshot_entry(source, snapshot / rel)
+        # The commit is prompire's machinery, not the caller's: `--template=` keeps a
+        # global `init.templateDir` from seeding hooks, and the hooks path and
+        # `--no-verify` keep the caller's own hooks from running against this tree.
         commands = (
-            ["git", "init", "-q"],
+            ["git", "init", "-q", "--template="],
             ["git", "add", "-A"],
             ["git", "-c", "user.email=draft@prompire",
              "-c", "user.name=prompire-draft", "-c", "commit.gpgsign=false",
-             "commit", "--allow-empty", "-qm", "draft snapshot"],
+             "-c", "core.hooksPath=", "commit", "--no-verify",
+             "--allow-empty", "-qm", "draft snapshot"],
         )
         for command in commands:
             subprocess.run(command, cwd=str(snapshot), check=True,
