@@ -908,6 +908,14 @@ autonomy: ask
     ptr = pathlib.Path(repo) / ".prompire" / "ACTIVE"
     r = tool("check_scope.py", p, "--activate")
     c.ok(r.returncode == 0, f"--activate exited {r.returncode}: {r.stdout}{r.stderr}")
+    # --activate cannot know whether any host hook is installed, so it must not
+    # promise pre-write refusal unconditionally. It may describe what a hook does
+    # only as conditional on one being installed.
+    c.ok("are refused before they happen" not in r.stdout,
+         f"--activate still claims unconditional pre-write refusal: {r.stdout}")
+    c.ok("hook" in r.stdout and "does not install a hook" in r.stdout,
+         f"--activate must say pre-write refusal depends on an installed hook: "
+         f"{r.stdout}")
     c.ok(ptr.is_file(), "--activate wrote no pointer")
     if ptr.is_file():
         raw = ptr.read_bytes()

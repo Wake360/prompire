@@ -266,7 +266,9 @@ def _activate_locked(brief, rel_brief, brief_path, root):
                  + (f"sha256 {sha}\n" if sha else "")
                  + ("repin\n" if repin else ""), encoding="utf-8")
     print(f"guard active: {rel_brief}")
-    print("writes outside `scope` are refused before they happen")
+    print("with a PreToolUse hook installed, a watched-tool write outside `scope` is "
+          "refused before it lands — arming records the brief, it does not install "
+          "a hook")
     print("the brief is recorded as it stands: any later edit to it — the base, the "
           "scope, a `dirty_baseline` entry — makes check_scope.py refuse a verdict")
     if not pin:
