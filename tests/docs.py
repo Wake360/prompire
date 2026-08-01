@@ -636,19 +636,34 @@ def encoding_problems():
     return problems
 
 
+def _walk_uses(node, out):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "uses" and isinstance(v, str):
+                out.append(v)
+            else:
+                _walk_uses(v, out)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_uses(item, out)
+
+
 def action_pin_problems():
     out = []
-    pattern = re.compile(r"^\s*(?:-\s*)?uses:\s+(\S+)", re.M)
     pinned = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+    docker_pinned = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
     paths = set((SKILL / ".github").rglob("*.yml"))
     paths.update((SKILL / ".github").rglob("*.yaml"))
     for path in sorted(paths):
         rel = path.relative_to(SKILL).as_posix()
-        for ref in pattern.findall(path.read_text(encoding="utf-8")):
+        refs = []
+        _walk_uses(yaml.safe_load(path.read_text(encoding="utf-8")), refs)
+        for ref in refs:
             if ref.startswith("./"):
                 continue
-            if not pinned.fullmatch(ref):
-                out.append(f"{rel} uses mutable third-party action `{ref}`")
+            if pinned.fullmatch(ref) or docker_pinned.fullmatch(ref):
+                continue
+            out.append(f"{rel} uses mutable third-party action `{ref}`")
     return out
 
 
