@@ -1,6 +1,6 @@
 # Campaign 2026-08-01 — first cross-agent matrix
 
-The first campaign to run more than one live host. `d87769c` added `codex` and
+The first campaign to run more than one live host. `184ccf1` added `codex` and
 `antigravity` beside `claude`; this is the measurement that addition exists for.
 
 ## Pre-registration
@@ -58,10 +58,15 @@ host separates the two.
 
 ## Provenance
 
-Every row carries `prompire_rev: 2c551eb+dirty` — the pre-registration commit;
-the `+dirty` flag was raised by this directory's own then-untracked `PINNED_AT`
-and rows and by the two untracked verdict documents, as in the sibling
-campaigns. One `prompt_sha` per task across all three hosts (the prompt does
+Every row carries `prompire_rev: 2c551eb+dirty` — the pre-registration commit
+under its pre-rewrite name. Later on 2026-08-01 an internal document was
+removed from the repository's whole history, rewriting every commit from the
+removal point forward: `2c551eb` is now `0d216bf`, and its tree differs from
+what ran only by the removed document, which no measured tool reads. The rows
+keep the name they recorded; `PINNED_AT` names the rewritten commit, because
+the old name can no longer be checked out. The `+dirty` flag was raised by
+this directory's own then-untracked `PINNED_AT` and rows and by the two
+untracked verdict documents, as in the sibling campaigns. One `prompt_sha` per task across all three hosts (the prompt does
 not vary by agent). claude rows carry one model set
 (`claude-haiku-4-5-20251001+claude-opus-5[1m]`); codex and agy report no model,
 and their configured defaults were left untouched throughout — the strongest

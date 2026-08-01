@@ -1,7 +1,7 @@
 # Campaign 2026-08-01 — wording confirmation
 
 The renderer's wording was tightened after the 2026-07-31 campaign (commit
-`0a1e39b`), so that campaign's table is evidence about the old wording. This
+`32250a2`), so that campaign's table is evidence about the old wording. This
 campaign re-runs the contemporaneous control under the new wording.
 
 ## Pre-registration
@@ -32,10 +32,15 @@ current renderer. The ablation arms remain statements about the old wording.
 
 ## Provenance
 
-Every row carries `prompire_rev: 2bc4414+dirty` — the pre-registration commit.
-The `+dirty` flag was raised by this directory's own then-untracked `PINNED_AT`
-and rows, and by the untracked `PROMPIRE-VERDIKT.md` and
-`prompting_proposal.md` that predate the campaign; no tracked file differed
-from `2bc4414` at any point. One model set
+Every row carries `prompire_rev: 2bc4414+dirty` — the pre-registration commit
+under its pre-rewrite name. Later on 2026-08-01 an internal document was
+removed from the repository's whole history, rewriting every commit from the
+removal point forward: `2bc4414` is now `ce198e9`, and its tree differs from
+what ran only by the removed document, which no measured tool reads. The rows
+keep the name they recorded; `PINNED_AT` names the rewritten commit, because
+the old name can no longer be checked out. The `+dirty` flag was raised by
+this directory's own then-untracked `PINNED_AT` and rows, and by the untracked
+`PROMPIRE-VERDIKT.md` and `prompting_proposal.md` that predate the campaign;
+no tracked file differed from the pinned tree at any point. One model set
 (`claude-haiku-4-5-20251001+claude-opus-5[1m]`), one `prompt_sha` per task,
 no row tampered.
