@@ -331,6 +331,82 @@ def _(repo, checks):
     checks.equal(list(temp_root.iterdir()), [], "draft snapshot is removed")
 
 
+@case("draft snapshot re-targets the symlinks it carries and drops the rest")
+def _(repo, checks):
+    # A symlink recreated verbatim points back out of the snapshot: an ordinary
+    # relative write by the agent then lands wherever the link aims, which for an
+    # absolute target is the caller's own checkout.
+    root = pathlib.Path(repo)
+    outside = root.parent / (root.name + "-outside")
+    outside.mkdir(exist_ok=True)
+    (outside / "outside.txt").write_text("outside secret\n", encoding="utf-8")
+    for name in ("secret_abs.txt", "secret_rel.txt", "secret_dotdot.txt"):
+        (root / name).write_text("source secret\n", encoding="utf-8")
+    (root / "deep").mkdir(exist_ok=True)
+    links = {
+        "abs_in.txt": root / "secret_abs.txt",         # absolute, resolves inside
+        "rel_in.txt": pathlib.Path("secret_rel.txt"),  # relative, resolves inside
+        "deep/dotdot_in.txt": pathlib.Path("..") / "secret_dotdot.txt",
+        "dangling_in.txt": pathlib.Path("absent_in.txt"),
+        "dir_in": pathlib.Path("src"),                 # symlink to a directory inside
+        "abs_out.txt": outside / "outside.txt",        # resolves outside
+        "dangling_out.txt": outside / "absent_out.txt",
+        "mid.txt": outside / "outside.txt",
+        "two_hop.txt": pathlib.Path("mid.txt"),        # inside, but escapes in two hops
+    }
+    try:
+        for name, target in links.items():
+            (root / name).symlink_to(target)
+    except (NotImplementedError, OSError):
+        return
+    subprocess.run(["git", "-c", "user.email=t@example", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", "add", "-A"],
+                   cwd=str(root), check=True, capture_output=True)
+
+    carried = ("abs_in.txt", "rel_in.txt", "deep/dotdot_in.txt", "dangling_in.txt")
+    dropped = ("abs_out.txt", "dangling_out.txt", "mid.txt", "two_hop.txt")
+    report = root / "link-report.txt"
+    (root / "fake_agent.py").write_text(
+        "import json, pathlib, sys\n"
+        "sys.stdin.read()\n"
+        f"carried = {list(carried)!r}\n"
+        f"dropped = {list(dropped)!r}\n"
+        "seen = {}\n"
+        "for name in carried + dropped:\n"
+        "    seen[name] = pathlib.Path(name).is_symlink()\n"
+        "    pathlib.Path(name).write_text('agent wrote ' + name + '\\n')\n"
+        "seen['dir_in'] = pathlib.Path('dir_in').is_symlink()\n"
+        "pathlib.Path('dir_in/inside.py').write_text('agent wrote through dir\\n')\n"
+        f"pathlib.Path({report.as_posix()!r}).write_text(json.dumps(seen))\n"
+        "sys.stdout.write('goal: x\\nscope: [src/cart.py]\\n')\n",
+        encoding="utf-8")
+    cmd = f"{shlex.quote(pathlib.Path(sys.executable).as_posix())} fake_agent.py"
+    out = root / ".prompire" / "agent.yaml"
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd, "--out", out, cwd=root)
+    checks.equal(result.returncode, 0,
+                 f"draft exit beside symlinks: {result.stdout}{result.stderr}")
+    checks.ok(out.exists(), "the draft must still be written")
+
+    for name in ("secret_abs.txt", "secret_rel.txt", "secret_dotdot.txt"):
+        checks.equal((root / name).read_text(encoding="utf-8"), "source secret\n",
+                     f"a link inside the repo must not carry a write into {name}")
+    checks.equal((outside / "outside.txt").read_text(encoding="utf-8"),
+                 "outside secret\n", "a link out of the repo must not carry a write")
+    for absent in (root / "absent_in.txt", outside / "absent_out.txt",
+                   root / "src" / "inside.py"):
+        checks.ok(not absent.exists(),
+                  f"the agent must not create {absent} in the source checkout")
+
+    seen = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
+    for name in carried + ("dir_in",):
+        # Kept, but re-aimed at the snapshot's own copy — including a link that dangles
+        # there, since the decision is where the target resolves, not whether it exists.
+        checks.equal(seen.get(name), True, f"{name} must reach the agent as a symlink")
+    for name in dropped:
+        checks.equal(seen.get(name), False,
+                     f"{name} resolves outside the repository and must not be carried")
+
+
 @case("draft snapshots a repo holding a submodule and a nested checkout")
 def _(repo, checks):
     # `git ls-files` reports both as one *directory* entry: a gitlink under --cached, a

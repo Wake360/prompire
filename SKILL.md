@@ -26,7 +26,9 @@ codex`, `--agent antigravity` (or any CLI via `--agent-cmd`) borrows a host mode
 the same step; the reply is re-serialized without the model's comments, the boundary
 and the acceptance commands stay marked until a human confirms each line. Agent-assisted
 drafting runs against a disposable Git-visible snapshot, not the source checkout. The
-snapshot excludes ignored files and is removed after the agent exits.
+snapshot excludes ignored files, carries a symlink only where its target resolves inside
+the repository, and is removed after the agent exits. An absolute path the agent composes
+for itself still reaches the machine.
 
 ### Hand off — Prompire does not launch the agent
 

@@ -428,11 +428,25 @@ def _git_visible_paths(root):
             for raw in listed.stdout.split(b"\0") if raw]
 
 
-def _copy_snapshot_entry(source, target):
-    target.parent.mkdir(parents=True, exist_ok=True)
+def _copy_snapshot_entry(source, target, real_root, snapshot):
+    """Copy one Git-visible entry into the snapshot. A symlink recreated verbatim
+    still aims where it always did, so an ordinary relative write by the agent would
+    land through it in the caller's checkout; each one is re-aimed at the snapshot's
+    own copy instead, or dropped when it resolves out of the tree. What the target
+    resolves to decides, not whether it exists — a dangling link is carried when it
+    would dangle inside the tree and dropped when it would dangle outside it."""
     if source.is_symlink():
-        target.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+        # realpath, not readlink: the whole chain has to be followed, or a link into
+        # the tree that hops out again through a second link escapes the check.
+        resolved = pathlib.Path(os.path.realpath(source))
+        if not resolved.is_relative_to(real_root):
+            return  # not this repository's to carry
+        inside = snapshot / resolved.relative_to(real_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(os.path.relpath(inside, target.parent),
+                          target_is_directory=source.is_dir())
     else:
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
 
@@ -444,6 +458,9 @@ def draft_snapshot(root):
     anything, so the writes land here instead of in the caller's checkout."""
     snapshot = pathlib.Path(tempfile.mkdtemp(prefix="prompire-draft-"))
     try:
+        # Resolved once: a checkout reached through a symlinked parent (/tmp on macOS)
+        # would otherwise make every one of its own links look like an escape.
+        real_root = pathlib.Path(os.path.realpath(root))
         for rel in _git_visible_paths(root):
             source = root / rel
             # git lists a submodule gitlink and an untracked nested checkout as single
@@ -452,7 +469,7 @@ def draft_snapshot(root):
             if source.is_dir() and not source.is_symlink():
                 continue
             if os.path.lexists(source):
-                _copy_snapshot_entry(source, snapshot / rel)
+                _copy_snapshot_entry(source, snapshot / rel, real_root, snapshot)
         # The commit is prompire's machinery, not the caller's: `--template=` keeps a
         # global `init.templateDir` from seeding hooks, and the hooks path and
         # `--no-verify` keep the caller's own hooks from running against this tree.
