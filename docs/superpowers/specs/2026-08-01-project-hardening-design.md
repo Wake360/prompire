@@ -67,9 +67,10 @@ enough for the current macOS, Linux, and Windows CI matrix.
 
 ## Status interface
 
-The `status` positional argument becomes optional and defaults to `.`. When supplied, it
-keeps its current behavior: the path is used only to locate the repository. Text and JSON
-output shapes and exit codes remain unchanged.
+The `status` positional argument becomes optional and defaults to `.`. A directory is
+passed directly to repository discovery; a file or nonexistent brief path uses its
+parent, preserving the current explicit-path behavior. Text and JSON output shapes and
+exit codes remain unchanged.
 
 ## Documentation
 
