@@ -15,4 +15,4 @@ Do not create, edit, rename or delete any test file.
 
 Ask before any risky or hard-to-undo step. The listed paths are the whole boundary: widening it needs a revised brief, not a yes in chat.
 
-After you stop, <SKILL>/check_scope.py examples/04-not-yet-runnable.yaml` checks the diff from outside. A file changed outside the list above fails it.
+After you stop, <SKILL>/check_scope.py examples/04-not-yet-runnable.yaml` checks the real git diff from outside. A file changed outside the list above fails it. Do not edit the brief or Prompire's state files.

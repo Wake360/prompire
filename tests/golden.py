@@ -66,6 +66,12 @@ def wording_checks(name, target, text):
             problems.append("no mention of the external scope check")
         if "revised brief" not in text:
             problems.append("does not say a wider scope needs a revised brief")
+        # The pin turns any edit of the brief into *no verdict*, and the hook refuses
+        # writes to the state files on every host. That is true of all four prompt
+        # targets, so all four have to say it.
+        if "Prompire's state files" not in text:
+            problems.append("does not tell the agent to leave the brief and the state "
+                            "files alone")
     if target in PROMPTS and name in ("02-must-flip", "worked-example"):
         if "human review" not in low:
             problems.append("manual_checks must reach every prompt target")

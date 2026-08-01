@@ -160,14 +160,14 @@ def render_prompt(brief, brief_path, flavour):
         lines += ["Get the plan approved before editing anything.", ""]
     lines += [autonomy_sentence(brief), ""]
     rel = brief_path if flavour != "generic" else "the brief"
-    if flavour == "copilot":
-        lines += ["A preToolUse hook may refuse an out-of-scope file write but does not "
-                  f"see shell commands. After you stop, `check_scope.py {rel}` checks "
-                  "the real git diff from outside. A file changed outside the list "
-                  "above fails it. Do not edit the brief or Prompire's state files."]
-    else:
-        lines += [f"After you stop, `check_scope.py {rel}` checks the diff from "
-                  "outside. A file changed outside the list above fails it."]
+    # The prompt says what *is* checked, not what is not. The hook's blind spots are
+    # documented for the operator deciding whether to deploy (references/threat-model.md),
+    # and naming them here would only hand the running agent a route.
+    hook = ("A preToolUse hook may refuse an out-of-scope file write. "
+            if flavour == "copilot" else "")
+    lines += [f"{hook}After you stop, `check_scope.py {rel}` checks the real git diff "
+              "from outside. A file changed outside the list above fails it. Do not "
+              "edit the brief or Prompire's state files."]
     ctx = str(brief.get("context") or "").strip()
     if ctx:
         head = ("## Reference context" if flavour == "codex"

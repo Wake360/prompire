@@ -22,14 +22,20 @@ These hold for every target and are asserted in `tests/golden.py`:
 5. **Manual checks appear as manual, in every prompt target.** Rendered under a Human
    review section, never mixed into the numbered command list.
 6. **Every prompt names the external check.** The agent should know the diff is checked
-   from outside by `check_scope.py` after it stops.
+   from outside by `check_scope.py` after it stops, and that the brief and Prompire's
+   state files are not its to edit — the pin turns any change to the brief into *no
+   verdict*, and the hook refuses writes to the state files on every host.
+7. **A prompt says what is checked, never what is not.** The hook's blind spots are
+   documented in `references/threat-model.md`, for the operator deciding whether to
+   deploy. Naming them in the prompt hands the running agent a route and buys nothing.
 
 ## The targets
 
 **`claude` / `generic`** — one prose block: goal, the paths, `Never touch:`,
 `Keep true:`, the numbered criteria with their state, the Human review section when
 `manual_checks` exist, the tests sentence, the autonomy sentence, the external-check
-sentence, then `context` if present, under a Reference context heading inside
+sentence — which closes by telling the agent not to edit the brief or Prompire's state
+files — then `context` if present, under a Reference context heading inside
 `<context>…</context>` delimiters — labelled as data, not instructions. The delimiter is
 a readability measure, not an injection defence; the scope check stays the real
 protection. `claude` names the brief file in the external-check sentence; `generic` says
@@ -41,11 +47,11 @@ constraints stay in separate sections: a path you must not touch and an invarian
 must preserve are different instructions.
 
 **`copilot`** — the same prose block as `claude` (it names the brief file too), with one
-difference: the external-check sentence grows two more: a preToolUse hook may catch an
-out-of-scope write but cannot see shell commands, `check_scope.py` is
-what checks the real diff afterwards, and the agent must not edit the brief or
-Prompire's state files. That warning exists because Copilot-style hosts commonly run
-shell tools the hook cannot observe.
+difference: the external-check sentence opens by saying a preToolUse hook may refuse an
+out-of-scope file write. That host installs the hook as a fail-closed `preToolUse`
+command (`references/hosts.md`), so a denial the agent has not been told to expect reads
+as a broken tool. It is told the hook exists, and not where the hook stops looking —
+rule 7.
 
 **`agents.md`** and **`claude.md`** — the durable half only: `## Never touch`,
 `## Keep true`, `## Tests`, `## Verify`. No goal, no scope, no autonomy, no baseline,
