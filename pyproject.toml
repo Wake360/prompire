@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prompire"
 version = "0.9.1"
-description = "Compile coding-agent requests into checkable briefs."
+description = "Scope, verify and enforce what a coding agent is allowed to change."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
