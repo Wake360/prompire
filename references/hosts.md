@@ -33,9 +33,10 @@ repo. `prompire draft --agent claude`, `--agent codex`, `--agent antigravity` (o
 is re-serialized with `prompire:unconfirmed` markers, and the handoff below stays
 manual. The codex drafting invocation runs `codex exec` under its read-only sandbox
 with the user config ignored; drafting reads the repo and must never write it.
-Headless `agy` has no read-only mode at all, so `draft` snapshots `git status` around
-every agent run — any host's, `--agent-cmd` included — and refuses the draft if the
-tree changed.
+Headless `agy` has no read-only mode. `draft` therefore runs it in the same disposable
+Git-visible snapshot used for every drafting host. Writes made relative to its workspace
+land in the snapshot, which is removed after the run; this is isolation of the checkout,
+not a machine-wide sandbox.
 
 ## Primary workflow
 
