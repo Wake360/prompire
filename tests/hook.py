@@ -1139,8 +1139,8 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
     #
     # The split this pins is the whole point. `.prompire/ACTIVE`,
     # `.prompire/ACTIVE.tombstones` and a NUL path are documented as refused
-    # UNCONDITIONALLY — README's guarantee paragraph and CLAUDE.md's Architecture
-    # section both say so without qualification — so they must survive an import that
+    # UNCONDITIONALLY — README's guarantee paragraph and `references/threat-model.md`
+    # both say so without qualification — so they must survive an import that
     # cannot happen, which is why `verdict_for` runs them in a first pass ABOVE the
     # `from brief_common import …`. Everything brief-dependent below that import is
     # infrastructure trouble and correctly fails open.

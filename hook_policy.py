@@ -302,9 +302,9 @@ def verdict_for(targets, cwd):
     # PASS 1 — everything that needs no brief, no `brief_common`, and no PyYAML. This
     # runs to completion for every target BEFORE the import below, and the order is not
     # a tidiness preference: `.prompire/ACTIVE` and `.prompire/ACTIVE.tombstones` are
-    # documented as protected *unconditionally* (README's guarantee paragraph, CLAUDE.md's
-    # Architecture section), and an import that can fail ahead of these checks makes them
-    # conditional on PyYAML being installed and importable. It is not a theoretical
+    # documented as protected *unconditionally* (README's guarantee paragraph and
+    # `references/threat-model.md`), and an import that can fail ahead of these checks
+    # makes them conditional on PyYAML being installed and importable. It is not a theoretical
     # window — a half-installed venv or an interpreter upgrade produces it, and the
     # adapters' catch-alls would then turn a forged-pointer write into a permitted one.
     # Keep these two checks above the import. `tests/hook.py`'s `broken-import-*` cases

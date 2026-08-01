@@ -8,3 +8,4 @@ build/
 .agent-brief/
 .worktrees/
 bench/results/
+CLAUDE.md
