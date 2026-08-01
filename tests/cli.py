@@ -100,9 +100,11 @@ def json_out(result):
 
 @case("draft writes an unconfirmed brief and prepare refuses it as-is")
 def _(repo, checks):
-    result = run("draft", "Add a health endpoint", "--out", ".prompire/task.yaml", cwd=repo)
+    result = run("draft", "Add a health endpoint", "--out", ".prompire/task brief.yaml", cwd=repo)
     checks.equal(result.returncode, 0, "draft exit")
-    path = pathlib.Path(repo) / ".prompire" / "task.yaml"
+    checks.ok("'" in result.stdout or '"' in result.stdout,
+              "draft confirmation quotes the path with spaces")
+    path = pathlib.Path(repo) / ".prompire" / "task brief.yaml"
     text = path.read_text(encoding="utf-8")
     checks.ok("Add a health endpoint" in text, "the sentence must become the goal")
     checks.ok("prompire:unconfirmed" in text, "open items must be visibly unconfirmed")
@@ -638,6 +640,23 @@ def _(repo, checks):
                  "CLI checklist must use the installed command and quote the brief")
 
 
+@case("displayed next commands quote brief paths")
+def _(repo, checks):
+    sys.path.insert(0, str(ROOT))
+    import prompire
+    original = prompire.os.name
+    try:
+        prompire.os.name = "posix"
+        checks.equal(prompire.display_command(["prompire", "verify", "task brief.yaml"]),
+                     "prompire verify 'task brief.yaml'", "POSIX command")
+        prompire.os.name = "nt"
+        checks.equal(prompire.display_command(["prompire", "verify", "task brief.yaml"]),
+                     'prompire verify "task brief.yaml"', "Windows command")
+    finally:
+        prompire.os.name = original
+        sys.path.remove(str(ROOT))
+
+
 @case("verify stops before acceptance on a strict scope finding")
 def _(repo, checks):
     path = prepared(repo)
@@ -1035,12 +1054,15 @@ def _(repo, checks):
 
 @case("json mode emits one parseable object and no prose")
 def _(repo, checks):
-    path = brief(repo)
+    path = brief(repo, "task brief")
     result = run("prepare", path, "--json")
     data = json_out(result)
     checks.equal(result.returncode, 0, "JSON prepare exit")
     checks.equal(data["status"], "prepared", "JSON prepared status")
     checks.equal(result.stderr, "", "JSON mode must not emit child prose to stderr")
+    checks.ok("task brief.yaml" in data["next"], "JSON next command keeps the path")
+    quoted = f'"{path}"' if os.name == "nt" else f"'{path}'"
+    checks.ok(quoted in data["next"], "JSON next command quotes the path")
 
 
 def main():

@@ -154,8 +154,14 @@ def report_stage(stage, result, json_mode):
     return code
 
 
+def display_command(argv):
+    parts = [str(part) for part in argv]
+    return (subprocess.list2cmdline(parts) if os.name == "nt"
+            else shlex.join(parts))
+
+
 def report_prepared(brief, prompt, checklist, target, json_mode):
-    next_command = f"prompire verify {brief}"
+    next_command = display_command(["prompire", "verify", brief])
     if json_mode:
         print(json.dumps({"status": "prepared", "brief": str(brief),
                           "prompt": str(prompt), "checklist": str(checklist),
@@ -524,7 +530,8 @@ def draft(args, extra):
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"drafted {out}")
-    print(f"confirm every `# {DRAFT_MARKER}` line, then: prompire prepare {out}")
+    next_command = display_command(["prompire", "prepare", out])
+    print(f"confirm every `# {DRAFT_MARKER}` line, then: {next_command}")
     return 0
 
 
