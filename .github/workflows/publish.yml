@@ -1,0 +1,35 @@
+name: publish
+# Publishes to PyPI via trusted publishing (OIDC) — no token stored anywhere.
+# Fires on a version tag; workflow_dispatch exists so a tag pushed before this
+# file existed (v0.9.1) can still be published by running against that ref.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    # The full suite gates every upload. A tag is a claim; this is its check.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install PyYAML
+      - run: python tests/run_all.py
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
