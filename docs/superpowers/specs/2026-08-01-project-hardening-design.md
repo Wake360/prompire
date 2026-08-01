@@ -49,10 +49,10 @@ subprocesses remain argument vectors and do not pass through the formatter.
 
 ## CI action pinning
 
-Third-party `uses:` entries in the ordinary test and Prompire workflows will use full
-commit SHAs, with the release tag retained in an inline comment. The already-pinned
-publish workflow is the model. Local `./.github/actions/prompire-verify` usage remains a
-local path.
+Every third-party `uses:` entry under `.github/`, including entries inside the reusable
+composite action, will use a full commit SHA with the release tag retained in an inline
+comment. The already-pinned publish workflow is the model. Local
+`./.github/actions/prompire-verify` usage remains a local path.
 
 ## Test-runner diagnostics
 
