@@ -12,6 +12,13 @@ assert data["project"]["requires-python"] == ">=3.11"
 assert data["project"]["scripts"]["prompire"] == "prompire:entrypoint"
 assert data["project"]["dependencies"] == ["PyYAML>=6"]
 
+# Every host adapter in the tree ships in the package, or none should: a pip user
+# reading references/hosts.md must never find that their host's adapter is the one
+# the wheel left out. 0.9.0 shipped without hook_antigravity_guard exactly this way.
+adapters = {p.stem for p in ROOT.glob("hook_*.py")}
+shipped = set(data["tool"]["setuptools"]["py-modules"])
+assert adapters <= shipped, f"adapters missing from py-modules: {adapters - shipped}"
+
 for cmd in (
     [sys.executable, str(ROOT / "prompire.py"), "--help"],
     [sys.executable, "-m", "prompire", "--help"],

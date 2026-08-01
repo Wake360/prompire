@@ -3,6 +3,17 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.9.1 — 2026-08-01
+
+**First PyPI release; the package ships all three host adapters.**
+
+### Fixed
+
+- `hook_antigravity_guard` was missing from the package's `py-modules`, so a pip
+  install of 0.9.0 carried the Claude Code and Copilot adapters but not the
+  Antigravity one. `tests/package.py` now asserts every `hook_*.py` adapter in the
+  tree is shipped, so leaving the next one out fails the suite.
+
 ## 0.9.0 — 2026-08-01
 
 **`prompire draft` can delegate the drafting to a host model.**
