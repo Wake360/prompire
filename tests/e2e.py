@@ -632,7 +632,7 @@ autonomy: ask
 
     prompt = tool("render_brief.py", p, "--target", "claude").stdout
     c.ok(len(prompt.split()) <= 250, f"prompt is {len(prompt.split())} words")
-    c.ok("must pass when you are done" in prompt, "the flip must be visible in the prompt")
+    c.ok("must pass when done" in prompt, "the flip must be visible in the prompt")
     c.ok("keep it green" in prompt, "the green criterion must be visible as such")
     c.ok("do not 'fix' it" in prompt, "the held criterion must be visible as such")
     c.ok("outside" in prompt and "revised brief" in prompt,

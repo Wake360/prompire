@@ -9,8 +9,8 @@ is deterministic, so `tests/golden/` pins every target against every example.
 These hold for every target and are asserted in `tests/golden.py`:
 
 1. **Nothing may authorise a write outside `scope`.** Not "ask before writing outside
-   scope", not "confirm first". At `ask`, the autonomy sentence is *"Ask before any step
-   that is risky or hard to undo. The listed paths are the whole boundary: widening it
+   scope", not "confirm first". At `ask`, the autonomy sentence is *"Ask before any
+   risky or hard-to-undo step. The listed paths are the whole boundary: widening it
    needs a revised brief, not a yes in chat."* An agent that reads "ask and you may" will
    ask and then do it.
 2. **Every criterion carries its state**: green today and must stay green, red today and
@@ -42,7 +42,7 @@ must preserve are different instructions.
 
 **`copilot`** — the same prose block as `claude` (it names the brief file too), with one
 difference: the external-check sentence grows two more: a preToolUse hook may catch an
-out-of-scope write before it lands but cannot see shell commands, `check_scope.py` is
+out-of-scope write but cannot see shell commands, `check_scope.py` is
 what checks the real diff afterwards, and the agent must not edit the brief or
 Prompire's state files. That warning exists because Copilot-style hosts commonly run
 shell tools the hook cannot observe.

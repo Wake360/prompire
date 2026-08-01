@@ -83,7 +83,7 @@ A cell is task × variant × agent:
   from "another factor covers for it".
   `plus_acceptance` keeps the acceptance criteria as the renderer writes
   them, including the measured-state parenthetical on each command
-  (`fails today; must pass when you are done` and the rest of
+  (`fails today; must pass when done` and the rest of
   `STATE_NOTES`). A positive result therefore supports "the criteria
   block, measured state included, was sufficient" — not "the commands
   alone were". Separating those two needs a further variant that nothing
@@ -200,6 +200,13 @@ Sixteen cells of twenty were uniform across their five repeats; T02 × `bare`
 split 1/5 and is the reason the earlier blanket claim about uniformity was
 withdrawn rather than repaired. Uniformity is common here, not a property to
 lean on.
+
+After this campaign the renderer's wording was tightened — "must pass when
+you are done" became "must pass when done", and the autonomy, tests-policy,
+human-review and check-scope sentences lost words to the same pass. The rows
+above quote what actually ran, so their `prompt_sha` values will not
+reproduce against the current renderer, and the table is evidence about the
+old wording until an arm is re-run under the new one.
 
 ## Running
 

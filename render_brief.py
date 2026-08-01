@@ -51,17 +51,16 @@ AUTONOMY_LINE = {
     # None of these may authorise a write outside `scope`. "Ask first" is not a route
     # out of the boundary — a wider scope is an edit to the brief.
     "manual": "Produce a plan and stop. Do not edit any file.",
-    "ask": "Ask before any step that is risky or hard to undo. The listed paths are the "
+    "ask": "Ask before any risky or hard-to-undo step. The listed paths are the "
            "whole boundary: widening it needs a revised brief, not a yes in chat.",
     "auto": "Run unattended on {rollback}. The listed paths are the whole boundary: "
             "widening it needs a revised brief, not a yes in chat.",
 }
 TESTS_LINE = {
     "immutable": "Do not create, edit, rename or delete any test file.",
-    "named": "The only test files you may change: {editable}. Every other test file is "
-             "frozen.",
-    "authoring": "Repairing the tests is the task; you may change {editable}. What "
-                 "judges the result is {oracle}, not the suite you are editing.",
+    "named": "Test files you may change: {editable}. Every other test file is frozen.",
+    "authoring": "Repairing the tests is the task; you may change {editable}. "
+                 "{oracle} judges the result, not the suite you are editing.",
 }
 
 
@@ -91,10 +90,10 @@ def state_of(brief, entry):
     reason = str((b or {}).get("reason") or "").strip()
     if t == "flip":
         if status == "not_runnable":
-            return ("cannot run yet; must pass when you are done",
+            return ("cannot run yet; must pass when done",
                     f"could not run on HEAD ({reason or 'no reason recorded'}) — this is "
                     "the one that must end green")
-        return ("fails today; must pass when you are done",
+        return ("fails today; must pass when done",
                 "was FAILING before the work — this is the one that must end green")
     if t == "hold":
         return ("must stay exactly as measured — do not 'fix' it",
@@ -153,24 +152,22 @@ def render_prompt(brief, brief_path, flavour):
     if flavour == "codex":
         lines += _bullets("## Human review — no command covers these", manual)
     else:
-        lines += _bullets("Human review — no command covers these; a human confirms "
-                          "them:", manual)
+        lines += _bullets("Human review — no command covers these:", manual)
     ts = tests_sentence(brief)
     if ts:
         lines += [ts, ""]
     if brief.get("plan_first"):
-        lines += ["Write the plan first and get it approved before editing anything.", ""]
+        lines += ["Get the plan approved before editing anything.", ""]
     lines += [autonomy_sentence(brief), ""]
     rel = brief_path if flavour != "generic" else "the brief"
     if flavour == "copilot":
-        lines += ["A preToolUse hook may refuse an out-of-scope file write before it "
-                  "lands; it does not see shell commands. After you stop, the real git "
-                  f"diff is checked from outside with `check_scope.py {rel}`. A file "
-                  "changed outside the list above fails it. Do not edit the brief or "
-                  "Prompire's state files."]
+        lines += ["A preToolUse hook may refuse an out-of-scope file write but does not "
+                  f"see shell commands. After you stop, `check_scope.py {rel}` checks "
+                  "the real git diff from outside. A file changed outside the list "
+                  "above fails it. Do not edit the brief or Prompire's state files."]
     else:
-        lines += [f"After you stop, the diff is checked from outside with `check_scope.py "
-                  f"{rel}`. A file changed outside the list above fails it."]
+        lines += [f"After you stop, `check_scope.py {rel}` checks the diff from "
+                  "outside. A file changed outside the list above fails it."]
     ctx = str(brief.get("context") or "").strip()
     if ctx:
         head = ("## Reference context" if flavour == "codex"

@@ -23,11 +23,11 @@ Extract report rendering from src/report.py into src/render/text.py.
 
 Do not create, edit, rename or delete any test file.
 
-Write the plan first and get it approved before editing anything.
+Get the plan approved before editing anything.
 
-Ask before any step that is risky or hard to undo. The listed paths are the whole boundary: widening it needs a revised brief, not a yes in chat.
+Ask before any risky or hard-to-undo step. The listed paths are the whole boundary: widening it needs a revised brief, not a yes in chat.
 
-After you stop, the diff is checked from outside with <SKILL>/check_scope.py examples/worked-example.yaml`. A file changed outside the list above fails it.
+After you stop, <SKILL>/check_scope.py examples/worked-example.yaml` checks the diff from outside. A file changed outside the list above fails it.
 
 ## Reference context
 <context>
