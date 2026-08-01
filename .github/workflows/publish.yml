@@ -7,13 +7,16 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Actions are pinned to full commit SHAs, not tags: this workflow holds the OIDC
+# grant that publishes to PyPI, and a mutable tag is an edit anyone upstream can
+# make to what runs here. The comment names the tag each SHA stood for.
 jobs:
   test:
     # The full suite gates every upload. A tag is a claim; this is its check.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.13"
       - run: python -m pip install PyYAML
@@ -26,10 +29,10 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.13"
       - run: python -m pip install build
       - run: python -m build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
