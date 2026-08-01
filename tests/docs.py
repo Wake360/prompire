@@ -636,6 +636,22 @@ def encoding_problems():
     return problems
 
 
+def action_pin_problems():
+    out = []
+    pattern = re.compile(r"^\s*(?:-\s*)?uses:\s+(\S+)", re.M)
+    pinned = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+    paths = set((SKILL / ".github").rglob("*.yml"))
+    paths.update((SKILL / ".github").rglob("*.yaml"))
+    for path in sorted(paths):
+        rel = path.relative_to(SKILL).as_posix()
+        for ref in pattern.findall(path.read_text(encoding="utf-8")):
+            if ref.startswith("./"):
+                continue
+            if not pinned.fullmatch(ref):
+                out.append(f"{rel} uses mutable third-party action `{ref}`")
+    return out
+
+
 def main():
     problems = []
     rules = enforced_rule_ids()
@@ -716,6 +732,7 @@ def main():
     problems += overclaim_problems()
     problems += encoding_problems()
     problems += decoder_problems()
+    problems += action_pin_problems()
 
     skill_md = read("SKILL.md")
     for rel, name in (("README.md", "hook_copilot_guard.py"),
