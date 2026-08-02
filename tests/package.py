@@ -51,3 +51,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prepare" in result.stdout
     assert "verify" in result.stdout
+
+    result = subprocess.run(
+        [str(command), "--version"],
+        cwd=tmp,
+        capture_output=True,
+        text=True, encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == data["project"]["version"], result.stdout

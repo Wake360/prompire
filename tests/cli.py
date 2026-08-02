@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 import yaml
 
@@ -1758,6 +1759,17 @@ autonomy: ask
                  "the symlink review is the top-level verdict")
     checks.ok("acceptance: not run — strict scope preflight did not pass"
               in result.stdout, "a symlink review keeps acceptance visibly not run")
+
+
+@case("--version prints the package version and exits 0")
+def _(repo, checks):
+    result = run("--version", cwd=repo)
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    checks.equal(result.returncode, 0, "--version exit code")
+    checks.equal(result.stdout.strip(), version, "--version output vs VERSION")
+    checks.equal(pyproject["project"]["version"], version,
+                 "pyproject.toml vs VERSION")
 
 
 def main():

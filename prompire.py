@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import importlib.metadata
 import json
 import os
 import pathlib
@@ -982,8 +983,20 @@ def status(args, extra):
     return 0
 
 
+def cli_version():
+    """A checkout's VERSION file wins over installed metadata: `python3
+    prompire.py --version` in a checkout must report the checkout, not
+    whatever wheel is installed beside it. The wheel ships no VERSION, so an
+    installed CLI reads its own package metadata instead."""
+    version_file = HERE / "VERSION"
+    if version_file.is_file():
+        return version_file.read_text(encoding="utf-8").strip()
+    return importlib.metadata.version("prompire")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="prompire")
+    parser.add_argument("--version", action="version", version=cli_version())
     commands = parser.add_subparsers(dest="command", required=True)
 
     drafted = commands.add_parser("draft")
