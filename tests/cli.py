@@ -1420,6 +1420,85 @@ def _(repo, checks):
     checks.ok(quoted in data["next"], "JSON next command quotes the path")
 
 
+@case("verify --json emits one canonical object for clean and violation runs")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    clean = run("verify", path, "--json")
+    data = json_out(clean)
+    checks.equal(clean.returncode, 0, "clean JSON exit")
+    checks.equal(sorted(data), ["acceptance", "scope"], "top-level JSON keys")
+    checks.equal(sorted(data["scope"]),
+                 ["ack_disarms_bound", "base", "base_source", "findings",
+                  "reviews", "violations"], "scope JSON keys")
+    checks.equal(sorted(data["acceptance"]),
+                 ["brief", "failed", "not_run", "passed", "results"],
+                 "acceptance JSON keys")
+    checks.equal(clean.stdout, json.dumps(data, ensure_ascii=False) + "\n",
+                 "clean JSON is one canonical line, byte for byte")
+    checks.equal(clean.stderr, "", "clean JSON emits no stderr")
+
+    fixtures.write(repo, "src/outside.py", "value = 1\n")
+    caught = run("verify", path, "--json")
+    data = json_out(caught)
+    checks.equal(caught.returncode, 1, "violation JSON exit")
+    checks.equal(data["acceptance"],
+                 {"status": "not_run", "reason": "strict scope preflight did not pass"},
+                 "blocked preflight acceptance shape")
+    checks.equal(caught.stdout, json.dumps(data, ensure_ascii=False) + "\n",
+                 "violation JSON is one canonical line, byte for byte")
+
+
+@case("verify --json keeps the reviews-plus-acceptance shape canonical")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/json-review.yaml", """\
+goal: Fix the cart total and repair its test.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: named
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+autonomy: ask
+""")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    result = run("verify", path, "--json")
+    data = json_out(result)
+    checks.equal(result.returncode, 1, "review JSON exit")
+    checks.equal(data["scope"]["reviews"], 1, "review count")
+    checks.equal(data["acceptance"]["passed"], 1, "acceptance evidence in JSON")
+    checks.equal(result.stdout, json.dumps(data, ensure_ascii=False) + "\n",
+                 "review JSON is one canonical line, byte for byte")
+
+
+@case("verify --json keeps the indeterminate and refusal shapes canonical")
+def _(repo, checks):
+    path = brief(repo)  # never prepared: no base -> exit 2
+    result = run("verify", path, "--json")
+    data = json_out(result)
+    checks.equal(result.returncode, 2, "indeterminate JSON exit")
+    checks.equal(sorted(data),
+                 ["exit_code", "message", "stage", "status", "stderr", "stdout"],
+                 "indeterminate JSON keys")
+    checks.equal(data["status"], "indeterminate", "indeterminate status")
+    checks.equal(data["stage"], "scope", "indeterminate stage")
+    checks.equal(result.stdout, json.dumps(data, ensure_ascii=False) + "\n",
+                 "indeterminate JSON is one canonical line, byte for byte")
+
+    refused = run("verify", path, "--bogus", "--json")
+    data = json_out(refused)
+    checks.equal(refused.returncode, 2, "refusal JSON exit")
+    checks.equal(data, {"status": "refused",
+                        "message": "unrecognized arguments: --bogus"},
+                 "refusal JSON shape")
+    checks.equal(refused.stdout, json.dumps(data, ensure_ascii=False) + "\n",
+                 "refusal JSON is one canonical line, byte for byte")
+
+
 def main():
     failures = 0
     with tempfile.TemporaryDirectory() as directory:
