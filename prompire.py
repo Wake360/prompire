@@ -95,6 +95,52 @@ CHILD_JSON_KEYS = {
 }
 
 
+def review_is_acceptance_safe(finding):
+    """Is this REVIEW an evidence-only flag, safe to gather acceptance results under?
+
+    check_scope.py exports no machine-readable review kind, so the message text is the
+    only classifier this layer has — and matching fails closed: a message these
+    predicates do not recognize, including one a future check_scope.py edit reworded,
+    keeps acceptance blocked. The four recognized kinds are the ones adjudicated as
+    evidence-only: the unconditional tests-policy flag, the authoring skip-marker flag,
+    a tracked brief re-stamped since base, and the repin flag (acknowledged or not).
+    A symlink review, a brief-deleted review, and anything unrecognized keep blocking.
+    """
+    message = str(finding.get("message") or "")
+    return (
+        (message.startswith("tests_policy `")
+         and "lets test files change" in message)
+        or (message.startswith("adds a disabling marker (")
+            and message.endswith("under tests_policy `authoring`"))
+        or message.startswith("the brief itself changed since the base revision")
+        or (message.startswith("`base_rev: ")
+            and "written after a `--deactivate`" in message)
+    )
+
+
+def acceptance_evidence_safe(scope_data):
+    """May acceptance run despite a failed strict preflight? Only when the failure is
+    reviews-only, every review is an evidence-only kind, and the base has a record
+    outside the agent-writable brief (pin or repin). base_source None is the unarmed
+    state: there the brief — its acceptance commands included — is one Write away from
+    being the agent's own, and those commands run through the shell on the reviewer's
+    machine. Running them on nothing more than a zero violation count is the exact
+    wrong implementation this gate exists to prevent."""
+    if scope_data.get("violations") != 0:
+        return False
+    if scope_data.get("base_source") not in ("pin", "repin"):
+        return False
+    findings = scope_data.get("findings")
+    if not isinstance(findings, list):
+        return False
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("kind") != "REVIEW":
+            return False
+        if not review_is_acceptance_safe(finding):
+            return False
+    return True
+
+
 def run_tool(name, *args):
     # The child's own stdout, which it already wrote as UTF-8 — decoding it with the
     # locale's encoding instead is how a Czech path in a verdict became mojibake, or a
@@ -744,7 +790,7 @@ def verify(args, extra):
     if preflight.returncode == 2:
         return report_indeterminate(
             "scope", preflight, "scope could not produce a trustworthy result", args.json)
-    if preflight.returncode == 1:
+    if preflight.returncode == 1 and not acceptance_evidence_safe(preflight_data):
         return report_scope_preflight(preflight, preflight_data, args.json)
 
     acceptance = run_tool("acceptance", args.brief, "--json")
