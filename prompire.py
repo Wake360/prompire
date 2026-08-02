@@ -602,6 +602,12 @@ def _attribute_self_created(root, created, scope_data, scope_code):
     Nothing is persisted — the next invocation starts from its own snapshot, so
     the same pathname planted later is that run's ordinary evidence.
 
+    A finding is dropped only once its path is provably off the disk. A path
+    that resists the unlink keeps its violation, its count, and the red exit:
+    excusing a file that is still there would let an acceptance command hide a
+    forbidden write behind a read-only parent directory. `self_created` therefore
+    means excluded and removed, so the name it reports is never a false claim.
+
     The exit is recomputed only when every failure signal is accounted for:
     zero violations left and zero strict-failing reviews (a review fails
     --strict unless it is the repin note under a bound acknowledgement — the
@@ -619,9 +625,10 @@ def _attribute_self_created(root, created, scope_data, scope_code):
         root, [created_norm[f["path"]] for f in excluded])
     for rel in kept:
         print(f"WARNING: {rel} was created by this run's acceptance invocation "
-              "but could not be removed; later runs will judge it normally",
+              "but could not be removed; its violation stands in this verdict",
               file=sys.stderr)
-    excluded_paths = {f["path"] for f in excluded}
+    gone = set(removed)
+    excluded_paths = {f["path"] for f in excluded if created_norm[f["path"]] in gone}
     remaining = [f for f in scope_data["findings"]
                  if not (f.get("kind") == "VIOLATION"
                          and f.get("path") in excluded_paths)]
