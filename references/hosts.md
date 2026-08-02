@@ -122,7 +122,10 @@ A repository install is the right choice when the briefs are part of how the pro
 worked on and you want every contributor's agent to compile them the same way. A personal
 install is the right choice when it is your habit rather than the project's rule. If both
 exist, both are discovered; they are the same skill, so that is harmless, but keep one of
-them authoritative so a stale copy cannot answer first.
+them authoritative so a stale copy cannot answer first. A repository install also puts
+the scripts inside the tree the agent works in, so run the verifying `prompire verify`
+(or `check_scope.py --strict`) from a copy installed outside the governed workspace — a
+checker the agent could have rewritten cannot vouch for the work it is judging.
 
 `SKILL.md` is a valid Agent Skill for every host above as it stands — YAML frontmatter
 with `name` and `description`, then the workflow. No host needs a host-specific copy of
@@ -542,14 +545,16 @@ call.
 **Unmatched file-changing operations.** `delete_directory`, `move` and notebook edits
 change files but are not matched: their argument shapes are unattested — no public
 per-tool schema, never observed in a captured payload — and a guard that guessed at
-them would answer questions it cannot read. Every one of them still meets
-`check_scope.py`, because git sees the change whatever tool made it.
+them would answer questions it cannot read. Every one of them that changes a
+git-visible path still meets `check_scope.py` afterwards; a change under a gitignored
+path does not — see the ignored-paths row in `references/threat-model.md`.
 
 ## What the hook does not cover, on any hook host
 
 `bash`, `powershell` and `run_command` are deliberately not matched, and must not be. A
 shell write bypasses the early guard entirely; `check_scope.py` on the real git diff is
-what sees it afterwards, because git sees the write whatever tool made it. This is the
+what sees it afterwards, for every git-visible path whatever tool made it. A shell
+write under a gitignored path evades both layers. This is the
 two-layer design, not an oversight — see the limitations table in
 `references/threat-model.md`, which applies unchanged to Copilot and Antigravity.
 Inspecting a command line for the files it will touch is a much weaker claim than
