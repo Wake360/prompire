@@ -178,6 +178,34 @@ def replace_artifact(path, text):
             temp_path.unlink(missing_ok=True)
 
 
+def _restore_brief(brief, original):
+    """Put the pre-`prepare` bytes back after a failed stage. Byte-level on
+    purpose: the brief is the user's file — comments, ordering, newline style —
+    and a reserialized equivalent is exactly the partial state this exists to
+    prevent. A restore that itself fails only warns: the stage error being
+    reported is the primary signal and must not be masked."""
+    if original is None:
+        return
+    try:
+        if brief.read_bytes() == original:
+            return
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode="wb", dir=brief.parent,
+                    prefix=f".{brief.name}.", suffix=".tmp", delete=False) as handle:
+                temp_path = pathlib.Path(handle.name)
+                handle.write(original)
+            os.replace(temp_path, brief)
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"WARNING: could not restore {brief} to its pre-prepare bytes: {exc}",
+              file=sys.stderr)
+
+
 def report_refusal(message, json_mode=False):
     if json_mode:
         print(json.dumps({"status": "refused", "message": message}, ensure_ascii=False))
@@ -740,21 +768,30 @@ def prepare(args, extra):
             json_mode=args.json,
         )
 
+    try:
+        original = brief.read_bytes()
+    except OSError:
+        original = None  # baseline reports the unreadable brief; nothing to restore
+
+    def stage_failed(stage, result):
+        _restore_brief(brief, original)
+        return report_stage(stage, result, args.json)
+
     measured = run_tool("baseline", brief, "--write")
     if measured.returncode:
-        return report_stage("baseline", measured, args.json)
+        return stage_failed("baseline", measured)
 
     linted = run_tool("lint", brief, "--json")
     if linted.returncode:
-        return report_stage("lint", linted, args.json)
+        return stage_failed("lint", linted)
 
     prompt = run_tool("render", brief, "--target", args.target)
     if prompt.returncode:
-        return report_stage("render", prompt, args.json)
+        return stage_failed("render", prompt)
 
     checklist = run_tool("render", brief, "--target", "_cli-checklist")
     if checklist.returncode:
-        return report_stage("render", checklist, args.json)
+        return stage_failed("render", checklist)
 
     prompt_path = brief.with_name(f"{brief.stem}.{args.target}.md")
     checklist_path = brief.with_name(f"{brief.stem}.checklist.md")
@@ -762,12 +799,17 @@ def prepare(args, extra):
         replace_artifact(prompt_path, prompt.stdout)
         replace_artifact(checklist_path, checklist.stdout)
     except OSError as exc:
+        _restore_brief(brief, original)
         return report_refusal(f"could not write artifacts: {exc}", args.json)
 
     armed = run_tool("scope", brief, "--activate")
     if armed.returncode:
-        return report_stage("activate", armed, args.json)
+        return stage_failed("activate", armed)
 
+    # Activation is the transaction's commit: the pointer's digest now attests to
+    # the brief exactly as armed. No failure path below this line may restore the
+    # pre-prepare bytes — that would break the digest and force exit 2 on every
+    # later run until a --deactivate, which costs a tombstone.
     return report_prepared(
         brief=brief,
         prompt=prompt_path,
