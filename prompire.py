@@ -14,7 +14,8 @@ import tempfile
 
 import yaml
 
-from brief_common import ACCEPTANCE_KEYS, as_list, glob_re, norm_path, utf8_stdio
+from brief_common import (ACCEPTANCE_KEYS, as_list, fs_fold, glob_re, norm_path,
+                          utf8_stdio)
 from check_scope import RepoError, active_brief, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -234,14 +235,18 @@ def display_command(argv):
             else shlex.join(parts))
 
 
-def report_prepared(brief, prompt, checklist, target, json_mode):
+def report_prepared(brief, prompt, checklist, target, json_mode, cleaned=()):
     next_command = display_command(["prompire", "verify", brief])
     if json_mode:
         print(json.dumps({"status": "prepared", "brief": str(brief),
                           "prompt": str(prompt), "checklist": str(checklist),
-                          "target": target, "next": next_command}, ensure_ascii=False))
+                          "target": target, "cleaned": sorted(cleaned),
+                          "next": next_command}, ensure_ascii=False))
     else:
         print(f"prepared {brief}")
+        if cleaned:
+            print("cleaned (created by the baseline measurement, not part of the "
+                  "task): " + ", ".join(sorted(cleaned)))
         print(f"prompt: {prompt}")
         print(f"checklist: {checklist}")
         print(next_command)
@@ -500,6 +505,83 @@ def _git_visible_paths(root):
     # survive as a path that can be reopened, not as a replacement character.
     return [pathlib.Path(os.fsdecode(raw))
             for raw in listed.stdout.split(b"\0") if raw]
+
+
+def _untracked_paths(root):
+    """Repo-relative untracked, non-ignored paths, as git spells them right now.
+
+    `--others --exclude-standard` is the same authority `changed()` and `dirty()`
+    read: ignored paths never appear here, so a snapshot delta can neither see
+    nor excuse anything the checker itself cannot see. os.fsdecode, not
+    decode(errors="replace"): a path that may need to be unlinked later has to
+    survive as a name the filesystem will reopen."""
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
+        capture_output=True,
+    )
+    if listed.returncode:
+        message = listed.stderr.decode("utf-8", "replace").strip()
+        raise OSError(message or "git could not list the untracked files")
+    return {os.fsdecode(raw) for raw in listed.stdout.split(b"\0") if raw}
+
+
+def _remove_created_paths(root, doomed):
+    """Delete paths proven created by a Prompire-owned invocation — files and
+    symlinks only. A symlink is unlinked, never followed; a directory is never
+    removed, even empty, because the snapshot names files and cannot prove a
+    directory's provenance; a path that resists stays. The failure direction is
+    deliberate: a leftover artifact is re-judged by every later run, while a
+    wrongly deleted user file is gone."""
+    removed, kept = [], []
+    for rel in sorted(doomed):
+        full = pathlib.Path(root) / rel
+        try:
+            if not os.path.lexists(full):
+                continue  # vanished since the snapshot; nothing left to own
+            if full.is_dir() and not full.is_symlink():
+                kept.append(rel)
+                continue
+            full.unlink()
+            removed.append(rel)
+        except OSError:
+            kept.append(rel)
+    return removed, kept
+
+
+def _measurement_cleanup(brief, root, before):
+    """Untracked paths the baseline measurement itself created, judged by the
+    real checker and removed only where it calls them violations.
+
+    The judgment is one more check_scope.py run, not a reimplementation: the
+    paths worth removing are exactly the ones the checker would later pin on the
+    agent, and only the checker knows its own boundary — dirty_baseline,
+    `.prompire/**`, tests policy, the volume's folding. A path the brief permits
+    is left where the measurement put it. Any doubt — snapshot unreadable, judge
+    indeterminate, unlink refused — removes nothing and says so: the artifact
+    then surfaces as an ordinary finding in a later run, the one failure
+    direction that cannot delete user state."""
+    try:
+        created = _untracked_paths(root) - before
+    except OSError as exc:
+        print(f"WARNING: could not attribute measurement artifacts: {exc}",
+              file=sys.stderr)
+        return []
+    if not created:
+        return []
+    judged = run_tool("scope", brief, "--json")
+    data, issue = parse_child_json("scope", judged)
+    if issue or judged.returncode not in (0, 1):
+        print("WARNING: could not judge the measurement's own artifacts; left in "
+              "place: " + ", ".join(sorted(created)), file=sys.stderr)
+        return []
+    flagged = {f.get("path") for f in data["findings"] if f.get("kind") == "VIOLATION"}
+    fold = fs_fold(root)
+    doomed = [p for p in created if norm_path(p, fold) in flagged]
+    removed, kept = _remove_created_paths(root, doomed)
+    for rel in kept:
+        print(f"WARNING: {rel} was created by the baseline measurement but could "
+              "not be removed; later runs will judge it normally", file=sys.stderr)
+    return removed
 
 
 def _copy_snapshot_entry(source, target, real_root, snapshot):
@@ -772,12 +854,18 @@ def prepare(args, extra):
         original = brief.read_bytes()
     except OSError:
         original = None  # baseline reports the unreadable brief; nothing to restore
+    try:
+        before = _untracked_paths(root)
+    except OSError as exc:
+        return report_refusal(
+            f"could not read the repository's untracked state: {exc}", args.json)
 
     def stage_failed(stage, result):
         _restore_brief(brief, original)
         return report_stage(stage, result, args.json)
 
     measured = run_tool("baseline", brief, "--write")
+    cleaned = _measurement_cleanup(brief, root, before)
     if measured.returncode:
         return stage_failed("baseline", measured)
 
@@ -816,6 +904,7 @@ def prepare(args, extra):
         checklist=checklist_path,
         target=args.target,
         json_mode=args.json,
+        cleaned=cleaned,
     )
 
 
