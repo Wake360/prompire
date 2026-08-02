@@ -526,7 +526,7 @@ def _untracked_paths(root):
 
 
 def _remove_created_paths(root, doomed):
-    """Delete paths proven created by a Prompire-owned invocation — files and
+    """Delete paths that appeared during a Prompire-owned invocation — files and
     symlinks only. A symlink is unlinked, never followed; a directory is never
     removed, even empty, because the snapshot names files and cannot prove a
     directory's provenance; a path that resists stays. The failure direction is
@@ -549,14 +549,14 @@ def _remove_created_paths(root, doomed):
 
 
 def _measurement_cleanup(brief, root, before):
-    """Untracked paths the baseline measurement itself created, judged by the
-    real checker and removed only where it calls them violations.
+    """Untracked paths that appeared during the baseline measurement, judged by
+    the real checker and removed only where it calls them violations.
 
     The judgment is one more check_scope.py run, not a reimplementation: the
     paths worth removing are exactly the ones the checker would later pin on the
     agent, and only the checker knows its own boundary — dirty_baseline,
     `.prompire/**`, tests policy, the volume's folding. A path the brief permits
-    is left where the measurement put it. Any doubt — snapshot unreadable, judge
+    is left exactly where it appeared. Any doubt — snapshot unreadable, judge
     indeterminate, unlink refused — removes nothing and says so: the artifact
     then surfaces as an ordinary finding in a later run, the one failure
     direction that cannot delete user state."""
