@@ -590,10 +590,12 @@ def _(repo, checks):
 @case("prepare does not arm when lint fails")
 def _(repo, checks):
     path = brief(repo, extra="scope: []\n")
+    original = path.read_bytes()
     result = run("prepare", path)
     checks.equal(result.returncode, 1, "lint failure exit")
-    checks.ok("baseline:" in path.read_text(encoding="utf-8"),
-              "lint follows the baseline write")
+    checks.ok(path.read_bytes() == original,
+              "a failed prepare leaves the brief as it found it — the measured "
+              "block must not survive the failure")
     checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
               "a failed lint must not arm the guard")
 

@@ -81,6 +81,31 @@ def base(path, *extra):
     return r
 
 
+def cli(repo, *args):
+    """Run the prompire CLI itself inside the fixture repo — P3's behavior lives
+    in the orchestration, not in any one child tool."""
+    return subprocess.run([sys.executable, str(SKILL / "prompire.py"), *map(str, args)],
+                          cwd=str(repo), capture_output=True, text=True,
+                          encoding="utf-8")
+
+
+def p3_brief(repo, name, body):
+    """A brief for `prepare` flows: written verbatim, never base_rev-stamped —
+    prepare's own baseline --write must find the measured fields absent."""
+    p = pathlib.Path(repo) / ".prompire" / f"{name}.yaml"
+    p.parent.mkdir(exist_ok=True)
+    p.write_text(body.lstrip(), encoding="utf-8")
+    return p
+
+
+def _drop_gitignore(repo):
+    """The R4 reproduction environment: a repo where interpreter artifacts are
+    git-visible because nothing ignores them."""
+    (pathlib.Path(repo) / ".gitignore").unlink()
+    fixtures.git(repo, "add", "-A")
+    fixtures.git(repo, "commit", "-qm", "drop gitignore")
+
+
 def brief(repo, name, body):
     """Write a brief. Stamps `base_rev` at the fixture repo's HEAD when the body does
     not already carry one — these fixtures are about scope/tests_policy/acceptance
@@ -2102,6 +2127,69 @@ autonomy: ask
     c.ok(r.returncode == 0,
          f"--strict must exit 0 when only an ignored path was written: "
          f"{r.stdout}{r.stderr}")
+
+
+@case("p3-failed-lint-restores-the-brief-bytes-exactly-and-retry-works")
+def _(repo, c):
+    """R5, reproduced and closed: prepare runs baseline --write before lint, so a
+    lint failure used to leave the measured base_rev/baseline block behind and
+    baseline.py then refused the corrected retry. The restore is byte-level —
+    comments, ordering, whitespace, the CRLF line below — not a reserialization."""
+    p = pathlib.Path(repo) / ".prompire" / "p3-restore.yaml"
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(
+        b"# operator note \xe2\x80\x94 must survive a failed prepare\r\n"
+        b"goal: Add a count helper to src/cart.py.\n"
+        b"scope: []\n"
+        b"tests_policy: immutable\n"
+        b'acceptance:\n  - cmd: python3 -c "pass"\n    expect: exit 0\n'
+        b"autonomy: ask\n")
+    original = p.read_bytes()
+
+    r = cli(repo, "prepare", ".prompire/p3-restore.yaml")
+    c.ok(r.returncode == 1,
+         f"lint must fail this prepare: {r.returncode} {r.stdout}{r.stderr}")
+    c.ok(p.read_bytes() == original,
+         f"a failed prepare must restore the brief byte-for-byte: {p.read_bytes()!r}")
+    c.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
+         "a failed prepare must not arm")
+    c.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones").exists(),
+         "a failed prepare must not cost a tombstone")
+
+    p.write_bytes(original.replace(b"scope: []", b"scope: [src/cart.py]"))
+    retry = cli(repo, "prepare", ".prompire/p3-restore.yaml")
+    c.ok(retry.returncode == 0,
+         f"correcting the actual error must be enough — no manual stripping of "
+         f"base_rev/baseline: {retry.returncode} {retry.stdout}{retry.stderr}")
+    text = p.read_text(encoding="utf-8")
+    c.ok("base_rev:" in text and "baseline:" in text,
+         "the successful retry measures and writes the block")
+
+
+@case("p3-pre-existing-untracked-payload-survives-a-refused-prepare")
+def _(repo, c):
+    """Anything on disk before prepare is the user's, whatever it looks like.
+    The dirty-tree refusal fires before any command runs, so both the payload
+    and the brief must come through byte-identical."""
+    payload = fixtures.write(repo, "payload.bin",
+                             "sentinel bytes the tool must not touch\n")
+    p = p3_brief(repo, "p3-payload", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+acceptance:
+  - cmd: python3 -c "pass"
+    expect: exit 0
+autonomy: ask
+""")
+    original = p.read_bytes()
+    r = cli(repo, "prepare", ".prompire/p3-payload.yaml")
+    c.ok(r.returncode == 2,
+         f"a dirty tree must refuse prepare: {r.returncode} {r.stdout}{r.stderr}")
+    c.ok("payload.bin" in (r.stdout + r.stderr), "the refusal must name the dirt")
+    c.ok(payload.read_text(encoding="utf-8")
+         == "sentinel bytes the tool must not touch\n",
+         "the pre-existing payload must survive byte-for-byte")
+    c.ok(p.read_bytes() == original, "a refused prepare must not touch the brief")
 
 
 def main():
