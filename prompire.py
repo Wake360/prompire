@@ -279,8 +279,8 @@ def parse_child_json(stage, result):
     return data, None
 
 
-def report_indeterminate(stage, result, message, json_mode):
-    data = {
+def report_indeterminate(stage, result, message, json_mode, data=None):
+    payload = {
         "status": "indeterminate",
         "stage": stage,
         "message": message,
@@ -289,23 +289,86 @@ def report_indeterminate(stage, result, message, json_mode):
         "stderr": result.stderr,
     }
     if json_mode:
-        print(json.dumps(data, ensure_ascii=False))
+        print(json.dumps(payload, ensure_ascii=False))
     else:
-        print(f"{stage} indeterminate: {message}")
-        emit_process(result)
+        # An exit-2 acceptance child speaks JSON ({"status": "indeterminate",
+        # "error": ...}); an exit-2 scope child speaks prose. Print the error, or
+        # the prose — never the raw JSON.
+        error = data.get("error") if isinstance(data, dict) else None
+        if error:
+            print(f"no verdict: {error}")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+        else:
+            print(f"no verdict: {stage} produced no trustworthy result")
+            emit_process(result)
     return 2
 
 
-def report_verification(scope, scope_data, acceptance, acceptance_data, json_mode):
+def _counted(n, noun):
+    return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
+ACK_REMEDY = re.compile(r"`--ack-disarms ([0-9a-f]{12,64})`")
+
+
+def render_human_verdict(brief, scope_data, acceptance_data, code):
+    """The verify result, retold for a human. This layer holds no authority: `code`
+    arrives already computed from the children's exit codes, every finding and
+    acceptance row is echoed from their JSON, and the one remedy line it can add
+    quotes a digest check_scope itself printed — absent that phrasing, no remedy.
+    The `caught: acceptance did not pass` wording is deliberate: `violation` is
+    reserved for scope findings, and a not_runnable row exits 1 without failing."""
+    findings = [f for f in (scope_data.get("findings") or []) if isinstance(f, dict)]
+    results = acceptance_data.get("results")
+    results = ([r for r in results if isinstance(r, dict)]
+               if isinstance(results, list) else [])
+    ran = acceptance_data.get("status") != "not_run"
+    if code == 0:
+        verdict = "clean"
+    elif scope_data.get("violations"):
+        verdict = "caught: " + _counted(scope_data["violations"], "violation")
+    elif ran and (not results or any(not r.get("ok") for r in results)):
+        verdict = "caught: acceptance did not pass"
+    else:
+        verdict = ("review: " + _counted(scope_data.get("reviews") or 0, "flag")
+                   + " — needs a human")
+    lines = [verdict]
+    for finding in findings:
+        lines.append(f"{str(finding.get('kind') or ''):9s} "
+                     f"{finding.get('path') or ''}: {finding.get('message') or ''}")
+        if finding.get("fix"):
+            lines.append(f"          → {finding['fix']}")
+    if not ran:
+        lines.append(f"acceptance: not run — {acceptance_data.get('reason') or ''}")
+    elif not results:
+        lines.append("acceptance: no commands ran")
+    else:
+        for row in results:
+            mark = ("PASS" if row.get("ok")
+                    else "NOT RUN" if row.get("status") == "not_runnable" else "FAIL")
+            lines.append(f"acceptance: {mark} {row.get('cmd') or ''}")
+    if (scope_data.get("base_source") == "repin"
+            and not scope_data.get("ack_disarms_bound")):
+        for finding in findings:
+            match = ACK_REMEDY.search(str(finding.get("message") or ""))
+            if match:
+                lines.append("acknowledge with: " + display_command(
+                    ["prompire", "verify", str(brief),
+                     "--ack-disarms", match.group(1)]))
+                break
+    return lines
+
+
+def report_verification(brief, scope, scope_data, acceptance, acceptance_data,
+                        json_mode):
     code = 1 if scope.returncode == 1 or acceptance.returncode == 1 else 0
     if json_mode:
         print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
                          ensure_ascii=False))
     else:
-        print("scope:")
-        print(scope.stdout, end="")
-        print("acceptance:")
-        print(acceptance.stdout, end="")
+        for line in render_human_verdict(brief, scope_data, acceptance_data, code):
+            print(line)
         if scope.stderr:
             print(scope.stderr, end="", file=sys.stderr)
         if acceptance.stderr:
@@ -313,7 +376,7 @@ def report_verification(scope, scope_data, acceptance, acceptance_data, json_mod
     return code
 
 
-def report_scope_preflight(scope, scope_data, json_mode):
+def report_scope_preflight(brief, scope, scope_data, json_mode):
     acceptance_data = {
         "status": "not_run",
         "reason": "strict scope preflight did not pass",
@@ -322,10 +385,8 @@ def report_scope_preflight(scope, scope_data, json_mode):
         print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
                          ensure_ascii=False))
     else:
-        print("scope:")
-        print(scope.stdout, end="")
-        print("acceptance:")
-        print("NOT RUN strict scope preflight did not pass")
+        for line in render_human_verdict(brief, scope_data, acceptance_data, 1):
+            print(line)
         if scope.stderr:
             print(scope.stderr, end="", file=sys.stderr)
     return 1
@@ -851,9 +912,10 @@ def verify(args, extra):
         return report_indeterminate("scope", preflight, issue, args.json)
     if preflight.returncode == 2:
         return report_indeterminate(
-            "scope", preflight, "scope could not produce a trustworthy result", args.json)
+            "scope", preflight, "scope could not produce a trustworthy result",
+            args.json, preflight_data)
     if preflight.returncode == 1 and not acceptance_evidence_safe(preflight_data):
-        return report_scope_preflight(preflight, preflight_data, args.json)
+        return report_scope_preflight(args.brief, preflight, preflight_data, args.json)
 
     acceptance = run_tool("acceptance", args.brief, "--json")
     acceptance_data, issue = parse_child_json("acceptance", acceptance)
@@ -862,7 +924,8 @@ def verify(args, extra):
     if acceptance.returncode == 2:
         return report_indeterminate(
             "acceptance", acceptance,
-            "acceptance could not produce a trustworthy result", args.json)
+            "acceptance could not produce a trustworthy result", args.json,
+            acceptance_data)
 
     scope = run_tool("scope", *scope_args)
     scope_data, issue = parse_child_json("scope", scope)
@@ -870,9 +933,10 @@ def verify(args, extra):
         return report_indeterminate("scope", scope, issue, args.json)
     if scope.returncode == 2:
         return report_indeterminate(
-            "scope", scope, "scope could not produce a trustworthy result", args.json)
+            "scope", scope, "scope could not produce a trustworthy result",
+            args.json, scope_data)
     return report_verification(
-        scope, scope_data, acceptance, acceptance_data, args.json)
+        args.brief, scope, scope_data, acceptance, acceptance_data, args.json)
 
 
 def close(args, extra):
