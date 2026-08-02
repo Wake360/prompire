@@ -1382,6 +1382,8 @@ def _(repo, checks):
     checks.ok("clean" in low or "0 violation" in low,
               "demo must also show the in-scope change passing")
     checks.ok("secrets.cfg" in low, "demo must name the file that drifted out of scope")
+    checks.ok("acceptance: not run" in low,
+              "the caught violation must keep acceptance unexecuted")
     checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
               "demo must not touch the caller's repo state")
     scratch = [line.split(": ", 1)[1] for line in result.stdout.splitlines()
