@@ -1593,6 +1593,173 @@ def _(repo, checks):
               "the reason names the changed brief")
 
 
+@case("verify human mode keeps REVIEW top-level over a passing acceptance")
+def _(repo, checks):
+    named = """\
+goal: Fix the cart total and repair its test.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: named
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+autonomy: ask
+"""
+    path = fixtures.write(repo, ".prompire/named.yaml", named)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+
+    result = run("verify", path)
+    checks.equal(result.returncode, 1, "review exit stays non-zero")
+    checks.equal(result.stdout, (
+        "review: 1 flag — needs a human\n"
+        "REVIEW    tests/test_total.py: tests_policy `named` lets test files change; "
+        "no checker can tell a repaired assertion from a weakened one\n"
+        "          → read the test diff yourself\n"
+        "acceptance: PASS python -c \"print('ok')\"\n"),
+        "the review verdict leads and the acceptance pass is separate evidence")
+    checks.ok("clean" not in result.stdout,
+              "a passing acceptance must not launder the review into clean")
+
+
+@case("verify human mode surfaces an acceptance failure above surviving reviews")
+def _(repo, checks):
+    regress = ("python -c \"import pathlib,sys; "
+               "sys.exit(1 if pathlib.Path('.prompire/kill').exists() else 0)\"")
+    path = fixtures.write(repo, ".prompire/named-regress.yaml", f"""\
+goal: Fix the cart total and repair its test.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: named
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: {regress}
+    expect: exit 0
+autonomy: ask
+""")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    fixtures.write(repo, ".prompire/kill", "regress\n")
+
+    result = run("verify", path)
+    checks.equal(result.returncode, 1, "combined failure exit")
+    checks.equal(result.stdout.splitlines()[0], "caught: acceptance did not pass",
+                 "a run with a red acceptance is not merely reviews-only")
+    checks.ok("REVIEW    tests/test_total.py: tests_policy `named`" in result.stdout,
+              "the review flag stays visible under the acceptance failure")
+    checks.ok(f"acceptance: FAIL {regress}" in result.stdout,
+              "the failing command is named")
+
+
+@case("verify human mode makes the repin acknowledgement discoverable, never automatic")
+def _(repo, checks):
+    def task_brief(name):
+        return fixtures.write(repo, f".prompire/{name}.yaml", """\
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+autonomy: ask
+""")
+    first = task_brief("first")
+    checks.equal(run("prepare", first).returncode, 0, "first prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8").replace(
+        "return sum(items) - 1", "return sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", first).returncode, 0, "first cycle verifies clean")
+    fixtures.git(repo, "add", "-A")
+    fixtures.git(repo, "commit", "-qm", "task first, reviewed and committed")
+    checks.equal(run("close", first).returncode, 0, "close exit")
+
+    second = task_brief("second")
+    checks.equal(run("prepare", second).returncode, 0, "second prepare exit")
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+
+    result = run("verify", second)
+    tomb = pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones"
+    digest = hashlib.sha256(tomb.read_bytes()).hexdigest()[:12]
+    checks.equal(result.returncode, 1, "unacked repin exit")
+    checks.equal(result.stdout.splitlines()[0], "review: 1 flag — needs a human",
+                 "the repin review is the top-level verdict")
+    checks.ok('acceptance: PASS python -c "print(\'ok\')"' in result.stdout,
+              "the P2 acceptance evidence stays visible under the review")
+    checks.equal(result.stdout.rstrip("\n").splitlines()[-1],
+                 f"acknowledge with: prompire verify {second} --ack-disarms {digest}",
+                 "the remedy is the exact existing command, digest included")
+    checks.ok("clean" not in result.stdout, "an unacked repin is never clean")
+
+    acked = run("verify", second, "--ack-disarms", digest)
+    checks.equal(acked.returncode, 0, "the acknowledged repin clears strict, as today")
+    checks.equal(acked.stdout.splitlines()[0], "clean",
+                 "the acknowledged result is rendered as the authority it is")
+    checks.ok("Acknowledged:" in acked.stdout,
+              "the structured result still carries the acked review, so it is shown")
+    checks.ok("acknowledge with:" not in acked.stdout,
+              "no remedy line once the acknowledgement is bound")
+
+
+@case("verify human mode never implies acceptance evidence the gate withheld")
+def _(repo, checks):
+    head = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    path = fixtures.write(repo, ".prompire/uncorroborated.yaml", f"""\
+goal: Keep an uncorroborated brief from authorizing commands.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+base_rev: {head}
+baseline:
+  - cmd: python -c "print('ok')"
+    status: pass
+    evidence: exit 0, 1 line(s) stdout, 0.0s
+autonomy: ask
+""")
+    result = run("verify", path)
+    checks.equal(result.returncode, 1, "uncorroborated exit")
+    checks.equal(result.stdout.splitlines()[0], "review: 1 flag — needs a human",
+                 "the unarmed state is a review, not a caught or a clean")
+    checks.ok("acceptance: not run — strict scope preflight did not pass"
+              in result.stdout, "withheld acceptance is stated as not run")
+    checks.ok("PASS" not in result.stdout and "FAIL" not in result.stdout,
+              "no acceptance rows may be implied when nothing executed")
+
+    linked = fixtures.write(repo, ".prompire/symlinked.yaml", """\
+goal: Add an alias module next to cart.
+scope: [src/cart.py, src/alias.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+autonomy: ask
+""")
+    checks.equal(run("prepare", linked).returncode, 0, "symlink-case prepare exit")
+    try:
+        (pathlib.Path(repo) / "src" / "alias.py").symlink_to("cart.py")
+    except (NotImplementedError, OSError):
+        return
+    result = run("verify", linked)
+    checks.equal(result.returncode, 1, "symlink review exit")
+    checks.equal(result.stdout.splitlines()[0], "review: 1 flag — needs a human",
+                 "the symlink review is the top-level verdict")
+    checks.ok("acceptance: not run — strict scope preflight did not pass"
+              in result.stdout, "a symlink review keeps acceptance visibly not run")
+
+
 def main():
     failures = 0
     with tempfile.TemporaryDirectory() as directory:
