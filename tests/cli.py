@@ -1499,6 +1499,100 @@ def _(repo, checks):
                  "refusal JSON is one canonical line, byte for byte")
 
 
+@case("verify human mode leads with clean or caught and prints no child JSON")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    clean = run("verify", path)
+    checks.equal(clean.returncode, 0, "clean exit")
+    checks.equal(clean.stdout,
+                 'clean\nacceptance: PASS python -c "print(\'ok\')"\n',
+                 "clean verdict leads and carries the acceptance evidence")
+    checks.ok("{" not in clean.stdout, "no raw child JSON in human mode")
+
+    fixtures.write(repo, "src/outside.py", "value = 1\n")
+    one = run("verify", path)
+    checks.equal(one.returncode, 1, "one-violation exit")
+    checks.equal(one.stdout, (
+        "caught: 1 violation\n"
+        "VIOLATION src/outside.py: changed outside `scope`\n"
+        "          → revert it, or revise the brief and re-run the baseline — a scope "
+        "change is an edit to the brief, not a confirmation in chat\n"
+        "acceptance: not run — strict scope preflight did not pass\n"),
+        "one violation is caught, named, and acceptance stays blocked")
+    checks.ok("{" not in one.stdout, "no raw child JSON in human mode")
+
+    fixtures.write(repo, "src/outside2.py", "value = 2\n")
+    two = run("verify", path)
+    checks.equal(two.returncode, 1, "two-violation exit")
+    checks.equal(two.stdout.splitlines()[0], "caught: 2 violations",
+                 "the plural verdict counts every violation")
+    checks.ok("VIOLATION src/outside.py: changed outside `scope`" in two.stdout
+              and "VIOLATION src/outside2.py: changed outside `scope`" in two.stdout,
+              "both violations stay named")
+
+
+@case("verify human mode says caught when acceptance did not pass, never violation")
+def _(repo, checks):
+    regress = ("python -c \"import pathlib,sys; "
+               "sys.exit(1 if pathlib.Path('.prompire/kill').exists() else 0)\"")
+    path = fixtures.write(repo, ".prompire/regress.yaml", f"""\
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: {regress}
+    expect: exit 0
+autonomy: ask
+""")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    fixtures.write(repo, ".prompire/kill", "regress\n")
+
+    result = run("verify", path)
+    checks.equal(result.returncode, 1, "acceptance failure exit")
+    checks.equal(result.stdout, (
+        "caught: acceptance did not pass\n"
+        f"acceptance: FAIL {regress}\n"),
+        "an acceptance failure is caught by name, with the failing command")
+    checks.ok("violation" not in result.stdout.lower(),
+              "a failed test is never miscounted as a scope violation")
+
+
+@case("verify human mode says no verdict on exit 2, with the child's own reason")
+def _(repo, checks):
+    unprepared = brief(repo)  # no base_rev, never activated
+    result = run("verify", unprepared)
+    checks.equal(result.returncode, 2, "no-base exit")
+    checks.equal(result.stdout.splitlines()[0],
+                 "no verdict: scope produced no trustworthy result",
+                 "the no-verdict headline leads")
+    checks.ok("no base to check against" in result.stdout,
+              "the child's reason and remedy survive")
+    for word in ("caught", "review:", "clean"):
+        checks.ok(word not in result.stdout,
+                  f"an indeterminate run must not read as {word!r}")
+
+    edited = prepared(repo, "edited")
+    edited.write_text(
+        edited.read_text(encoding="utf-8").replace("print('ok')", "print('no')"),
+        encoding="utf-8")
+    result = run("verify", edited)
+    checks.equal(result.returncode, 2, "edited-armed-brief exit")
+    checks.equal(result.stdout.splitlines()[0],
+                 "no verdict: scope produced no trustworthy result",
+                 "the edited armed brief also reads as no verdict")
+    checks.ok("the brief changed since the guard was armed" in result.stdout,
+              "the reason names the changed brief")
+
+
 def main():
     failures = 0
     with tempfile.TemporaryDirectory() as directory:
