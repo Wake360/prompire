@@ -653,11 +653,15 @@ def _(repo, checks):
 @case("prepare does not arm when an artifact write fails")
 def _(repo, checks):
     path = brief(repo)
+    before = path.read_bytes()
     prompt = path.with_name("task.generic.md")
     checklist = path.with_name("task.checklist.md")
     checklist.mkdir()
     result = run("prepare", path)
     checks.equal(result.returncode, 2, "artifact write refusal exit")
+    checks.ok(path.read_bytes() == before,
+              "a failed artifact write must put the brief's bytes back — the "
+              "baseline stage already stamped the measured block by here")
     checks.ok(prompt.is_file(), "prompt write must precede the failing checklist write")
     checks.ok(checklist.is_dir(), "failed artifact destination must remain untouched")
     checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),

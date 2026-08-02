@@ -2160,11 +2160,12 @@ def _(repo, c):
          "the successful retry measures and writes the block")
 
 
-@case("p3-pre-existing-untracked-payload-survives-a-refused-prepare")
+@case("p3-dirty-tree-refuses-prepare-before-anything-runs")
 def _(repo, c):
-    """Anything on disk before prepare is the user's, whatever it looks like.
-    The dirty-tree refusal fires before any command runs, so both the payload
-    and the brief must come through byte-identical."""
+    """The refusal comes first, so nothing gets a chance to write. An untracked
+    file at the repo root makes prepare refuse before the baseline stage runs,
+    and both that file and the brief come through byte-identical — there is no
+    stage output to restore because no stage ran."""
     payload = fixtures.write(repo, "payload.bin",
                              "sentinel bytes the tool must not touch\n")
     p = p3_brief(repo, "p3-payload", """
@@ -2273,6 +2274,64 @@ autonomy: ask
     c.ok(v.returncode != 2,
          f"the repo must not be wedged at exit 2 by a digest the tool itself "
          f"broke: {v.returncode} {v.stdout}{v.stderr}")
+
+
+@case("p3-activation-that-fails-before-committing-is-rolled-back")
+def _(repo, c):
+    """The other side of the same question. When `--activate` dies before the
+    pointer is written there is no commit to protect, so the transaction owes
+    the user the brief it started with — otherwise the measured block sits in a
+    file no pointer attests to, and the corrected retry has to strip it by hand.
+
+    Injected the same way as the wedge case, one call earlier: a
+    `sitecustomize.py` on PYTHONPATH makes `mkdir` fail for the guard-state lock
+    directory, and only inside the `--activate` child. Acquiring that lock is
+    the first thing activation does, so the failure is unambiguously before the
+    pointer write."""
+    inject = pathlib.Path(repo) / ".prompire" / "inject"
+    inject.mkdir(parents=True, exist_ok=True)
+    (inject / "sitecustomize.py").write_text('''
+import sys
+if "--activate" in sys.argv:
+    import pathlib
+    real = pathlib.Path.mkdir
+
+    def patched(self, *args, **kwargs):
+        if self.name == "ACTIVE.lock":
+            raise OSError("injected: guard-state lock could not be acquired")
+        return real(self, *args, **kwargs)
+
+    pathlib.Path.mkdir = patched
+'''.lstrip(), encoding="utf-8")
+
+    p = p3_brief(repo, "p3-precommit", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "pass"
+    expect: exit 0
+autonomy: ask
+""")
+    original = p.read_bytes()
+    r = cli(repo, "prepare", ".prompire/p3-precommit.yaml",
+            env={"PYTHONPATH": str(inject)})
+    c.ok(r.returncode == 2,
+         f"the injected lock-acquire failure must surface as the activate "
+         f"stage's failure: {r.returncode} {r.stdout}{r.stderr}")
+    c.ok("activate" in (r.stdout + r.stderr),
+         f"the report must name the stage that failed: {r.stdout}{r.stderr}")
+    c.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
+         "the injection must fail before any pointer is written")
+    c.ok(p.read_bytes() == original,
+         "an activation that never committed must leave the brief exactly as "
+         "prepare found it — no pointer attests to the measured block, so the "
+         "block must not survive either")
+
+    retry = cli(repo, "prepare", ".prompire/p3-precommit.yaml")
+    c.ok(retry.returncode == 0,
+         f"the restored brief must be preparable again without hand-editing: "
+         f"{retry.returncode} {retry.stdout}{retry.stderr}")
 
 
 @case("p3-standalone-baseline-still-refuses-to-overwrite")
