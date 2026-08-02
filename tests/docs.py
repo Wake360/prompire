@@ -496,6 +496,45 @@ def overclaim_problems():
     return out
 
 
+def truth_boundary_problems():
+    """The checker's coverage claim must carry its own limit wherever it appears.
+
+    `check_scope.py`'s evidence is `git diff` plus `git status --untracked-files=all`,
+    and both exclude gitignored paths — reproduced: a file planted under an ignored
+    `vendor/` draws exit 0 with zero findings. So prose may say a change is seen
+    "whatever tool made it" only on a line that also says the coverage is of
+    git-visible changes. Line-scoped on purpose: the qualification a reader gets is
+    the one in the sentence they are reading, not one three paragraphs away.
+    """
+    out = []
+    for rel in PROSE:
+        if not (SKILL / rel).is_file():
+            continue
+        for n, line in enumerate(read(rel).splitlines(), 1):
+            if "whatever tool made it" in line and "git-visible" not in line:
+                out.append(f"{rel}:{n} claims changes are seen whatever tool made "
+                           "them, without the git-visible qualification — gitignored "
+                           "paths are outside the checker's evidence, and the line "
+                           "making the claim has to say so")
+    return out
+
+
+def truth_boundary_regression_problems():
+    global SKILL
+    original = SKILL
+    try:
+        with tempfile.TemporaryDirectory(prefix="prompire-truth-boundary-") as tmp:
+            SKILL = pathlib.Path(tmp)
+            (SKILL / "README.md").write_text(
+                "git sees the write whatever tool made it\n", encoding="utf-8")
+            findings = truth_boundary_problems()
+    finally:
+        SKILL = original
+    if findings:
+        return []
+    return ["truth-boundary check does not detect an unqualified coverage claim"]
+
+
 BINARY_MODES = {"rb", "wb", "ab", "rb+", "wb+", "ab+", "r+b", "w+b", "a+b", "xb", "x+b"}
 
 
@@ -745,6 +784,8 @@ def main():
     problems += host_problems()
     problems += hook_config_problems()
     problems += overclaim_problems()
+    problems += truth_boundary_problems()
+    problems += truth_boundary_regression_problems()
     problems += encoding_problems()
     problems += decoder_problems()
     problems += action_pin_problems()
