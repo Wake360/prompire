@@ -948,6 +948,167 @@ autonomy: ask
     checks.ok(not ran.exists(), "the acceptance command must not have executed")
 
 
+@case("a named tests policy gathers acceptance evidence and keeps the review")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/named-evidence.yaml", """\
+goal: Fix the cart total and repair its test.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: named
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: python -m unittest -q tests.test_cart
+    expect: exit 0
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/named-evidence.ran').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    result = run("prepare", path)
+    checks.equal(result.returncode, 0, "prepare exit")
+    ran = pathlib.Path(repo) / ".prompire" / "named-evidence.ran"
+    ran.unlink(missing_ok=True)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8").replace(
+        "return sum(items) - 1", "return sum(items)"), encoding="utf-8")
+    test = pathlib.Path(repo) / "tests" / "test_total.py"
+    test.write_text(test.read_text(encoding="utf-8") + "\n# repaired with the fix\n",
+                    encoding="utf-8")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(data["scope"]["violations"], 0, "a legitimate run has no violations")
+    checks.equal(data["scope"]["base_source"], "pin", "the run is corroborated")
+    checks.ok(any("tests_policy `named`" in f["message"]
+                  for f in data["scope"]["findings"]), "the policy review must remain")
+    checks.ok(data["acceptance"].get("status") != "not_run",
+              "acceptance evidence must be gathered")
+    checks.equal(data["acceptance"].get("passed"), 2, "both acceptance commands pass")
+    checks.ok(ran.exists(), "the acceptance command must actually have executed")
+    checks.equal(result.returncode, 1, "the review must still fail the strict run")
+
+
+@case("an authoring policy with a skip marker still gathers acceptance evidence")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/authoring-evidence.yaml", """\
+goal: Author a regression test for the total helper.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: authoring
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/authoring-evidence.ran').write_text('x')"
+    expect: exit 0
+oracle: human review
+autonomy: ask
+""")
+    result = run("prepare", path)
+    checks.equal(result.returncode, 0, "prepare exit")
+    ran = pathlib.Path(repo) / ".prompire" / "authoring-evidence.ran"
+    ran.unlink(missing_ok=True)
+    test = pathlib.Path(repo) / "tests" / "test_total.py"
+    test.write_text(test.read_text(encoding="utf-8").replace(
+        "    def test_total_sums(self):",
+        "    @unittest.skip(\"wip\")\n    def test_total_sums(self):"),
+        encoding="utf-8")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(data["scope"]["violations"], 0, "authoring edits are not violations")
+    checks.equal(data["scope"]["reviews"], 2, "policy review plus skip-marker review")
+    checks.equal(data["acceptance"].get("passed"), 1, "acceptance evidence gathered")
+    checks.ok(ran.exists(), "the acceptance command must actually have executed")
+    checks.equal(result.returncode, 1, "the reviews must still fail the strict run")
+
+
+@case("the brief-changed review on a tracked brief does not block acceptance evidence")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/tracked.yaml", """\
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/tracked.ran').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    fixtures.git(repo, "add", "-f", str(path))
+    fixtures.git(repo, "commit", "-qm", "track the brief before measuring")
+    result = run("prepare", path)
+    checks.equal(result.returncode, 0, "prepare exit")
+    ran = pathlib.Path(repo) / ".prompire" / "tracked.ran"
+    ran.unlink(missing_ok=True)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(data["scope"]["violations"], 0, "the in-scope edit is legal")
+    checks.equal(data["scope"]["base_source"], "pin", "the run is corroborated")
+    checks.ok(any("the brief itself changed since the base revision" in f["message"]
+                  for f in data["scope"]["findings"]),
+              "prepare's own baseline write must have raised the brief-changed review")
+    checks.equal(data["acceptance"].get("passed"), 1, "acceptance evidence gathered")
+    checks.ok(ran.exists(), "the acceptance command must actually have executed")
+    checks.equal(result.returncode, 1, "the review must still fail the strict run")
+
+
+@case("a repin review gathers acceptance evidence and the ack still clears strict")
+def _(repo, checks):
+    def task_brief(name):
+        return fixtures.write(repo, f".prompire/{name}.yaml", f"""\
+goal: Task {name} on the cart module.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/{name}.ran').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    first = task_brief("first")
+    checks.equal(run("prepare", first).returncode, 0, "first prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8").replace(
+        "return sum(items) - 1", "return sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", first).returncode, 0, "first cycle verifies clean")
+    fixtures.git(repo, "add", "-A")
+    fixtures.git(repo, "commit", "-qm", "task first, reviewed and committed")
+    checks.equal(run("close", first).returncode, 0, "close exit")
+
+    second = task_brief("second")
+    checks.equal(run("prepare", second).returncode, 0, "second prepare exit")
+    ran = pathlib.Path(repo) / ".prompire" / "second.ran"
+    ran.unlink(missing_ok=True)
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+
+    result = run("verify", second, "--json")
+    data = json_out(result)
+
+    checks.equal(data["scope"]["base_source"], "repin", "the second cycle is a repin")
+    checks.equal(data["scope"]["violations"], 0, "the in-scope edit is legal")
+    checks.equal(data["acceptance"].get("passed"), 1, "acceptance evidence gathered")
+    checks.ok(ran.exists(), "the acceptance command must actually have executed")
+    checks.equal(result.returncode, 1, "the unacknowledged repin must still fail strict")
+
+    tomb = pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones"
+    digest = hashlib.sha256(tomb.read_bytes()).hexdigest()[:12]
+    ran.unlink(missing_ok=True)
+    acked = run("verify", second, "--ack-disarms", digest, "--json")
+    acked_data = json_out(acked)
+    checks.equal(acked.returncode, 0, "the acknowledged repin clears strict, as today")
+    checks.equal(acked_data["acceptance"].get("passed"), 1,
+                 "acceptance runs on the acked path")
+    checks.ok(ran.exists(), "acceptance executed on the acked path too")
+
+
 @case("prepare maps an unexpected child exit to structured exit 2")
 def _(repo, checks):
     path = brief(repo)
