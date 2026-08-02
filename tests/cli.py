@@ -806,6 +806,8 @@ autonomy: ask
     checks.equal(data["scope"]["reviews"], 1, "uncorroborated review count")
     checks.equal(data["acceptance"]["status"], "not_run",
                  "JSON must explain that acceptance did not run")
+    checks.equal(data["scope"]["base_source"], None,
+                 "this is the unarmed state the base_source gate exists to keep blocked")
 
 
 @case("verify returns 2 when scope cannot decide")
@@ -844,6 +846,106 @@ def _(repo, checks):
         checks.equal(data.get("status"), "indeterminate", f"{label} JSON status")
         checks.equal(data.get("stage"), "acceptance", f"{label} JSON stage")
         checks.ok("Traceback" not in result.stderr, f"{label} must not traceback")
+
+
+@case("a violation blocks acceptance even when the only review is non-blocking")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/violation-named.yaml", """\
+goal: Fix the cart total and repair its test.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: named
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/violation-named.ran').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    result = run("prepare", path)
+    checks.equal(result.returncode, 0, "prepare exit")
+    ran = pathlib.Path(repo) / ".prompire" / "violation-named.ran"
+    checks.ok(ran.exists(), "prepare's baseline run proves the sentinel mechanism works")
+    ran.unlink(missing_ok=True)
+    fixtures.write(repo, "src/outside.py", "value = 1\n")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(result.returncode, 1, "violation exit")
+    checks.equal(data["scope"]["violations"], 1, "the out-of-scope write is a violation")
+    checks.equal(data["acceptance"]["status"], "not_run",
+                 "a violation must keep acceptance blocked whatever reviews accompany it")
+    checks.ok(not ran.exists(), "the acceptance command must not have executed")
+
+
+@case("an indeterminate scope run never executes the acceptance command")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/no-base.yaml", """\
+goal: Keep an unmeasured brief from authorizing commands.
+scope: [src/cart.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/no-base.ran').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    result = run("verify", path, "--json")
+    data = json_out(result)
+    checks.equal(result.returncode, 2, "no base means no verdict")
+    checks.equal(data.get("status"), "indeterminate", "exit-2 JSON shape")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "no-base.ran").exists(),
+              "exit 2 must short-circuit before any command runs")
+
+
+@case("editing the armed brief's acceptance command yields no verdict and no execution")
+def _(repo, checks):
+    path = prepared(repo)
+    old_cmd = '''python -c "print('ok')"'''
+    new_cmd = ('''python -c "import pathlib; '''
+               '''pathlib.Path('.prompire/edited.ran').write_text('x')"''')
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace(old_cmd, new_cmd), encoding="utf-8")
+    result = run("verify", path, "--json")
+    data = json_out(result)
+    checks.equal(result.returncode, 2, "an edited armed brief must produce no verdict")
+    checks.equal(data.get("status"), "indeterminate", "refusal shape")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "edited.ran").exists(),
+              "the rewritten acceptance command must never execute")
+
+
+@case("a symlink review keeps acceptance unexecuted")
+def _(repo, checks):
+    path = fixtures.write(repo, ".prompire/symlinked.yaml", """\
+goal: Add an alias module next to cart.
+scope: [src/cart.py, src/alias.py]
+forbidden: []
+tests_policy: immutable
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('.prompire/symlinked.ran').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    result = run("prepare", path)
+    checks.equal(result.returncode, 0, "prepare exit")
+    ran = pathlib.Path(repo) / ".prompire" / "symlinked.ran"
+    checks.ok(ran.exists(), "prepare's baseline run proves the sentinel mechanism works")
+    ran.unlink(missing_ok=True)
+    (pathlib.Path(repo) / "src" / "alias.py").symlink_to("cart.py")
+
+    result = run("verify", path, "--json")
+    data = json_out(result)
+
+    checks.equal(result.returncode, 1, "symlink review exit")
+    checks.equal(data["scope"]["violations"], 0,
+                 "an in-scope symlink is a review, not a violation")
+    checks.ok(any(f["kind"] == "REVIEW" and "symlink" in f["message"]
+                  for f in data["scope"]["findings"]),
+              "the symlink review must be present")
+    checks.equal(data["scope"]["base_source"], "pin", "the run is otherwise corroborated")
+    checks.equal(data["acceptance"]["status"], "not_run",
+                 "a symlink review must keep blocking acceptance")
+    checks.ok(not ran.exists(), "the acceptance command must not have executed")
 
 
 @case("prepare maps an unexpected child exit to structured exit 2")
