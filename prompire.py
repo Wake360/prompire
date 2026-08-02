@@ -288,16 +288,24 @@ def report_indeterminate(stage, result, message, json_mode):
     return 2
 
 
-def report_verification(scope, scope_data, acceptance, acceptance_data, json_mode):
-    code = 1 if scope.returncode == 1 or acceptance.returncode == 1 else 0
+def report_verification(scope, scope_data, acceptance, acceptance_data, json_mode,
+                        self_created=(), scope_code=None):
+    if scope_code is None:
+        scope_code = scope.returncode
+    code = 1 if scope_code == 1 or acceptance.returncode == 1 else 0
     if json_mode:
-        print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
+        print(json.dumps({"scope": scope_data, "acceptance": acceptance_data,
+                          "self_created": list(self_created)},
                          ensure_ascii=False))
     else:
         print("scope:")
         print(scope.stdout, end="")
         print("acceptance:")
         print(acceptance.stdout, end="")
+        if self_created:
+            print("self-created: " + ", ".join(self_created)
+                  + " — created by this run's own acceptance invocation and "
+                    "removed; excluded from this verdict only")
         if scope.stderr:
             print(scope.stderr, end="", file=sys.stderr)
         if acceptance.stderr:
@@ -582,6 +590,50 @@ def _measurement_cleanup(brief, root, before):
         print(f"WARNING: {rel} was created by the baseline measurement but could "
               "not be removed; later runs will judge it normally", file=sys.stderr)
     return removed
+
+
+def _attribute_self_created(root, created, scope_data, scope_code):
+    """Split the final scope verdict into the agent's changes and this run's own.
+
+    Only a path absent at the pre-acceptance snapshot, present after, and
+    flagged by the final check is the invocation's: it exists only because
+    verify ran, in a place the brief forbids. Those findings come out of the
+    verdict, the paths come off the disk, and both are named to the caller.
+    Nothing is persisted — the next invocation starts from its own snapshot, so
+    the same pathname planted later is that run's ordinary evidence.
+
+    The exit is recomputed only when every failure signal is accounted for:
+    zero violations left and zero strict-failing reviews (a review fails
+    --strict unless it is the repin note under a bound acknowledgement — the
+    same accounting check_scope.py applies). Anything unaccounted keeps the
+    child's own exit: an unrecognized future failure mode stays red."""
+    if not created:
+        return [], scope_code
+    fold = fs_fold(root)
+    created_norm = {norm_path(p, fold): p for p in created}
+    excluded = [f for f in scope_data.get("findings", [])
+                if f.get("kind") == "VIOLATION" and f.get("path") in created_norm]
+    if not excluded:
+        return [], scope_code
+    removed, kept = _remove_created_paths(
+        root, [created_norm[f["path"]] for f in excluded])
+    for rel in kept:
+        print(f"WARNING: {rel} was created by this run's acceptance invocation "
+              "but could not be removed; later runs will judge it normally",
+              file=sys.stderr)
+    excluded_paths = {f["path"] for f in excluded}
+    remaining = [f for f in scope_data["findings"]
+                 if not (f.get("kind") == "VIOLATION"
+                         and f.get("path") in excluded_paths)]
+    scope_data["findings"] = remaining
+    scope_data["violations"] = sum(1 for f in remaining if f.get("kind") == "VIOLATION")
+    if scope_code == 1 and scope_data["violations"] == 0:
+        reviews = sum(1 for f in remaining if f.get("kind") == "REVIEW")
+        acked = 1 if (scope_data.get("ack_disarms_bound")
+                      and scope_data.get("base_source") == "repin") else 0
+        if reviews - acked <= 0:
+            scope_code = 0
+    return sorted(excluded_paths), scope_code
 
 
 def _copy_snapshot_entry(source, target, real_root, snapshot):
@@ -924,7 +976,18 @@ def verify(args, extra):
     if preflight.returncode == 1 and not acceptance_evidence_safe(preflight_data):
         return report_scope_preflight(preflight, preflight_data, args.json)
 
+    try:
+        root = repo_root(pathlib.Path(args.brief).resolve().parent)
+        before = _untracked_paths(root)
+    except (RepoError, OSError) as exc:
+        return report_refusal(
+            f"could not snapshot the repository's untracked state: {exc}", args.json)
+
     acceptance = run_tool("acceptance", args.brief, "--json")
+    try:
+        created = _untracked_paths(root) - before
+    except OSError:
+        created = set()   # fail closed: nothing excluded, nothing removed
     acceptance_data, issue = parse_child_json("acceptance", acceptance)
     if issue:
         return report_indeterminate("acceptance", acceptance, issue, args.json)
@@ -940,8 +1003,11 @@ def verify(args, extra):
     if scope.returncode == 2:
         return report_indeterminate(
             "scope", scope, "scope could not produce a trustworthy result", args.json)
-    return report_verification(
-        scope, scope_data, acceptance, acceptance_data, args.json)
+    self_created, scope_code = _attribute_self_created(
+        root, created, scope_data, scope.returncode)
+    return report_verification(scope, scope_data, acceptance, acceptance_data,
+                               args.json, self_created=self_created,
+                               scope_code=scope_code)
 
 
 def close(args, extra):
