@@ -2192,6 +2192,171 @@ autonomy: ask
     c.ok(p.read_bytes() == original, "a refused prepare must not touch the brief")
 
 
+@case("p3-prepare-cleans-its-own-measurement-artifacts")
+def _(repo, c):
+    """R4's first half. py_compile writes src/__pycache__/cart.cpython-*.pyc
+    deterministically (unlike a bare import, it ignores PYTHONDONTWRITEBYTECODE),
+    so the measurement provably dirties the tree — and prepare must provably
+    leave it clean, with no exemption recorded anywhere."""
+    _drop_gitignore(repo)
+    p = p3_brief(repo, "p3-clean", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import py_compile; py_compile.compile('src/cart.py')"
+    expect: exit 0
+autonomy: ask
+""")
+    r = cli(repo, "prepare", ".prompire/p3-clean.yaml")
+    c.ok(r.returncode == 0, f"prepare must succeed: {r.returncode} {r.stdout}{r.stderr}")
+    status = fixtures.git(repo, "status", "--porcelain", "--untracked-files=all")
+    c.ok("__pycache__" not in status,
+         f"prepare left its own bytecode artifact in the tree: {status!r}")
+    armed = p.read_text(encoding="utf-8")
+    c.ok("__pycache__" not in armed and "dirty_baseline" not in armed,
+         f"the armed brief must carry no exemption for the artifact: {armed!r}")
+    active = (pathlib.Path(repo) / ".prompire" / "ACTIVE").read_text(encoding="utf-8")
+    c.ok("__pycache__" not in active, f"the pointer must carry no exemption: {active!r}")
+
+
+@case("p3-the-cleaned-path-is-not-exempt-later")
+def _(repo, c):
+    """The essential negative: handling an artifact once must not buy the
+    pathname anything. The agent recreating the very same path — and a sibling
+    in the same directory — is judged exactly as any other write."""
+    from importlib.util import cache_from_source
+    _drop_gitignore(repo)
+    p = p3_brief(repo, "p3-exempt", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import py_compile; py_compile.compile('src/cart.py')"
+    expect: exit 0
+autonomy: ask
+""")
+    c.ok(cli(repo, "prepare", ".prompire/p3-exempt.yaml").returncode == 0, "prepare")
+    exact = pathlib.Path(cache_from_source(str(pathlib.Path(repo) / "src" / "cart.py")))
+    exact.parent.mkdir(parents=True, exist_ok=True)
+    exact.write_bytes(b"payload at the exact path prepare once cleaned")
+    sibling = exact.parent / "planted-sibling.pyc"
+    sibling.write_bytes(b"payload at a nested variation")
+    g = guard(p)
+    got = {v["path"] for v in violations(g)}
+    c.ok(any("__pycache__" in path for path in got),
+         f"an agent write at the once-cleaned path must be a violation: {g['findings']}")
+    c.ok(len(got) >= 2,
+         f"both the exact path and the sibling must be judged: {got}")
+
+
+@case("p3-cleanup-spares-pre-existing-files-in-a-shared-directory")
+def _(repo, c):
+    """The cleanup primitive must be unable to take a directory down with its
+    own artifact. The pre-existing file is declared under dirty_baseline — the
+    existing, human-authored way to get a dirty path past the baseline gate —
+    and must come through untouched while the measurement's sibling artifact
+    goes."""
+    user_file = fixtures.write(repo, "workdir/user-file.txt", "precious\n")
+    p = p3_brief(repo, "p3-shared", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+dirty_baseline: [workdir/user-file.txt]
+acceptance:
+  - cmd: python3 -c "import pathlib; pathlib.Path('workdir/generated.txt').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    r = cli(repo, "prepare", ".prompire/p3-shared.yaml")
+    c.ok(r.returncode == 0,
+         f"a declared dirty file lets prepare proceed: {r.returncode} {r.stdout}{r.stderr}")
+    c.ok(user_file.read_text(encoding="utf-8") == "precious\n",
+         "cleanup must never touch the pre-existing file")
+    c.ok(not (pathlib.Path(repo) / "workdir" / "generated.txt").exists(),
+         "the measurement's own out-of-boundary artifact must be removed")
+    c.ok(user_file.parent.is_dir(), "the shared directory itself must survive")
+
+
+@case("p3-a-failed-prepare-cleans-only-its-own-artifacts")
+def _(repo, c):
+    """Test E's restore plus the artifact half, in one failure: baseline creates
+    an out-of-boundary artifact, lint then fails. The artifact goes, the brief
+    comes back byte-identical, nothing arms, no tombstone appears, and the
+    user's declared-dirty file is untouched."""
+    user_file = fixtures.write(repo, "workdir/user-file.txt", "precious\n")
+    p = p3_brief(repo, "p3-fail", """
+goal: Add a count helper to src/cart.py.
+scope: []
+dirty_baseline: [workdir/user-file.txt]
+acceptance:
+  - cmd: python3 -c "import pathlib; pathlib.Path('workdir/generated.txt').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    original = p.read_bytes()
+    r = cli(repo, "prepare", ".prompire/p3-fail.yaml")
+    c.ok(r.returncode == 1, f"lint must fail this prepare: {r.returncode} {r.stdout}")
+    c.ok(not (pathlib.Path(repo) / "workdir" / "generated.txt").exists(),
+         "the invocation-created artifact must be cleaned on failure too")
+    c.ok(user_file.read_text(encoding="utf-8") == "precious\n",
+         "pre-existing user state must be untouched")
+    c.ok(p.read_bytes() == original, "the brief must be restored")
+    c.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(), "nothing armed")
+    c.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE.tombstones").exists(),
+         "a failed prepare must not cost a tombstone")
+
+
+@case("p3-successful-activation-is-never-rolled-back")
+def _(repo, c):
+    """The commit point: after --activate succeeds, the measured block stays and
+    the pointer's digest attests to the brief exactly as armed — so any later
+    rollback would be observable here as a digest mismatch (exit 2)."""
+    p = p3_brief(repo, "p3-commit", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "pass"
+    expect: exit 0
+autonomy: ask
+""")
+    r = cli(repo, "prepare", ".prompire/p3-commit.yaml")
+    c.ok(r.returncode == 0, f"prepare: {r.returncode} {r.stdout}{r.stderr}")
+    armed = p.read_bytes()
+    c.ok(b"base_rev:" in armed and b"baseline:" in armed,
+         "the committed transaction keeps the measured block")
+    ptr = (pathlib.Path(repo) / ".prompire" / "ACTIVE").read_text(encoding="utf-8")
+    sha = next(ln.split()[1] for ln in ptr.splitlines() if ln.startswith("sha256 "))
+    c.ok(sha == hashlib.sha256(armed).hexdigest(),
+         "the pointer's digest must attest to the brief exactly as armed")
+    v = cli(repo, "verify", ".prompire/p3-commit.yaml", "--json")
+    c.ok(v.returncode == 0,
+         f"the armed task must verify cleanly right away: {v.stdout}{v.stderr}")
+
+
+@case("p3-standalone-baseline-still-refuses-to-overwrite")
+def _(repo, c):
+    """Prepare became transactional; the standalone tool did not become
+    overwriteable. The refusal at baseline.py's --write is a preserved
+    invariant, and the measured brief's bytes survive the refusal."""
+    p, _ = measured(repo, "p3-measured", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+autonomy: ask
+""")
+    before = p.read_bytes()
+    r = tool("baseline.py", p, "--write")
+    c.ok(r.returncode == 1 and "refused" in r.stdout,
+         f"an already measured brief must refuse --write: {r.returncode} {r.stdout}")
+    c.ok(p.read_bytes() == before, "the refusal must not touch the brief")
+
+
 def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="prompire-e2e-"))
     fails = 0
