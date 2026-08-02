@@ -2531,7 +2531,12 @@ autonomy: ask
     c.ok(cli(repo, "prepare", ".prompire/p3-kept.yaml").returncode == 0, "prepare")
     (pathlib.Path(repo) / ".prompire" / "run-locked").write_text("run\n", encoding="utf-8")
     v = cli(repo, "verify", ".prompire/p3-kept.yaml", "--json")
+    still_there = (pathlib.Path(repo) / "locked" / "forbidden.txt").is_file()
     os.chmod(pathlib.Path(repo) / "locked", 0o755)  # so fixture teardown can clean up
+    c.ok(still_there,
+         "the unlink must genuinely be refused for this case to test anything — "
+         "root bypasses the directory write-bit check, so as root it would succeed "
+         "instead")
     data = json.loads(v.stdout)
     c.ok(v.returncode == 1,
          f"an unremovable self-created path must keep the verdict red: {v.stdout}")
