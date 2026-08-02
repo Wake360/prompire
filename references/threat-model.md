@@ -17,9 +17,12 @@ bump against accidental and lazy scope drift. It is not a sandbox and must not b
 described as prevention.
 
 **`check_scope.py`** reads the real git diff after the agent stops. This is the
-authority, because git sees the write whatever tool made it. It needs no cooperation
-from the agent and there is nothing the agent can add to its own acceptance block to
-satisfy it.
+authority over every git-visible change whatever tool made it — tracked edits,
+untracked additions, renames, committed work. Its evidence is `git diff` against the
+pinned base plus `git status --untracked-files=all`, and both exclude gitignored
+paths: a write under a path `.gitignore` covers never appears in what the checker
+reads. It needs no cooperation from the agent and there is nothing the agent can add
+to its own acceptance block to satisfy it.
 
 The hook exists because a violation caught before it lands costs nothing to undo. The
 checker exists because the hook can be walked around. Running only the hook gives you a
@@ -80,7 +83,8 @@ surprise to the design; each is a place where the tool's claim stops.
 
 | Limitation | Why it is acceptable |
 |---|---|
-| **`Bash` is not watched**, so the hook is a speed bump against accidental and lazy scope drift, not a sandbox. Verified: an identical out-of-scope write is blocked via `Write` and allowed via `Bash`. | An agent holding `Bash` can write any file anyway, and `check_scope.py` on the real git diff sees the write whatever tool made it — that is the two-layer design, not an oversight. The honest caveat: "an agent with Bash could do it anyway" covers only the agent that *holds* Bash. It does not cover the common configuration where Bash prompts for approval while `Write`/`Edit` are auto-accepted, and it does not cover the no-adversary case of a stale `ACTIVE` sitting in a checked-out repo while the operator believes the guard is armed. |
+| **`Bash` is not watched**, so the hook is a speed bump against accidental and lazy scope drift, not a sandbox. Verified: an identical out-of-scope write is blocked via `Write` and allowed via `Bash`. | An agent holding `Bash` can write any file anyway, and `check_scope.py` on the real git diff sees every git-visible write whatever tool made it — that is the two-layer design, not an oversight. Gitignored paths are the exception; they have their own row below. The honest caveat: "an agent with Bash could do it anyway" covers only the agent that *holds* Bash. It does not cover the common configuration where Bash prompts for approval while `Write`/`Edit` are auto-accepted, and it does not cover the no-adversary case of a stale `ACTIVE` sitting in a checked-out repo while the operator believes the guard is armed. |
+| **Gitignored paths are outside the checker's evidence.** Its authority is `git diff` against the pinned base plus `git status --untracked-files=all`, and both exclude ignored paths. Reproduced: an executable planted under an ignored `vendor/` yields exit 0 with zero violations and zero reviews. | The checker deliberately reads the same evidence a reviewer's own `git diff` would — crawling ignored paths would make it a filesystem scanner, which it is not and does not claim to be. The hook does not share the blind spot: it judges the requested path against the brief and never consults gitignore, so a watched-tool write to an ignored out-of-scope path is still refused early. A shell write to an ignored path evades both layers — treat what `.gitignore` excludes as outside the contract. |
 | **`hook-errors.log` is agent-writable**, truncatable, and forgeable — a newline inside a `file_path` injects a line. | It is a diagnostic trail, not an audit log. The audit trail is `check_scope.py` plus git history. Reaching the disarmed state it records needs Bash, and with Bash the file is erasable regardless. |
 | **A symlinked `.prompire` directory defeats the pointer shape check** (`src/.prompire -> src/x`, after which `Write src/x/ACTIVE` is allowed and the planted pointer goes live). | Creating the symlink needs Bash. Unlike the other Bash plants this one *survives* the pointer rule rather than bypassing it, which is why it is listed separately rather than folded into the row above. |
 | **A hand-written `ACTIVE` containing `../..`** loads a brief from outside the root: `norm_path` strips leading `./` and slashes, not `..`. | No watched tool can write such a pointer — the depth-agnostic shape check blocks every spelling, confirmed against 11 attempts. Writing pointers is `--activate`'s business. |
