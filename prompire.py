@@ -103,7 +103,7 @@ def review_is_acceptance_safe(finding):
     predicates do not recognize, including one a future check_scope.py edit reworded,
     keeps acceptance blocked. The four recognized kinds are the ones adjudicated as
     evidence-only: the unconditional tests-policy flag, the authoring skip-marker flag,
-    a tracked brief re-stamped since base, and the repin flag (acknowledged or not).
+    a tracked brief modified since base, and the repin flag (acknowledged or not).
     A symlink review, a brief-deleted review, and anything unrecognized keep blocking.
     """
     message = str(finding.get("message") or "")
