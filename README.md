@@ -179,7 +179,10 @@ adapter (`hook_scope_guard.py`) or the Copilot CLI one (`hook_copilot_guard.py`)
 `run_command` on the Antigravity CLI one (`hook_antigravity_guard.py`) — an agent with
 shell access can write anywhere the hook would otherwise refuse. It is a speed bump
 against accidental drift, not a sandbox. The authority is `check_scope.py` reading the
-git diff after the agent stops, because git sees a write whatever tool made it. Install
+git diff after the agent stops: it sees every git-visible change whatever tool made it,
+and nothing more — a write under a gitignored path never enters the evidence it reads.
+The hook does not consult gitignore, so a watched-tool write to an ignored out-of-scope
+path is still refused early; a shell write to one evades both layers. Install
 locations for every adapter: `references/hosts.md`. Every other known gap — symlink and
 casefold edge cases, log forgeability, alarm fatigue with two briefs on one branch, what
 one `--deactivate` does to `--strict` forever — is measured and explained in
