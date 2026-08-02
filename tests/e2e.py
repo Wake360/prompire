@@ -2357,6 +2357,125 @@ autonomy: ask
     c.ok(p.read_bytes() == before, "the refusal must not touch the brief")
 
 
+@case("p3-verify-attributes-and-removes-its-own-acceptance-artifacts")
+def _(repo, c):
+    """R4 end to end, plus the temporal distinction that carries all of P3's
+    security: absent-before/present-after is the run's own; present-before is
+    evidence. And nothing about handling the path once survives the run."""
+    _drop_gitignore(repo)
+    p = p3_brief(repo, "p3-e2e", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import py_compile; py_compile.compile('src/cart.py')"
+    expect: exit 0
+  - cmd: python3 -c "import pathlib; pathlib.Path('.prompire/evidence.txt').write_text('ok')"
+    expect: exit 0
+autonomy: ask
+""")
+    c.ok(cli(repo, "prepare", ".prompire/p3-e2e.yaml").returncode == 0, "prepare")
+    fixtures.write(repo, "src/cart.py",
+                   (pathlib.Path(repo) / "src/cart.py").read_text(encoding="utf-8")
+                   + "\n\ndef count(items):\n    return len(items)\n")
+
+    v = cli(repo, "verify", ".prompire/p3-e2e.yaml", "--json")
+    data = json.loads(v.stdout)
+    c.ok(v.returncode == 0,
+         f"legitimate in-scope work must verify clean: {v.returncode} {v.stdout}")
+    c.ok(data["scope"]["violations"] == 0,
+         f"no violation attributable to Prompire's own run: {data['scope']['findings']}")
+    c.ok(any("__pycache__" in s for s in data["self_created"]),
+         f"the run must name its own artifact, not silently excuse it: {data}")
+    status = fixtures.git(repo, "status", "--porcelain", "--untracked-files=all")
+    c.ok("__pycache__" not in status,
+         f"verify must leave the tree as it found it: {status!r}")
+    c.ok((pathlib.Path(repo) / ".prompire" / "evidence.txt").is_file(),
+         "an in-boundary acceptance write is the brief's business, never cleanup's")
+    armed = p.read_text(encoding="utf-8")
+    c.ok("__pycache__" not in armed and "dirty_baseline" not in armed,
+         "no persistent exemption may appear in the brief")
+
+    again = cli(repo, "verify", ".prompire/p3-e2e.yaml", "--json")
+    c.ok(again.returncode == 0,
+         f"verify must be repeatable — its own previous run is not evidence: "
+         f"{again.returncode} {again.stdout}")
+
+    # Test L: the same pathname, planted before the next run, is the agent's.
+    from importlib.util import cache_from_source
+    pyc = pathlib.Path(cache_from_source(str(pathlib.Path(repo) / "src" / "cart.py")))
+    pyc.parent.mkdir(parents=True, exist_ok=True)
+    pyc.write_bytes(b"malicious content at the once-excluded pathname")
+    later = cli(repo, "verify", ".prompire/p3-e2e.yaml", "--json")
+    c.ok(later.returncode == 1,
+         f"a path present before the run is judged from that run's own "
+         f"before-state — no pathname immunity: {later.returncode} {later.stdout}")
+
+
+@case("p3-a-payload-planted-before-verify-is-still-caught")
+def _(repo, c):
+    """The most important P3 security case: acceptance must not adopt a
+    pre-existing payload. It existed at the pre-acceptance snapshot, so it is
+    evidence — flagged, blocking, and never deleted."""
+    _drop_gitignore(repo)
+    p = p3_brief(repo, "p3-plant", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import py_compile; py_compile.compile('src/cart.py')"
+    expect: exit 0
+autonomy: ask
+""")
+    c.ok(cli(repo, "prepare", ".prompire/p3-plant.yaml").returncode == 0, "prepare")
+    plant = fixtures.write(repo, "src/__pycache__/planted.pyc", "payload\n")
+
+    v = cli(repo, "verify", ".prompire/p3-plant.yaml", "--json")
+    data = json.loads(v.stdout)
+    c.ok(v.returncode == 1, f"the planted payload must fail verify: {v.stdout}")
+    c.ok(any("planted.pyc" in f["path"] for f in data["scope"]["findings"]
+             if f["kind"] == "VIOLATION"),
+         f"the payload must be a named violation: {data['scope']['findings']}")
+    c.ok(data["acceptance"]["status"] == "not_run",
+         "a violation still blocks acceptance — the P2 gate is untouched")
+    c.ok(plant.is_file() and plant.read_text(encoding="utf-8") == "payload\n",
+         "verify must not delete what it did not create")
+    c.ok("planted.pyc" not in str(data.get("self_created", [])),
+         f"no misattribution: {data.get('self_created')}")
+
+
+@case("p3-self-created-exclusion-does-not-silence-a-review")
+def _(repo, c):
+    """The exit recompute is scoped: it may only account for the violations it
+    excluded. A REVIEW that fails --strict today must keep failing it with a
+    self-created artifact in the same run — and the P2 evidence path still
+    gathers acceptance results underneath it."""
+    _drop_gitignore(repo)
+    p = p3_brief(repo, "p3-review", """
+goal: Update the cart suite for the new count() helper.
+scope: [src/cart.py]
+tests_policy: named
+tests_editable: [tests/test_cart.py]
+acceptance:
+  - cmd: python3 -c "import pathlib; pathlib.Path('gen-artifact.txt').write_text('x')"
+    expect: exit 0
+autonomy: ask
+""")
+    c.ok(cli(repo, "prepare", ".prompire/p3-review.yaml").returncode == 0, "prepare")
+    v = cli(repo, "verify", ".prompire/p3-review.yaml", "--json")
+    data = json.loads(v.stdout)
+    c.ok(v.returncode == 1,
+         f"the named-policy review must still fail the strict run: {v.returncode}")
+    c.ok(data["scope"]["violations"] == 0,
+         f"the self-created artifact is excluded: {data['scope']['findings']}")
+    c.ok(data["self_created"] == ["gen-artifact.txt"],
+         f"and named: {data}")
+    c.ok(data["acceptance"].get("passed") == 1,
+         "the P2 evidence path still gathers acceptance results")
+    c.ok(not (pathlib.Path(repo) / "gen-artifact.txt").exists(),
+         "and the artifact is removed")
+
+
 def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="prompire-e2e-"))
     fails = 0

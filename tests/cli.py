@@ -753,7 +753,7 @@ def _(repo, checks):
                  "acceptance must not run after a strict scope finding")
 
 
-@case("verify includes acceptance-side writes in the final scope verdict")
+@case("verify attributes its own acceptance-side write and removes it")
 def _(repo, checks):
     path = fixtures.write(repo, ".prompire/acceptance-write.yaml", """\
 goal: Keep generated files inside the declared boundary.
@@ -772,12 +772,24 @@ autonomy: ask
     result = run("verify", path, "--json")
     data = json_out(result)
 
-    checks.equal(result.returncode, 1, "acceptance-side scope violation exit")
-    checks.ok((pathlib.Path(repo) / "outside.py").is_file(),
-              "the fixture acceptance command must make the post-check observable")
+    checks.equal(result.returncode, 0,
+                 "a write provably created by verify's own acceptance invocation "
+                 "is not the agent's violation")
+    checks.equal(data["scope"]["violations"], 0,
+                 "the final verdict excludes the self-created path")
+    checks.equal(data.get("self_created"), ["outside.py"],
+                 "the self-created path must be named, never silently excused")
     checks.equal(data["acceptance"]["passed"], 1, "acceptance command result")
-    checks.equal(data["scope"]["violations"], 1,
-                 "final scope verdict must include the acceptance-side write")
+    checks.ok(not (pathlib.Path(repo) / "outside.py").exists(),
+              "verify must leave the repository as it found it")
+
+    fixtures.write(repo, "outside.py", "planted = True\n")
+    replay = run("verify", path, "--json")
+    checks.equal(replay.returncode, 1,
+                 "the same pathname present before the next run is judged "
+                 "from that run's own before-state")
+    checks.equal(json_out(replay)["acceptance"]["status"], "not_run",
+                 "the pre-existing payload still blocks acceptance")
 
 
 @case("verify does not run acceptance for an uncorroborated brief")
