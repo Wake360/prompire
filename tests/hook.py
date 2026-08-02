@@ -431,7 +431,8 @@ def main():
     # references/threat-model.md is the checker's alone, and this is the case that
     # keeps that sentence true.
     repo = fixtures.build(tmp / "gitignored-out-of-scope")
-    fixtures.write(repo, ".gitignore", "vendor/\n")
+    gi = pathlib.Path(repo) / ".gitignore"
+    fixtures.write(repo, ".gitignore", gi.read_text(encoding="utf-8") + "vendor/\n")
     fixtures.write(repo, ".prompire/spec.yaml", BRIEF.format(policy="immutable", editable=""))
     subprocess.run([sys.executable, GUARD, ".prompire/spec.yaml", "--activate"],
                    cwd=str(repo), capture_output=True, text=True, encoding="utf-8")

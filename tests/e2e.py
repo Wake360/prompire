@@ -2077,7 +2077,8 @@ def _(repo, c):
     the code. If ignored paths ever become visible, the path-set semantics changed
     and the docs went from truthful to overcautious — both need a deliberate
     decision, not a drive-by."""
-    (pathlib.Path(repo) / ".gitignore").write_text("vendor/\n", encoding="utf-8")
+    gi = pathlib.Path(repo) / ".gitignore"
+    gi.write_text(gi.read_text(encoding="utf-8") + "vendor/\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], capture_output=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "ignore vendor"],
                    capture_output=True)
