@@ -15,7 +15,7 @@ import tempfile
 import yaml
 
 from brief_common import ACCEPTANCE_KEYS, as_list, glob_re, norm_path, utf8_stdio
-from check_scope import RepoError, active_brief, read_pointer, repo_root
+from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
 TOOLS = {
@@ -204,6 +204,19 @@ def _restore_brief(brief, original):
     except OSError as exc:
         print(f"WARNING: could not restore {brief} to its pre-prepare bytes: {exc}",
               file=sys.stderr)
+
+
+def _activation_committed(root, brief):
+    """Did `--activate` write a pointer attesting to this brief's current bytes?
+
+    `digest_of` returns None on a brief it cannot read and `read_pointer` returns
+    sha256 None when there is no pointer, so the None case has to be answered before
+    the comparison: `None == None` would claim a commit precisely when there is none
+    and skip the restore that is owed."""
+    digest = digest_of(brief)
+    if digest is None:
+        return False
+    return read_pointer(root)["sha256"] == digest
 
 
 def report_refusal(message, json_mode=False):
@@ -804,7 +817,14 @@ def prepare(args, extra):
 
     armed = run_tool("scope", brief, "--activate")
     if armed.returncode:
-        return stage_failed("activate", armed)
+        # The child's exit code is not a witness for the commit: check_scope writes the
+        # pointer inside its guard-state lock, and a failure to release that lock (or any
+        # death after the write) turns a committed activation into a nonzero exit.
+        # Restoring then would break the digest the pointer already attests to and wedge
+        # the repo at exit 2 until a tombstone-costing --deactivate. Ask the pointer.
+        if not _activation_committed(root, brief):
+            _restore_brief(brief, original)
+        return report_stage("activate", armed, args.json)
 
     # Activation is the transaction's commit: the pointer's digest now attests to
     # the brief exactly as armed. No failure path below this line may restore the

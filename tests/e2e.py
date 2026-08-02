@@ -81,12 +81,14 @@ def base(path, *extra):
     return r
 
 
-def cli(repo, *args):
+def cli(repo, *args, env=None):
     """Run the prompire CLI itself inside the fixture repo — P3's behavior lives
-    in the orchestration, not in any one child tool."""
+    in the orchestration, not in any one child tool. `env` is merged over the
+    caller's environment and inherited by the child tools prompire spawns."""
     return subprocess.run([sys.executable, str(SKILL / "prompire.py"), *map(str, args)],
                           cwd=str(repo), capture_output=True, text=True,
-                          encoding="utf-8")
+                          encoding="utf-8",
+                          env=None if env is None else {**os.environ, **env})
 
 
 def p3_brief(repo, name, body):
@@ -2210,6 +2212,67 @@ autonomy: ask
     v = cli(repo, "verify", ".prompire/p3-commit.yaml", "--json")
     c.ok(v.returncode == 0,
          f"the armed task must verify cleanly right away: {v.stdout}{v.stderr}")
+
+
+@case("p3-activation-that-commits-then-fails-is-not-rolled-back")
+def _(repo, c):
+    """The `--activate` child's exit code is not a witness for the commit.
+    check_scope writes `.prompire/ACTIVE` inside the guard-state lock, so a
+    failure to release that lock — anything that drops a file into the lock
+    directory, a kill, an OOM — reports nonzero for an activation that already
+    landed. Restoring the brief there breaks the digest the pointer attests to
+    and wedges the repo at exit 2 until a tombstone-costing `--deactivate`.
+
+    The failure is injected, not raced: a `sitecustomize.py` on PYTHONPATH makes
+    `rmdir` fail for the lock directory, and only inside the `--activate` child.
+    A flaky security test is worse than none."""
+    inject = pathlib.Path(repo) / ".prompire" / "inject"
+    inject.mkdir(parents=True, exist_ok=True)
+    (inject / "sitecustomize.py").write_text('''
+import sys
+if "--activate" in sys.argv:
+    import pathlib
+    real = pathlib.Path.rmdir
+
+    def patched(self):
+        if self.name == "ACTIVE.lock":
+            raise OSError("injected: guard-state lock could not be released")
+        return real(self)
+
+    pathlib.Path.rmdir = patched
+'''.lstrip(), encoding="utf-8")
+
+    p = p3_brief(repo, "p3-wedge", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "pass"
+    expect: exit 0
+autonomy: ask
+""")
+    r = cli(repo, "prepare", ".prompire/p3-wedge.yaml",
+            env={"PYTHONPATH": str(inject)})
+    c.ok(r.returncode != 0,
+         f"the injected lock-release failure must surface: "
+         f"{r.returncode} {r.stdout}{r.stderr}")
+
+    armed = p.read_bytes()
+    c.ok(b"base_rev:" in armed and b"baseline:" in armed,
+         "an activation that committed must not be rolled back by a failure "
+         "reported after the pointer was written")
+    pointer = pathlib.Path(repo) / ".prompire" / "ACTIVE"
+    c.ok(pointer.exists(), "the injection must leave the pointer written")
+    if pointer.exists():
+        sha = next((ln.split()[1] for ln in
+                    pointer.read_text(encoding="utf-8").splitlines()
+                    if ln.startswith("sha256 ")), None)
+        c.ok(sha == hashlib.sha256(armed).hexdigest(),
+             "the pointer's digest must still attest to the brief on disk")
+    v = cli(repo, "verify", ".prompire/p3-wedge.yaml", "--json")
+    c.ok(v.returncode != 2,
+         f"the repo must not be wedged at exit 2 by a digest the tool itself "
+         f"broke: {v.returncode} {v.stdout}{v.stderr}")
 
 
 @case("p3-standalone-baseline-still-refuses-to-overwrite")
