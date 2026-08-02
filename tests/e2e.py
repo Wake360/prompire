@@ -2476,6 +2476,74 @@ autonomy: ask
          "and the artifact is removed")
 
 
+@case("p3-no-exemption-survives-into-a-later-task")
+def _(repo, c):
+    """Same path, next task: a full honest cycle (prepare → verify → close),
+    then a second prepare, then the agent recreates the pathname prepare once
+    cleaned. The second task must judge it as any other write — under repin,
+    with zero memory of the first task's artifact handling."""
+    from importlib.util import cache_from_source
+    _drop_gitignore(repo)
+    body = """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import py_compile; py_compile.compile('src/cart.py')"
+    expect: exit 0
+autonomy: ask
+"""
+    p1 = p3_brief(repo, "p3-task1", body)
+    c.ok(cli(repo, "prepare", ".prompire/p3-task1.yaml").returncode == 0, "prepare 1")
+    fixtures.write(repo, "src/cart.py",
+                   (pathlib.Path(repo) / "src/cart.py").read_text(encoding="utf-8")
+                   + "\n\ndef count(items):\n    return len(items)\n")
+    c.ok(cli(repo, "verify", ".prompire/p3-task1.yaml", "--json").returncode == 0,
+         "task 1 verifies clean")
+    fixtures.git(repo, "add", "-A")
+    fixtures.git(repo, "commit", "-qm", "task 1, reviewed and committed")
+    c.ok(cli(repo, "close", ".prompire/p3-task1.yaml").returncode == 0, "close 1")
+
+    p2 = p3_brief(repo, "p3-task2", body)
+    c.ok(cli(repo, "prepare", ".prompire/p3-task2.yaml").returncode == 0, "prepare 2")
+    pyc = pathlib.Path(cache_from_source(str(pathlib.Path(repo) / "src" / "cart.py")))
+    pyc.parent.mkdir(parents=True, exist_ok=True)
+    pyc.write_bytes(b"payload written by the second task's agent")
+    g = guard(p2)
+    c.ok(any("__pycache__" in v["path"] for v in violations(g)),
+         f"the second task must judge the pathname normally: {g['findings']}")
+
+
+@case("p3-a-path-that-cannot-be-removed-keeps-its-violation")
+def _(repo, c):
+    """The exclusion is gated on removal actually succeeding: when the unlink
+    is refused, the finding stands, the exit stays red, and self_created makes
+    no false removal claim."""
+    p = p3_brief(repo, "p3-kept", """
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import pathlib, os; flag = pathlib.Path('.prompire/run-locked'); flag.exists() and (pathlib.Path('locked').mkdir(exist_ok=True), pathlib.Path('locked/forbidden.txt').write_text('x'), os.chmod('locked', 0o500))"
+    expect: exit 0
+autonomy: ask
+""")
+    c.ok(cli(repo, "prepare", ".prompire/p3-kept.yaml").returncode == 0, "prepare")
+    (pathlib.Path(repo) / ".prompire" / "run-locked").write_text("run\n", encoding="utf-8")
+    v = cli(repo, "verify", ".prompire/p3-kept.yaml", "--json")
+    os.chmod(pathlib.Path(repo) / "locked", 0o755)  # so fixture teardown can clean up
+    data = json.loads(v.stdout)
+    c.ok(v.returncode == 1,
+         f"an unremovable self-created path must keep the verdict red: {v.stdout}")
+    c.ok(any("forbidden.txt" in f["path"] for f in data["scope"]["findings"]
+             if f["kind"] == "VIOLATION"),
+         f"its violation must stand: {data['scope']['findings']}")
+    c.ok(data["self_created"] == [],
+         f"self_created must make no false removal claim: {data}")
+    c.ok((pathlib.Path(repo) / "locked" / "forbidden.txt").is_file(),
+         "the file is still on disk")
+
+
 def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="prompire-e2e-"))
     fails = 0
