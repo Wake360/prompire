@@ -1793,6 +1793,38 @@ def _(repo, checks):
                   f"--help describes `{name}` with `{phrase}`")
 
 
+@case("a bare module copy without VERSION or metadata still builds the parser")
+def _(repo, checks):
+    # CI has no installed prompire distribution; run_with_replaced_tools copies
+    # no VERSION file. Version discovery must not be a dependency of commands
+    # that never asked for the version.
+    probe = (
+        "import importlib.metadata\n"
+        "import sys\n"
+        "def missing(name):\n"
+        "    raise importlib.metadata.PackageNotFoundError(name)\n"
+        "importlib.metadata.version = missing\n"
+        "sys.argv = ['prompire', '--help']\n"
+        "import prompire\n"
+        "try:\n"
+        "    prompire.main()\n"
+        "except SystemExit as error:\n"
+        "    raise SystemExit(error.code)\n"
+    )
+    with tempfile.TemporaryDirectory(prefix="prompire-cli-bare-") as tmp:
+        tool_root = pathlib.Path(tmp)
+        for name in ("prompire.py", "check_scope.py", "brief_common.py"):
+            shutil.copy2(ROOT / name, tool_root / name)
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, encoding="utf-8",
+            env=dict(ENV, COLUMNS="200"), cwd=tool_root,
+        )
+    checks.equal(result.returncode, 0, "bare-copy --help exit")
+    checks.ok("Traceback" not in result.stderr,
+              f"bare copy must not traceback: {result.stderr!r}")
+
+
 def main():
     failures = 0
     with tempfile.TemporaryDirectory() as directory:

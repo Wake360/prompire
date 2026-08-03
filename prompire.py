@@ -994,12 +994,22 @@ def cli_version():
     return importlib.metadata.version("prompire")
 
 
+class _VersionAction(argparse.Action):
+    """The version is computed only when --version is asked for: a bare
+    prompire.py copy with no VERSION beside it and no installed distribution
+    must still run every other command."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(cli_version())
+        parser.exit()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="prompire",
         description="Pin the contract before a coding agent works; "
                     "read the verdict from the real git diff after.")
-    parser.add_argument("--version", action="version", version=cli_version())
+    parser.add_argument("--version", action=_VersionAction, nargs=0)
     commands = parser.add_subparsers(dest="command", required=True,
                                      metavar="command")
 
