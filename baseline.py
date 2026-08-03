@@ -426,7 +426,10 @@ def _reads_back_as_str(s):
     """
     try:
         return yaml.safe_load(s) == s
-    except yaml.YAMLError:
+    except Exception:
+        # Any failure to read the value back — a YAMLError, or a tag constructor
+        # raising a bare KeyError — means it does not round-trip as this string,
+        # so quote it. Failing toward quoting is the direction that preserves it.
         return False
 
 

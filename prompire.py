@@ -466,6 +466,11 @@ def parse_agent_brief(text):
         data = yaml.safe_load(strip_fences(text))
     except yaml.YAMLError:
         return None, "the reply is not YAML"
+    except Exception as exc:
+        # A tag whose constructor fails raises something other than YAMLError —
+        # `!!bool "1"` is a bare KeyError — and uncaught it crashed the CLI with a
+        # traceback and, under --json, an empty stdout its caller has to parse.
+        return None, f"the reply carries a YAML tag that cannot be read: {exc!r}"
     if not isinstance(data, dict):
         return None, "the reply is not a YAML mapping"
     for key in DRAFT_MEASURED:
@@ -805,7 +810,10 @@ def draft_ledger(raw):
     """
     try:
         data = yaml.safe_load(raw)
-    except yaml.YAMLError:
+    except Exception:
+        # Including a tag whose constructor raises something other than YAMLError:
+        # this gate runs before the loader that reports an unreadable brief, so it
+        # must degrade to "no ledger" rather than crash ahead of that report.
         return []
     if not isinstance(data, dict) or DRAFT_LEDGER not in data:
         return []

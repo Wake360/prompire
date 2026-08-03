@@ -324,6 +324,32 @@ autonomy: auto
     checks.equal(blocked.returncode, 2, "prepare must refuse the unconfirmed draft")
 
 
+@case("a proposal whose YAML tag cannot be constructed is refused, not a crash")
+def _(repo, checks):
+    # PyYAML's bool constructor raises a bare KeyError, which the proposal parser
+    # did not catch: any drafting agent could crash the CLI with one tag, and
+    # `--json` then wrote nothing at all to a stdout its caller parses.
+    proposal = pathlib.Path(repo) / "tagged.yaml"
+    proposal.write_text("""\
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+acceptance: []
+plan_first: !!bool "1"
+""", encoding="utf-8")
+    result = run("draft", "add a count helper", "--proposal", proposal,
+                 "--out", ".prompire/tagged.yaml", cwd=repo)
+    checks.equal(result.returncode, 2, "an unconstructable tag must be refused")
+    checks.ok("Traceback" not in result.stderr,
+              f"draft must not traceback: {result.stderr[-200:]}")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "tagged.yaml").exists(),
+              "a refused proposal must write no draft")
+    as_json = run("draft", "add a count helper", "--proposal", proposal,
+                  "--out", ".prompire/tagged2.yaml", "--json", cwd=repo)
+    checks.equal(as_json.returncode, 2, "--json exit")
+    data = json_out(as_json)
+    checks.equal(data.get("status"), "refused", "--json must keep its contract")
+
+
 @case("a compiler-written goal and rollback are decisions, not furniture")
 def _(repo, checks):
     # Adversarial review: plan_first was fixed field by field, so the same stall

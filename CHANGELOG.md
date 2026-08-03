@@ -90,6 +90,15 @@ verdict stands; nothing here claims outcomes until E2 runs.**
   an installed one, and dependencies the repo does not define, are untouched; a
   bare `pytest` entry point is a documented gap, not a guess.
 
+- A YAML tag whose *constructor* fails is now an unreadable brief, not a verdict.
+  PyYAML raises a bare `KeyError` for `!!bool "1"` — not a `YAMLError` — and every
+  tool caught only `YAMLError`, so `lint`, `baseline`, `render` and `check_scope`
+  died with a traceback and exit **1**, which in this repo is the code for "found
+  a finding": a tool that crashed was indistinguishable from one that decided.
+  All four now report exit 2, and `draft --proposal` refuses the tag instead of
+  crashing with an empty `--json` stdout its caller has to parse. Found by
+  adversarial review.
+
 ### Verifier
 
 - `check_scope.py` and `verify_acceptance.py` are byte-identical to 0.11.0. The

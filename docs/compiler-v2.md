@@ -237,7 +237,17 @@ reposition the product.
   a hand-edited one skips B17 entirely, because the rule only judges a measured
   brief. Deleting the block is cheaper than defeating the rule.
 - `manual_checks` items, `constraints`, `forbidden` and `tests_editable` carry one
-  marker and one ledger entry per *list*, not per item.
+  marker and one ledger entry per *list*, not per item, so one deletion confirms an
+  arbitrary volume of compiler-authored instruction text.
+- `draft`'s printed "N decisions to confirm" counts marker strings in the file, so
+  compiler-authored content that contains the marker text inflates it, and leaves
+  `prepare` refusing until a human edits that text. The `unconfirmed:` ledger is the
+  authoritative record and is not forgeable this way; the count is display only, and
+  both failure directions are closed.
+- B10 can still be steered: a compiler-chosen refactor word in the `goal`, or a
+  fourth `scope` entry, makes lint demand `plan_first: true`. Both fields are now
+  confirmed decisions, but `draft` gives no compile-time warning that the goal it
+  just wrote will force a plan gate — unlike the word-budget preview, which does.
 - A brief armed before 0.12.0 needs re-measuring if its command carries
   collapsible whitespace (see above); nothing forces or detects that.
 

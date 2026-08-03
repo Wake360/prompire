@@ -195,6 +195,13 @@ def load_brief(path):
         raise BriefError(f"cannot decode {path} as UTF-8: {e}") from e
     except yaml.YAMLError as e:
         raise BriefError(f"cannot parse {path}: {e}") from e
+    except Exception as e:
+        # A tag whose *constructor* fails does not raise YAMLError: `!!bool "1"`
+        # comes out of PyYAML as a bare KeyError, `!!int "x"` as a ValueError.
+        # Uncaught, every tool died with a traceback and exit 1 — which in this
+        # repo is the code for "found a finding", so a tool that crashed was
+        # indistinguishable from one that reached a verdict. Unreadable is exit 2.
+        raise BriefError(f"cannot parse {path}: {e!r}") from e
     if not isinstance(data, dict):
         raise BriefError(f"{path}: expected a YAML mapping at the top level")
     return data

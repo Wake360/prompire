@@ -533,6 +533,34 @@ autonomy: ask
                  f"{target}: the heredoc lost a delimiter: {inside.group(2)!r}")
 
 
+@case("a-yaml-tag-the-loader-cannot-construct-is-unreadable-not-a-verdict")
+def _(repo, c):
+    """PyYAML raises a bare KeyError — not a YAMLError — when a `!!bool` tag holds
+    a value it cannot construct, and every tool caught only YAMLError. The tools
+    died with a traceback and exit 1, which in this repo is the code for *found a
+    finding*: a tool that crashed became indistinguishable from one that decided.
+    Unreadable is exit 2, and it is the whole point of having a third code."""
+    p = brief(repo, "badtag", """
+goal: Add a count() helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+plan_first: !!bool "1"
+acceptance:
+  - cmd: python3 -c "pass"
+    expect: exit 0
+autonomy: ask
+""")
+    for name in ("lint_brief.py", "baseline.py", "render_brief.py", "check_scope.py"):
+        r = tool(name, p)
+        c.ok(r.returncode == 2,
+             f"{name} must report unreadable (exit 2), got {r.returncode}")
+        c.ok("Traceback" not in r.stderr,
+             f"{name} must not traceback: {r.stderr[-200:]}")
+        c.ok("cannot parse" in (r.stdout + r.stderr),
+             f"{name} must say the brief cannot be parsed: {r.stdout[:120]}")
+
+
 @case("the-safety-classifier-reads-what-the-shell-will-run")
 def _(repo, c):
     """`run_one` executes the raw command, so DESTRUCTIVE/WRITES_REPO/INTERACTIVE
