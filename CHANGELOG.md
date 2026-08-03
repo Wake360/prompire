@@ -3,6 +3,54 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.11.0 — 2026-08-03
+
+**The compiler proposes; the human and the deterministic checks establish
+authority; the verifier is unchanged.**
+
+### Added
+
+- `prompire draft --proposal <file|->`: any host or skill can feed an
+  already-written YAML proposal through the same parser, validation and marker
+  serialization as `--agent`/`--agent-cmd`. One compiler gate, three frontends —
+  the deterministic heuristic and the model-assisted paths stopped being
+  separate products. `SKILL.md` now routes the skill path through it.
+- The draft schema covers every proposable field: `tests_editable`, `oracle`,
+  `context`, `plan_first` and `rollback` join the whitelist, so `named`/
+  `authoring`, refactor and new-file tasks can be compiled instead of being
+  structurally lint-red. `baseline`, `base_rev` and `dirty_baseline` remain
+  refused as measured, and `autonomy` stays clamped to `ask`. The
+  field-by-field authority classes are recorded in `references/schema.md`.
+- `draft` prints how many decisions are marked for confirmation and how many
+  facts the repository corroborated; `--json` adds the backend and wall time,
+  which is the compiler-side instrumentation a future E1 reads.
+- Lint `B17 vacuous-acceptance` (error): a measured brief whose every
+  criterion already passes on untouched HEAD — no flip, no hold, no
+  `before_after`, no `manual_checks`, no behavior-preserving goal — is
+  refused, because `verify` would print `clean` on a repo nobody touched.
+  Declared preservation shapes pass: the declaration is the acknowledgment.
+- Lint `B18 unconfirmed-draft` (error): a `# prompire:unconfirmed` marker
+  makes lint exit 1 instead of printing "brief is shippable" over it.
+- `bench/compile.py`: the offline compiler-stage harness — short request in,
+  scored contract out, with a logged mechanical blind-confirm and the
+  discrimination triple (untouched HEAD / gold write-set / wrong write-set).
+  The hidden gold contract never enters the repo the compiler inspects.
+
+### Changed
+
+- Drafting is enforced read-only: the disposable snapshot is audited with
+  `git status` after the agent exits, and a run that wrote anything is refused
+  with the written paths named — surfaced, never silently repaired.
+- `check_scope.py --activate` refuses a brief still carrying draft markers;
+  the confirmation gate is no longer one command deep.
+- Marker coverage widened to what the model actually decided: `forbidden`,
+  `constraints`, `manual_checks`, `tests_editable`, `oracle` and `context`
+  come back marked, and an acceptance entry's authority-moving sub-keys
+  (`requires`, a claimed `flip` or `hold`) are disclosed on its marked line.
+  A proposed `must_flip` is normalized to `transition: flip`.
+- `examples/01-green-baseline.yaml` and the demo brief name a manual carrier
+  of done-ness, as B17 now demands of every green-only behavioral brief.
+
 ## 0.10.0 — 2026-08-03
 
 **The verdict is legible, the modal task reports its evidence, and the package
