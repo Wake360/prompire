@@ -706,6 +706,75 @@ def action_pin_problems():
     return out
 
 
+def brief_lifecycle_problems():
+    """One lifecycle rule everywhere: state files ignored always, briefs
+    tracked when the Action reads them. README said the opposite of ci.md for
+    two releases and nothing noticed."""
+    out = []
+    for rel in ("README.md", "references/ci.md"):
+        text = read(rel)
+        if ".prompire/*" not in text or "!.prompire/*.yaml" not in text:
+            out.append(f"{rel} does not show the brief-tracking ignore pattern")
+    if "belongs in `.gitignore`" in read("README.md"):
+        out.append("README.md reverted to the one-rule gitignore claim; the "
+                   "brief-tracking rule depends on whether CI reads the brief")
+    return out
+
+
+def verdict_vocabulary_problems():
+    """verify's four verdict states and the repin remedy must be explained in
+    README with the exact strings render_human_verdict prints."""
+    readme = read("README.md")
+    out = []
+    for token in ("`clean`", "`caught: ", "`review: ", "needs a human",
+                  "`no verdict", "--ack-disarms"):
+        if token not in readme:
+            out.append(f"README.md never explains {token!r} — verify prints it "
+                       "and the reader has to be able to classify the line")
+    return out
+
+
+def benchmark_claim_problems():
+    """Every quantitative benchmark claim in README recomputes from the
+    committed rows, so a number cannot silently outlive its evidence."""
+    rows = []
+    for path in sorted((SKILL / "bench" / "campaigns").glob("*/run*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    if not rows:
+        return ["bench/campaigns/ holds no rows — README's numbers have no source"]
+    bare = [r for r in rows if r["variant"] == "bare"]
+    briefed = [r for r in rows if r["variant"] != "bare"]
+    caught = sum(1 for r in bare
+                 if r["test_files_changed"] and r["scope_exit"] == 1)
+    drifted = sum(1 for r in briefed if r["scope_exit"] != 0)
+    tampered = sum(1 for r in rows if r["tampered"])
+    readme = read("README.md")
+    out = []
+    for phrase in (f"{caught} of {len(bare)}", f"{drifted} of {len(briefed)}"):
+        if phrase not in readme:
+            out.append(f"README.md does not carry the recomputed figure "
+                       f"`{phrase}` — either the prose or the rows changed")
+    if tampered == 0 and "tamper" not in readme.lower():
+        out.append("README.md stopped saying what was (not) observed about "
+                   "tampering; the design threat needs its measured status")
+    if tampered != 0:
+        out.append(f"{tampered} tampered row(s) exist; README's zero-tamper "
+                   "wording is stale and every tamper claim must be rewritten")
+    return out
+
+
+def ci_pin_problems():
+    """The ci.md example pins the Action at the release this repo is at."""
+    version = read("VERSION").strip()
+    pins = re.findall(r"prompire-verify@v(\d+\.\d+\.\d+)", read("references/ci.md"))
+    if not pins:
+        return ["references/ci.md shows no pinned prompire-verify version"]
+    return [f"references/ci.md pins prompire-verify@v{pin}, but this release "
+            f"is {version}" for pin in pins if pin != version]
+
+
 def main():
     problems = []
     rules = enforced_rule_ids()
@@ -789,6 +858,9 @@ def main():
     problems += encoding_problems()
     problems += decoder_problems()
     problems += action_pin_problems()
+    problems += brief_lifecycle_problems()
+    problems += verdict_vocabulary_problems()
+    problems += benchmark_claim_problems()
 
     skill_md = read("SKILL.md")
     for rel, name in (("README.md", "hook_copilot_guard.py"),

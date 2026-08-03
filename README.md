@@ -10,10 +10,15 @@ stops, Prompire reads the real git diff — not the agent's report — and says 
 work stayed inside what was declared and whether the acceptance commands now pass. The
 verdict needs no cooperation from the agent.
 
-The problem it addresses is narrow and specific: an agent that is graded on a test suite
-it can edit will, sooner or later, edit the suite. So will one that is graded on a diff
-whose starting point it gets to declare. Everything here follows from taking that
-seriously.
+The problem it addresses is delegation without verification: work handed to an
+agent drifts, and "done" arrives as a claim rather than a measurement. In
+Prompire's own committed benchmark, 9 of 20 runs given the goal sentence alone
+changed a test file — caught from the git diff, not from anything the agent
+reported — while 0 of 160 runs that carried a brief left their declared scope.
+The design also takes a sharper threat seriously: an agent graded on a suite it
+can edit, or on a diff whose starting point it gets to declare, holds its own
+grading surface. Prompire pins both before the work starts. That threat is why
+the pin exists; no attempt at it was observed in any benchmark arm.
 
 ```bash
 prompire prepare .prompire/task.yaml --target generic
@@ -27,77 +32,6 @@ scripts remain documented under [Diagnostic commands](#diagnostic-commands).
 A sandbox bounds where an agent can technically reach. Prompire bounds what one task
 allowed it to change, and defines how done is recognized. The two compose; neither
 replaces the other.
-
-## Install the CLI
-
-```bash
-pipx install prompire
-# or
-uv tool install prompire
-```
-
-Prompire supports Python 3.11+ on macOS, Linux, and Windows.
-
-## Primary workflow
-
-This workflow is host-neutral and works with any coding agent.
-
-Optional step 0: `prompire draft "one sentence"` writes a draft brief to
-`.prompire/task.yaml`. The heuristic is deterministic, not a model — it proposes an
-acceptance command only where the repo evidences one (`package.json` `scripts.test`, a
-pytest config, a `Makefile` `test:` target, `Cargo.toml`, `go.mod`), and states the
-absence rather than inventing a command. `--agent claude`, `--agent codex`, `--agent
-antigravity` — or any CLI via `--agent-cmd`, drafting prompt on stdin, brief on
-stdout — delegates the drafting to a host model that can read the repo. The reply is
-parsed as data and re-serialized: the model's own comments are dropped, `baseline` and
-`base_rev` are refused as measured rather than drafted, and the boundary, every
-acceptance command and any relaxed `tests_policy` come back marked
-`# prompire:unconfirmed` however confident the model sounded. Agent-assisted drafting
-runs in a disposable repository containing the checkout's current tracked and untracked,
-non-ignored files. The agent can inspect and change that snapshot. A symlink is carried
-only when its target resolves inside the repository, re-aimed there at the snapshot's own
-copy, so a path the agent addresses relative to its workspace cannot reach the source
-checkout through one. Ignored files, submodules and nested checkouts are not copied. This
-isolates ordinary repository writes; it does not sandbox network, credentials, or an
-absolute path the agent composes for itself elsewhere on the machine. Read every
-`# prompire:unconfirmed` line, fix it, then delete the marker: `prompire prepare` refuses
-while one remains.
-Under Claude Code, Copilot CLI, Codex CLI or Antigravity CLI the host model fills this
-step instead, following `SKILL.md`.
-
-### Prepare
-
-```bash
-prompire prepare .prompire/task.yaml --target generic
-```
-
-This measures the baseline, lints the brief, renders the prompt, and arms the guard —
-from here on, editing the brief yields no verdict rather than a favourable one.
-
-### Hand off — Prompire does not launch the agent
-
-Give `.prompire/task.generic.md` to the coding agent.
-
-### Verify scope and acceptance
-
-After the agent stops:
-
-```bash
-prompire verify .prompire/task.yaml
-```
-
-Review `.prompire/task.checklist.md`.
-
-### Close explicitly
-
-After review:
-
-```bash
-prompire close .prompire/task.yaml
-```
-
-Claude Code and Copilot CLI hooks are optional early-warning adapters; the final
-git-diff check is host-neutral.
 
 ## What a catch looks like
 
@@ -144,12 +78,155 @@ agents in throwaway repos and are scored from outside by the same `verify_accept
 `check_scope` pair a human would run; nothing the agent prints is trusted. The
 campaigns are pre-registered and their raw rows are committed under `bench/campaigns/`.
 
-The first cross-agent matrix (2026-08-01): six tasks, five repetitions each, on Claude
-Code, Codex CLI and Antigravity CLI. None of the 90 runs left its declared scope,
-changed a test file, or touched the brief or the pin. Acceptance differed by host —
-claude and codex 30/30, antigravity behind — so the honest claim is that the work is
-equally *checked* everywhere, not equally *good* everywhere. Design and reading rules:
-`references/benchmark.md`.
+Drift is the measured failure mode. Across the committed campaigns, 20 runs
+were handed the goal sentence alone — no brief — and 9 of 20 changed a test
+file; scored from outside against the author's brief, the checker caught all
+nine. 0 of 160 runs that carried a brief left their declared scope. No run in
+any arm, briefed or bare, tampered with the brief or the pin — a bound on what
+was observed, not proof of what agents do; manipulation of the grading surface
+is the threat the pinned contract exists to make evident.
+
+The first cross-agent matrix (2026-08-01): six tasks, five repetitions each, on
+Claude Code, Codex CLI and Antigravity CLI. None of the 90 runs left its
+declared scope, changed a test file, or touched the brief or the pin.
+Acceptance differed by host — claude and codex 30/30, antigravity 23/30 — so
+the honest claim is that the work is equally *checked* everywhere, not equally
+*good* everywhere. Design and reading rules: `references/benchmark.md`; raw
+rows: `bench/campaigns/`.
+
+## Install the CLI
+
+```bash
+pipx install prompire
+# or
+uv tool install prompire
+```
+
+Prompire supports Python 3.11+ on macOS, Linux, and Windows. The package:
+https://pypi.org/project/prompire/.
+
+## Primary workflow
+
+This workflow is host-neutral and works with any coding agent.
+
+Optional step 0: `prompire draft "one sentence"` writes a draft brief to
+`.prompire/task.yaml`. The heuristic is deterministic, not a model — it proposes an
+acceptance command only where the repo evidences one (`package.json` `scripts.test`, a
+pytest config, a `Makefile` `test:` target, `Cargo.toml`, `go.mod`), and states the
+absence rather than inventing a command. `--agent claude`, `--agent codex`, `--agent
+antigravity` — or any CLI via `--agent-cmd`, drafting prompt on stdin, brief on
+stdout — delegates the drafting to a host model that can read the repo. The reply is
+parsed as data and re-serialized: the model's own comments are dropped, `baseline` and
+`base_rev` are refused as measured rather than drafted, and the boundary, every
+acceptance command and any relaxed `tests_policy` come back marked
+`# prompire:unconfirmed` however confident the model sounded. Agent-assisted drafting
+runs in a disposable repository containing the checkout's current tracked and untracked,
+non-ignored files. The agent can inspect and change that snapshot. A symlink is carried
+only when its target resolves inside the repository, re-aimed there at the snapshot's own
+copy, so a path the agent addresses relative to its workspace cannot reach the source
+checkout through one. Ignored files, submodules and nested checkouts are not copied. This
+isolates ordinary repository writes; it does not sandbox network, credentials, or an
+absolute path the agent composes for itself elsewhere on the machine. Read every
+`# prompire:unconfirmed` line, fix it, then delete the marker: `prompire prepare` refuses
+while one remains.
+Under Claude Code, Copilot CLI, Codex CLI or Antigravity CLI the host model fills this
+step instead, following `SKILL.md`.
+
+### Prepare
+
+```bash
+prompire prepare .prompire/task.yaml --target generic
+```
+
+This measures the baseline, lints the brief, renders the prompt, and arms the guard —
+from here on, editing the brief yields no verdict rather than a favourable one.
+
+`prepare` runs your acceptance commands on the untouched repo to measure the
+baseline. It does not exempt what they generate: an interpreter cache or build
+directory not covered by `.gitignore` is ordinary git evidence and will surface
+in the verdict. Ignore such paths before preparing.
+
+### Hand off — Prompire does not launch the agent
+
+Give `.prompire/task.generic.md` to the coding agent.
+
+### Verify scope and acceptance
+
+After the agent stops:
+
+```bash
+prompire verify .prompire/task.yaml
+```
+
+Review `.prompire/task.checklist.md`.
+
+### Close explicitly
+
+After review:
+
+```bash
+prompire close .prompire/task.yaml
+```
+
+Claude Code and Copilot CLI hooks are optional early-warning adapters; the final
+git-diff check is host-neutral.
+
+## The second task in the same repository
+
+One brief file per task — `prepare` refuses to overwrite a measured
+`baseline:` block, and the Action expects one brief per pull request. `close`
+disarms the guard and records the disarm in `.prompire/ACTIVE.tombstones`;
+from then on, every later arm in that repository is a `repin`, and `verify`
+flags it while still gathering the evidence:
+
+    review: 1 flag — needs a human
+    REVIEW    .prompire/task2.yaml: `base_rev: …` is pinned in .prompire/ACTIVE,
+              but that pin was written after a `--deactivate` …
+    acceptance: PASS python3 check.py
+    acknowledge with: prompire verify .prompire/task2.yaml --ack-disarms 917b94f2
+
+The flag is not an error. A disarm is the one event that could launder a
+rewritten brief, so the record never clears itself; what you acknowledge is
+that you read the tombstone log and accept what it says. Re-run with the
+printed `--ack-disarms` digest and the verdict is `clean` — and the next
+disarm changes the digest, so an acknowledgement never carries forward.
+
+## What a verify verdict means
+
+Every `prompire verify` run leads with one line:
+
+- `clean` — exit 0. Nothing outside the boundary changed, no flag is open, and
+  the acceptance commands pass.
+- `caught: N violation(s)` — exit 1. Something changed outside the declared
+  scope. Acceptance is not run on a violated boundary.
+- `caught: acceptance did not pass` — exit 1. The boundary held but an
+  acceptance command did not meet its expectation.
+- `review: N flag(s) — needs a human` — exit 1. Nothing was violated, but a
+  finding no checker can settle (a `named`/`authoring` tests policy, a re-armed
+  guard) is waiting on your judgment. When the base is corroborated, the
+  acceptance evidence is still gathered and printed beside the flag.
+- `no verdict: <reason>` — exit 2. The run could not produce a trustworthy
+  result — an armed brief was edited, a base is missing — and the output names
+  the next command.
+
+`prompire verify --json` emits the raw structured result instead; its shape is
+unchanged from 0.9.1.
+
+## Where briefs live
+
+State files and rendered artifacts — `ACTIVE`, `ACTIVE.tombstones`, the prompt,
+the checklist — are never history: keep them ignored. The briefs themselves
+depend on how you verify:
+
+```
+.prompire/*
+!.prompire/*.yaml
+```
+
+Working locally, briefs may stay untracked — drop the `!` line and ignore the
+whole directory. With the GitHub Action, the brief is the contract CI checks
+the pull request against, so it must be committed: the two lines above, one
+brief per pull request (`references/ci.md`).
 
 ## Diagnostic commands
 
@@ -168,9 +245,6 @@ python3 check_scope.py .prompire/task.yaml --activate
 python3 check_scope.py .prompire/task.yaml --strict
 python3 check_scope.py .prompire/task.yaml --deactivate
 ```
-
-`.prompire/` belongs in `.gitignore`. The briefs are local task specs, and the
-guard's state files (`ACTIVE`, `ACTIVE.tombstones`) are not history.
 
 ## Limitations
 
