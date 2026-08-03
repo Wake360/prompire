@@ -995,11 +995,16 @@ def cli_version():
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="prompire")
+    parser = argparse.ArgumentParser(
+        prog="prompire",
+        description="Pin the contract before a coding agent works; "
+                    "read the verdict from the real git diff after.")
     parser.add_argument("--version", action="version", version=cli_version())
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command", required=True,
+                                     metavar="command")
 
-    drafted = commands.add_parser("draft")
+    drafted = commands.add_parser(
+        "draft", help="write a draft brief from one sentence")
     drafted.add_argument("sentence")
     drafted.add_argument("--out", default=None,
                          help=f"default: <repo root>/{DEFAULT_DRAFT_OUT}")
@@ -1011,33 +1016,43 @@ def build_parser():
                               "and prints the brief on stdout")
     drafted.set_defaults(handler=draft)
 
-    demoed = commands.add_parser("demo")
+    demoed = commands.add_parser(
+        "demo", help="walk a clean run and a caught violation in a throwaway repo")
     demoed.add_argument("--keep", action="store_true")
     demoed.set_defaults(handler=demo)
 
-    prepared = commands.add_parser("prepare")
+    prepared = commands.add_parser(
+        "prepare",
+        help="measure the baseline, lint the brief, render the prompt, arm the guard")
     prepared.add_argument("brief")
     prepared.add_argument("--target", choices=PROMPT_TARGETS, default="generic")
     prepared.add_argument("--json", action="store_true")
     prepared.set_defaults(handler=prepare)
 
-    verified = commands.add_parser("verify")
+    verified = commands.add_parser(
+        "verify", help="verdict from the real git diff plus the acceptance commands")
     verified.add_argument("brief")
     verified.add_argument("--ack-disarms")
     verified.add_argument("--json", action="store_true")
     verified.set_defaults(handler=verify)
 
-    closed = commands.add_parser("close")
+    closed = commands.add_parser(
+        "close", help="disarm the guard after review; the disarm is recorded")
     closed.add_argument("brief")
     closed.set_defaults(handler=close)
 
-    stated = commands.add_parser("status")
+    stated = commands.add_parser(
+        "status", help="which brief is armed in this repository")
     stated.add_argument("brief", nargs="?", default=".")
     stated.add_argument("--json", action="store_true")
     stated.set_defaults(handler=status)
 
-    for name in LOW_LEVEL_COMMANDS:
-        commands.add_parser(name)
+    for name, description in (
+            ("baseline", "diagnostic: run baseline.py directly"),
+            ("lint", "diagnostic: run lint_brief.py directly"),
+            ("render", "diagnostic: run render_brief.py directly"),
+            ("scope", "diagnostic: run check_scope.py directly")):
+        commands.add_parser(name, help=description)
     return parser
 
 

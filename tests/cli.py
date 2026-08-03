@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -1770,6 +1771,26 @@ def _(repo, checks):
     checks.equal(result.stdout.strip(), version, "--version output vs VERSION")
     checks.equal(pyproject["project"]["version"], version,
                  "pyproject.toml vs VERSION")
+
+
+@case("--help describes every subcommand without renaming any")
+def _(repo, checks):
+    result = run("--help", cwd=repo, env={"COLUMNS": "200"})
+    checks.equal(result.returncode, 0, "--help exit code")
+    for name, phrase in (
+            ("draft", "draft brief"),
+            ("demo", "throwaway repo"),
+            ("prepare", "arm the guard"),
+            ("verify", "git diff"),
+            ("close", "disarm"),
+            ("status", "armed"),
+            ("baseline", "baseline.py"),
+            ("lint", "lint_brief.py"),
+            ("render", "render_brief.py"),
+            ("scope", "check_scope.py")):
+        checks.ok(re.search(rf"^\s+{name}\s+.*{re.escape(phrase)}",
+                            result.stdout, re.M),
+                  f"--help describes `{name}` with `{phrase}`")
 
 
 def main():
