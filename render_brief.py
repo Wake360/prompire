@@ -10,6 +10,7 @@ deterministic — same brief, same bytes — so `tests/golden/` can pin every ta
 """
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -109,6 +110,19 @@ def state_of(brief, entry):
     return ("must pass", f"baseline: {status or 'unrecorded'}")
 
 
+def fence_for(text):
+    """The shortest fence that `text` cannot close from the inside.
+
+    CommonMark ends a fenced block at the first line that is *only* backticks and
+    at least as long as the opener, so a command carrying a bare ``` line — a
+    heredoc holding a markdown sample, say — would otherwise truncate its own
+    block and leave the rest of the command reading as prose. Same defect class as
+    the flattening this block rendering exists to fix: what the agent is told to
+    run stops being what the brief says to run."""
+    runs = [len(m) for m in re.findall(r"`+", text)]
+    return "`" * max(3, max(runs, default=0) + 1)
+
+
 def cmd_block(entry):
     """The brief's command exactly as written when one line cannot show it, else None.
 
@@ -118,7 +132,11 @@ def cmd_block(entry):
     runner executes (`baseline.run_one`) is the verbatim text, and what a prompt
     communicates must be the same command."""
     raw = str(entry.get("cmd") or "").strip("\n")
-    return raw if "\n" in raw else None
+    # Any divergence from the display spelling, not just a newline: a doubled
+    # space inside quotes, a tab, a non-breaking space and U+2028 all survive
+    # into the shell and are erased by `norm_cmd`, so an inline rendering would
+    # name a different program (adversarial review, Reviewer C).
+    return raw if norm_cmd(raw) != raw.strip() else None
 
 
 def criteria_lines(brief, long=False):
@@ -139,7 +157,8 @@ def numbered(brief):
     for i, (head, note, block) in enumerate(criteria_lines(brief), 1):
         lines.append(f"{i}. {head} ({note})" + (":" if block else ""))
         if block:
-            lines += ["```", *block.splitlines(), "```"]
+            fence = fence_for(block)
+            lines += [fence, *block.splitlines(), fence]
     return lines
 
 
@@ -216,8 +235,9 @@ def render_durable(brief, heading):
             continue
         block = cmd_block(a)
         if block:
+            fence = fence_for(block)
             verify += [f"- the command below → {a.get('expect')}",
-                       "```", *block.splitlines(), "```"]
+                       fence, *block.splitlines(), fence]
         else:
             verify.append(f"- `{norm_cmd(a.get('cmd'))}` → {a.get('expect')}")
     if verify:
@@ -247,7 +267,8 @@ def render_checklist(brief, brief_path, guard=None):
         lines.append(f"- [ ] {head}")
         lines.append(f"      → {note}")
         if block:
-            lines += ["```", *block.splitlines(), "```"]
+            fence = fence_for(block)
+            lines += [fence, *block.splitlines(), fence]
     manual = manual_check_entries(brief)
     if manual:
         lines += ["", "Manual — no command covers these:"]

@@ -21,6 +21,14 @@ verdict stands; nothing here claims outcomes until E2 runs.**
   `references/schema.md` documents the execution-mode state machine — `autonomy`
   is who acts, `plan_first` is one extra mid-run stop that requires an operator.
   B10 no longer demands a plan gate at `autonomy: manual`, which never writes.
+- B17 also stopped accepting two other carriers that carry nothing. A `hold` whose
+  measured evidence is "exit 0, nothing printed" freezes the state of every trivial
+  command (`python3 -c "pass"`), so it no longer counts — a `hold` over a known
+  *failure* still does. A `flip` with no baseline entry is a claim nobody measured,
+  and `verify` asks only whether the command passes now, so an already-green
+  criterion declared `flip` was satisfied by an untouched tree; that is now a B15
+  error and no longer a discriminator. Both were found by adversarial review as
+  compiler-proposable equivalents of the manual_checks escape below.
 - B17 stopped accepting a manual check's mere existence as a carrier of done-ness.
   E1's T05 and T08 armed with every criterion green on untouched HEAD because a
   non-empty `manual_checks` silenced the rule — and the compiler writes those lines
@@ -38,11 +46,25 @@ verdict stands; nothing here claims outcomes until E2 runs.**
 
 - Acceptance commands execute and render verbatim. `run_one` runs the brief's
   exact text instead of the whitespace-normalised display form, and every renderer
-  target shows a multi-line command as a fenced verbatim block ("the command
-  below") instead of flattening it — E1 delivered a never-passing criterion in 3
-  of 7 prompts that way, and the measured baseline itself ran a different command
-  than the brief declared. `(cmd, cwd)` keying stays normalised, so baselines
-  still match their criteria.
+  target shows a command as a fenced verbatim block ("the command below") whenever
+  its raw text differs from that display form at all — a newline, a doubled space
+  inside quotes, a tab, U+2028 — not only when it is multi-line. E1 delivered a
+  never-passing criterion in 3 of 7 prompts by flattening, and the measured
+  baseline itself ran a different command than the brief declared. `(cmd, cwd)`
+  keying stays normalised, so baselines still match their criteria.
+  **Migration:** a brief armed before 0.12.0 whose command carries collapsible
+  whitespace was measured against the collapsed spelling, so its recorded
+  `evidence` (a `before_after` digest especially) describes a different program.
+  Re-measure such a brief — `--deactivate`, `baseline.py --write`, `--activate` —
+  rather than trusting the old block. Nothing detects this for you: the pointer
+  carries no tool version.
+- The safety classifier reads the bytes the shell will run. `DESTRUCTIVE`,
+  `WRITES_REPO`, `NETWORKY` and the interactive check now scan the raw command
+  with line continuations spliced, as the shell splices them, and skip heredoc
+  bodies. Verbatim execution had otherwise opened a gap between what was scanned
+  and what ran: `r\<newline>m -rf x` normalised to `r\ m -rf x`, matched no
+  pattern, and executed as `rm -rf x` during a baseline. Found by adversarial
+  review, not by E1.
 - The 250-word render budget is checked at compile time. `draft` previews every
   prompt target through `render_brief.preview_counts()` — the renderer itself over
   a provisional baseline synthesized from each criterion's declared transition, so
@@ -70,10 +92,17 @@ verdict stands; nothing here claims outcomes until E2 runs.**
 
 ### Verifier
 
-- Unchanged, except the two shared-classifier corrections above (`more`
-  false-positive; verbatim execution), each a bounded fix of a reproduced defect
-  with the regression direction pinned by tests. The scope guard, the pin, the
-  digest and `check_scope.py` verdict semantics did not move.
+- `check_scope.py` and `verify_acceptance.py` are byte-identical to 0.11.0. The
+  verify path changes only through the two shared-classifier corrections above,
+  which `verify_acceptance` inherits by importing `classify`/`run_one`: the
+  command-position interactive match (strictly more permissive — a 65-command
+  differential fuzz found no command newly refused) and verbatim execution (see
+  the migration note above, which is the one direction that can turn a
+  previously-clean armed brief red). The new workspace probe is *not* on the
+  verify path — it is called only from `baseline.py`'s own main, so no
+  previously-passing acceptance cell newly refuses. The scope guard, the pin, the
+  digest and every `check_scope.py` verdict are unmoved; 14 armed scenarios diffed
+  identical between 0.11.0 and 0.12.0.
 
 ## 0.11.0 — 2026-08-03
 

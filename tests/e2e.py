@@ -398,6 +398,34 @@ autonomy: ask
     c.ok(r2.returncode == 1 and row2.get("status") is None,
          f"a test-runner baseline over a shadowed package is not a measurement: {row2}")
 
+    # Spellings that reach the same import through a different command shape. Each
+    # one measured a false green against the decoy before the probe read whole
+    # segments instead of the first token (adversarial review, Reviewer D).
+    for name, cmd in (
+            ("inline-env", 'PYTHONPATH=' + str(decoy) +
+             ' python3 -c "import clickpkg; raise SystemExit(0 if clickpkg.FIXED else 1)"'),
+            ("env-prefix", 'env python3 -c "import clickpkg; '
+             'raise SystemExit(0 if clickpkg.FIXED else 1)"'),
+            ("chained", 'true && python3 -c "import clickpkg; '
+             'raise SystemExit(0 if clickpkg.FIXED else 1)"'),
+            ("joined-c", 'python3 -c"import clickpkg; '
+             'raise SystemExit(0 if clickpkg.FIXED else 1)"'),
+            ("joined-m", "python3 -mpytest -q"),
+    ):
+        r5, d5 = measure_with_env(f"bypass-{name}", f"""
+goal: Fix the flag in clickpkg.
+scope: [src/clickpkg/__init__.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: {cmd}
+    expect: exit 0
+autonomy: ask
+""")
+        row5 = d5.get("results", [{}])[0]
+        c.ok(row5.get("status") is None and "workspace" in str(row5.get("reason", "")),
+             f"{name}: the wrong copy must not be measured: {row5}")
+
     # The workspace copy shadowing the installed one is the healthy case.
     fixtures.write(repo, "clickpkg/__init__.py", "FIXED = False\n")
     fixtures.git(repo, "add", "clickpkg/__init__.py")
@@ -465,6 +493,105 @@ autonomy: ask
          f"a newline-separated shell block must run as written: {kinds[0]}")
     c.ok(kinds[1][0] == "pass",
          f"doubled spaces inside quotes are part of the command: {kinds[1]}")
+
+
+@case("a-command-containing-backticks-cannot-break-its-rendered-block")
+def _(repo, c):
+    """A fenced block whose content contains its own fence ends early, so the tail
+    of the command reads as prose to whatever executes it — the same
+    communicated-is-not-executed failure V2-3 closes for flattening. The fence has
+    to be longer than the longest backtick run it carries (CommonMark)."""
+    p = brief(repo, "fence", """
+goal: Add a count() helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: |
+      cat <<'DOC'
+      ```
+      DOC
+      echo "tail must stay inside"
+    expect: exit 0
+manual_checks:
+  - done: the diff adds count()
+autonomy: ask
+""")
+    for target in ("claude", "generic", "codex", "copilot", "checklist"):
+        r = tool("render_brief.py", p, "--target", target)
+        text = r.stdout
+        # CommonMark closes a fenced block at the first line that is only
+        # backticks and at least as long as the opener, so the opener has to
+        # outrun the longest such line the command carries.
+        inside = re.search(r"^(`{3,})\n(.*?)^\1$", text, re.S | re.M)
+        c.ok(bool(inside), f"{target}: no complete command block")
+        if inside:
+            c.ok("tail must stay inside" in inside.group(2),
+                 f"{target}: the command tail escaped its block — a reader executes "
+                 f"a truncated command. Block was: {inside.group(2)!r}")
+            c.ok(inside.group(2).count("DOC") == 2,
+                 f"{target}: the heredoc lost a delimiter: {inside.group(2)!r}")
+
+
+@case("the-safety-classifier-reads-what-the-shell-will-run")
+def _(repo, c):
+    """`run_one` executes the raw command, so DESTRUCTIVE/WRITES_REPO/INTERACTIVE
+    have to read the same bytes. Scanning the whitespace-normalised spelling let a
+    `\\`-newline splice hide the command: `r\\<newline>m -rf x` normalises to
+    `r\\ m -rf x` (matches nothing) and splices in the shell to `rm -rf x`."""
+    _, data = measured(repo, "splice", """
+goal: Add a count() helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: |
+      mkdir -p victim && touch victim/keep.txt && r\\
+      m -rf victim
+    expect: exit 0
+  - cmd: |
+      git ad\\
+      d -A
+    expect: exit 0
+  - cmd: |
+      grep -q hello <<'EOF'
+      less is more
+      hello
+      EOF
+    expect: exit 0
+autonomy: ask
+""")
+    kinds = [(r["status"], r.get("reason", "")) for r in data["results"]]
+    c.ok(kinds[0][0] == "not_runnable" and "destructive" in kinds[0][1],
+         f"a spliced `rm -rf` must still be refused: {kinds[0]}")
+    c.ok(kinds[1][0] == "not_runnable" and "writes to the repository" in kinds[1][1],
+         f"a spliced `git add` must still be refused: {kinds[1]}")
+    c.ok(kinds[2][0] == "pass",
+         f"a heredoc body is data, not a command in executable position: {kinds[2]}")
+    c.ok((pathlib.Path(repo) / "src/cart.py").exists(), "the repo must be untouched")
+
+
+@case("single-line-commands-whose-whitespace-matters-render-verbatim")
+def _(repo, c):
+    # Not only newlines: a doubled space inside quotes, a tab and U+2028 all
+    # survive into the shell and are erased by the display spelling, so an
+    # inline rendering would name a program the brief never declared.
+    p = brief(repo, "whitespace", """
+goal: Add a count() helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: 'python3 -c "import sys; sys.exit(0 if len(''a  b'') == 4 else 1)"'
+    expect: exit 0
+manual_checks:
+  - done: the diff adds count()
+autonomy: ask
+""")
+    for target in ("claude", "generic", "codex", "copilot", "checklist"):
+        text = tool("render_brief.py", p, "--target", target).stdout
+        c.ok("'a  b'" in text,
+             f"{target}: the doubled space must survive into the prompt")
 
 
 @case("pager-lookalike-arguments-are-not-interactive")

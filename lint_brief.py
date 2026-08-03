@@ -293,6 +293,16 @@ def check_baseline(b, acceptance, keys):
                     f"`{cmd[:50]}` must hold its current state but that state was "
                     "never measured",
                     "run it on HEAD and record status + evidence, or drop the criterion")
+            elif t == "flip" and baseline:
+                # Same defect as an unmeasured hold: `verify` asks only whether the
+                # command passes now, so an unmeasured "flip" that was already green
+                # is satisfied by an untouched tree — and B17 would have counted it
+                # as the thing distinguishing HEAD from done.
+                err("B15 flip-without-baseline",
+                    f"`{cmd[:50]}` claims it must flip, but it was never measured on "
+                    "HEAD, so nothing establishes it is red today",
+                    "run baseline.py --write; a flip nobody measured passes on an "
+                    "untouched tree exactly as it does on finished work")
             continue
         status = str(e.get("status") or "").strip().lower()
         evidence = str(e.get("evidence") or "").strip()
@@ -440,8 +450,14 @@ def check_discrimination(b, acceptance):
         e = measured.get(entry_key(a))
         if effective_transition(a, e) != "flip":
             return False
+        # An unmeasured flip is a claim, not a red baseline: `verify` only asks
+        # whether the command passes now, so a criterion that was already green
+        # and merely *declared* flip passes on an untouched tree. B15 makes the
+        # missing entry an error; it must not count as a discriminator here.
+        if e is None:
+            return False
         # a declared flip the baseline already meets moves nothing (B15 warns it)
-        return str((e or {}).get("status") or "").strip().lower() != "pass"
+        return str(e.get("status") or "").strip().lower() != "pass"
 
     if any(discriminates(a) for a in acceptance):
         return
@@ -478,8 +494,30 @@ def check_discrimination(b, acceptance):
     # silenced this rule — and the compiler writes those lines freely. Only the
     # `done:` spelling counts, and only a human can write it (`prompire draft`
     # rejects it in a proposal), so the declaration cannot be rubber-stamped in.
-    holds = any(effective_transition(a, measured.get(entry_key(a))) == "hold"
-                for a in acceptance)
+    def freezes(a):
+        """A `hold` carries done-ness only if the state it freezes is specific.
+
+        "exit 0, nothing printed" is the state of `true`, of `python3 -c "pass"`,
+        of any command that does nothing — it reproduces on an untouched tree, on
+        the work and on any wrong work alike, which is the same emptiness the
+        before/after digest rule already refuses. Freezing a known *failure* —
+        `exit 1`, a recorded failure count — is information, and stays a carrier."""
+        e = measured.get(entry_key(a))
+        if effective_transition(a, e) != "hold":
+            return False
+        evidence = str((e or {}).get("evidence") or "")
+        silent = re.search(r"\bexit 0\b", evidence) and \
+            re.search(r"\b0 line\(s\) stdout", evidence)
+        if silent:
+            warn("B17 empty-hold",
+                 f"`{(entry_key(a) or ('', ''))[0][:50]}` holds \"exit 0, nothing "
+                 "printed\" — the state of any command that does nothing",
+                 "hold a command whose measured state is specific to this "
+                 "repository (a known failure, a recorded count), or let a flip, a "
+                 "before/after comparison or a manual `done:` carry done-ness")
+        return not silent
+
+    holds = any(freezes(a) for a in acceptance)
     manual_done = any(carries for _, carries, _ in manual_check_entries(b))
     if not (holds or any(compares(a) for a in acceptance) or manual_done):
         has_manual = bool(as_list(b.get("manual_checks")))

@@ -66,23 +66,78 @@ INTERACTIVE_FLAGS = re.compile(
 COMMAND_PREFIXES = frozenset(("env", "command", "nohup", "time", "exec", "xargs"))
 
 
-def _command_words(cmd):
-    """The word in executable position of each simple command in a shell line.
+SHELL_OPERATORS = frozenset((";", "&&", "||", "|", "&", "(", ")", ">", "<", ">>"))
 
-    Split on the shell's command separators, then take the first word of each
-    segment that is not an environment assignment or a pass-through wrapper.
-    This does not parse quoting — a separator inside a quoted string still
-    splits — which errs toward one extra candidate word, never a missed one."""
+
+def shell_segments(cmd):
+    """The token list of each simple command in `cmd`, split on shell separators
+    that are **not** inside quotes.
+
+    Quoting has to be respected in both directions. Splitting a `-c "import x;
+    raise ..."` payload at its inner `;` loses the command entirely, which is how
+    the workspace probe stopped seeing the very shape it exists to catch; and a
+    `more` inside a quoted string must not land in executable position, which is
+    the E1 pager false positive. Physical lines are joined until they lex, so a
+    quoted string spanning newlines stays one token."""
+    segments, pending, heredoc = [], "", None
+    lines = shell_text(cmd).splitlines() or [""]
+    for line in lines:
+        # A heredoc body is data the shell feeds to a command, not a command:
+        # `grep -q hi <<'EOF'` / `less is more` / `EOF` must not put `less` in
+        # executable position (adversarial review, Reviewer C — the same
+        # false-positive shape as E1's `more`).
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
+            continue
+        opener = re.search(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", line)
+        if opener:
+            heredoc = next(g for g in opener.groups() if g is not None)
+        candidate = f"{pending}\n{line}" if pending else line
+        try:
+            lexer = shlex.shlex(candidate, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            pending = candidate  # an unbalanced quote continues on the next line
+            continue
+        pending = ""
+        current = []
+        for token in tokens:
+            if token in SHELL_OPERATORS:
+                if current:
+                    segments.append(current)
+                current = []
+            else:
+                current.append(token)
+        if current:
+            segments.append(current)
+    return segments
+
+
+def _leading(tokens):
+    """(environment assignments, index of the word in executable position)."""
+    assignments, index = [], 0
+    while index < len(tokens):
+        token = tokens[index]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+            assignments.append(token)
+            index += 1
+            continue
+        if token.replace("\\", "/").rsplit("/", 1)[-1].lower() in COMMAND_PREFIXES:
+            index += 1
+            continue
+        break
+    return assignments, index
+
+
+def _command_words(cmd):
+    """The word in executable position of each simple command in a shell line."""
     words = []
-    for segment in re.split(r"\|\||&&|;|\||\$\(|`|\n", str(cmd)):
-        for token in segment.strip().split():
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", token):
-                continue
-            name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
-            if name in COMMAND_PREFIXES:
-                continue
-            words.append(name)
-            break
+    for tokens in shell_segments(cmd):
+        _, index = _leading(tokens)
+        if index < len(tokens):
+            words.append(tokens[index].replace("\\", "/").rsplit("/", 1)[-1].lower())
     return words
 
 
@@ -107,19 +162,28 @@ EXPECT_NONZERO = re.compile(r"exit\s*!=\s*0|non-?zero\s*exit|exit\s*(?:code\s*)?
 EXPECT_EMPTY = re.compile(r"\bempty\s*(output|stdout)?\b|\bno\s+(output|matches|lines)\b", re.I)
 
 
+def shell_text(cmd):
+    """The command as the shell will read it, with line continuations spliced.
+
+    `run_one` executes the raw `cmd`, so everything that decides whether it is
+    safe to run has to read the same bytes. Scanning the whitespace-normalised
+    spelling instead let a two-character edit hide the command from the guards:
+    `r\\<newline>m -rf x` normalises to `r\\ m -rf x`, which matches nothing, and
+    splices in the shell to `rm -rf x`, which is what actually ran (adversarial
+    review, Reviewer C). Splicing first is what the shell itself does."""
+    return re.sub(r"\\\n", "", str(cmd or ""))
+
+
 def classify(entry):
     """Why this command will not be run on HEAD, or None if it is safe to run."""
-    cmd = norm_cmd(entry.get("cmd"))
+    cmd = shell_text(entry.get("cmd"))
     req = [str(r).strip().lower() for r in as_list(entry.get("requires")) if str(r).strip()]
     if req:
         return f"declared requires: {', '.join(sorted(set(req)))}"
     m = DESTRUCTIVE.search(cmd)
     if m:
         return f"destructive command (`{m.group(0).strip()}`); not run for a baseline"
-    # The raw text, not the normalised one: a newline is a command separator, so
-    # `foo\nmore x` puts `more` in executable position and normalising first would
-    # hide that from the command-position scan.
-    hit = interactive_hit(str(entry.get("cmd") or ""))
+    hit = interactive_hit(cmd)
     if hit:
         return f"interactive or long-running (`{hit}`)"
     m = WRITES_REPO.search(cmd)
@@ -150,9 +214,15 @@ _PROBE_CACHE = {}
 
 
 def workspace_packages(root, cwd):
-    """Top-level package names this checkout itself defines: a directory with an
-    __init__.py at the repo root, under src/, or the same pair under the entry's
-    cwd (monorepos). Existence of the name is what creates the shadowing hazard."""
+    """Top-level package names this checkout itself defines: a directory holding an
+    __init__.py — or any .py at all, which is a PEP 420 namespace package, the
+    layout most prone to install-vs-workspace shadowing — at the repo root, under
+    src/, or the same pair under the entry's cwd (monorepos). Existence of the name
+    is what creates the shadowing hazard.
+
+    A name here is a candidate, not a finding: the probe only refuses when that name
+    is also importable AND resolves outside the checkout, so a directory that merely
+    looks like a package (`tests/`, `docs/`) costs nothing."""
     names = set()
     for base in (root, root / "src", cwd, cwd / "src"):
         try:
@@ -160,57 +230,86 @@ def workspace_packages(root, cwd):
         except OSError:
             children = []
         for child in children:
-            if child.is_dir() and (child / "__init__.py").is_file():
-                names.add(child.name)
+            if not child.is_dir():
+                continue
+            try:
+                if (child / "__init__.py").is_file() or any(child.glob("*.py")):
+                    names.add(child.name)
+            except OSError:
+                continue
     return names
 
 
-def _probe_plan(entry, packages):
-    """(interpreter, package names to probe), or None when the command gives no
-    evidence of exercising a workspace package through an explicit interpreter."""
-    raw = str(entry.get("cmd") or "")
-    try:
-        tokens = shlex.split(raw, posix=True)
-    except ValueError:
-        return None
-    if not tokens:
-        return None
-    name = tokens[0].replace("\\", "/").rsplit("/", 1)[-1]
-    if not PYTHON_INTERP.match(name):
-        return None
-    args = tokens[1:]
-    for i, tok in enumerate(args):
-        if tok == "-m" and i + 1 < len(args):
-            module = args[i + 1].split(".")[0]
-            if module in TEST_RUNNER_MODULES:
-                # the repo's own suite exercises the repo's own packages
-                return tokens[0], sorted(packages)
-            if module in packages:
-                return tokens[0], [module]
-            return None
-        if tok == "-c" and i + 1 < len(args):
-            named = sorted(p for p in packages
-                           if re.search(rf"\b{re.escape(p)}\b", args[i + 1]))
-            return (tokens[0], named) if named else None
+def _flag_value(args, index, flag):
+    """The value of `-m`/`-c` at `args[index]`, separated or joined (`-mpytest`)."""
+    tok = args[index]
+    if tok == flag:
+        return args[index + 1] if index + 1 < len(args) else None
+    if tok.startswith(flag) and len(tok) > len(flag):
+        return tok[len(flag):]
     return None
 
 
-def import_origin(interp, package, cwd):
+def _segment_targets(args, packages):
+    """Which workspace packages this interpreter's arguments would exercise."""
+    for i in range(len(args)):
+        module = _flag_value(args, i, "-m")
+        if module is not None:
+            top = module.split(".")[0]
+            if top in TEST_RUNNER_MODULES:
+                return sorted(packages)  # the repo's suite exercises the repo
+            return [top] if top in packages else []
+        code = _flag_value(args, i, "-c")
+        if code is not None:
+            return sorted(p for p in packages
+                          if re.search(rf"\b{re.escape(p)}\b", code))
+    return []
+
+
+def _probe_plans(entry, packages):
+    """Every (env assignments, interpreter, packages) this command would exercise.
+
+    Whole segments, not just the first token: an inline `PYTHONPATH=… python3 …`
+    (the literal shape that mis-measured E1's T05), an `env`/`nohup` wrapper, and a
+    `python3` after `&&` or a pipe each reach the same import, and reading only
+    `argv[0]` missed all three. The leading assignments are carried into the probe
+    so a command that points itself at an installed copy is asked in the environment
+    it actually creates."""
+    plans = []
+    for tokens in shell_segments(entry.get("cmd")):
+        assignments, index = _leading(tokens)
+        if index >= len(tokens):
+            continue
+        interp = tokens[index]
+        if not PYTHON_INTERP.match(interp.replace("\\", "/").rsplit("/", 1)[-1]):
+            continue
+        targets = _segment_targets(tokens[index + 1:], packages)
+        if targets:
+            plans.append((tuple(assignments), interp, targets))
+    return plans
+
+
+def import_origin(interp, package, cwd, assignments=()):
     """Where `import <package>` under this interpreter resolves, or None when the
-    probe is inconclusive (interpreter missing, package not importable at all)."""
-    key = (interp, package, str(cwd))
+    probe is inconclusive (interpreter missing, package not importable at all).
+
+    `assignments` are the command's own leading environment assignments, replayed
+    verbatim so a command that points itself at an installed copy is asked in the
+    environment it builds for itself rather than in ours."""
+    key = (tuple(assignments), interp, package, str(cwd))
     if key not in _PROBE_CACHE:
         code = (f"import {package}, os; print(os.path.abspath((getattr({package}, "
                 f"'__file__', None) or (list(getattr({package}, '__path__', [])) "
                 f"or [''])[0]) or ''))")
+        probe = " ".join([*assignments, interp, "-c", f'"{code}"'])
         try:
-            # Through the shell like the measurement itself, so PATH resolves the
-            # interpreter token the same way the acceptance command will.
-            r = subprocess.run(f'{interp} -c "{code}"', shell=True, cwd=str(cwd),
+            # Through the shell like the measurement itself, so PATH and the inline
+            # assignments resolve exactly as they will for the acceptance command.
+            r = subprocess.run(probe, shell=True, cwd=str(cwd),
                                capture_output=True, encoding="utf-8",
                                errors="replace", timeout=30)
-            out = (r.stdout or "").strip()
-            _PROBE_CACHE[key] = out if r.returncode == 0 and out else None
+            out = (r.stdout or "").strip().splitlines()
+            _PROBE_CACHE[key] = out[-1] if r.returncode == 0 and out else None
         except (subprocess.TimeoutExpired, OSError):
             _PROBE_CACHE[key] = None
     return _PROBE_CACHE[key]
@@ -224,19 +323,16 @@ def workspace_mismatch(root, entry):
     packages = workspace_packages(root, cwd)
     if not packages:
         return None
-    plan = _probe_plan(entry, packages)
-    if not plan:
-        return None
-    interp, targets = plan
     real_root = os.path.realpath(root)
-    for package in targets:
-        origin = import_origin(interp, package, cwd)
-        if origin and not os.path.realpath(origin).startswith(real_root + os.sep):
-            return (f"`import {package}` under `{interp}` resolves to {origin} — "
-                    "outside this workspace, so the measurement would describe an "
-                    "installed copy, not the checkout under modification. Point the "
-                    "command at the workspace copy (install it editable, or fix the "
-                    "interpreter/PYTHONPATH), then re-run")
+    for assignments, interp, targets in _probe_plans(entry, packages):
+        for package in targets:
+            origin = import_origin(interp, package, cwd, assignments)
+            if origin and not os.path.realpath(origin).startswith(real_root + os.sep):
+                return (f"`import {package}` under `{interp}` resolves to {origin} — "
+                        "outside this workspace, so the measurement would describe an "
+                        "installed copy, not the checkout under modification. Point the "
+                        "command at the workspace copy (install it editable, or fix the "
+                        "interpreter/PYTHONPATH), then re-run")
     return None
 
 

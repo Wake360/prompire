@@ -733,6 +733,68 @@ acceptance:
 autonomy: manual
 """, [], [], ["B10"]),
 
+    # a `hold` over "exit 0, nothing printed" freezes the state of every trivial
+    # command — `python3 -c "pass"` reproduces it on an untouched tree, on the work
+    # and on any wrong work alike, exactly like the empty before/after digest
+    ("hold-over-silent-success-carries-nothing", """
+goal: Rename the greet helper parameter without changing output.
+scope: [src/greet.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_greet
+    expect: exit 0
+  - cmd: python3 -c "pass"
+    expect: exit 0
+    transition: hold
+baseline:
+  - cmd: python3 -m unittest -q tests.test_greet
+    status: pass
+    evidence: "exit 0, 0 line(s) stdout, 0.1s"
+  - cmd: python3 -c "pass"
+    status: pass
+    evidence: "exit 0, 0 line(s) stdout, 0.1s"
+autonomy: ask
+""", ["B17"], [], []),
+
+    # a hold on a genuinely known-red suite freezes a specific failure, which is
+    # information — this must keep working
+    ("hold-over-known-red-still-carries", """
+goal: Add a count() helper without disturbing the legacy suite.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_legacy
+    expect: exit 1 — the one known failure, unchanged
+    transition: hold
+baseline:
+  - cmd: python3 -m unittest -q tests.test_legacy
+    status: pass
+    evidence: "exit 1, 0 line(s) stdout, 0.1s"
+autonomy: ask
+""", [], [], ["B17"]),
+
+    # a criterion that claims `flip` but was never measured is a claim, not a red
+    # baseline: `verify` passes it on an untouched tree
+    ("flip-without-a-baseline-entry-is-not-a-discriminator", """
+goal: Fix the off-by-one in total() so carts add up.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+  - cmd: python3 -c "import sys; sys.exit(0)"
+    expect: exit 0
+    transition: flip
+baseline:
+  - cmd: python3 -m unittest -q tests.test_cart
+    status: pass
+    evidence: "exit 0, 0 line(s) stdout, 0.1s"
+autonomy: ask
+""", ["B15", "B17"], [], []),
+
     # a truthy string is not a plan gate: YAML `plan_first: "false"` is truthy, and
     # rendering it as a hard approval stop would gate execution on a typo
     ("plan-first-string-is-an-error", """
