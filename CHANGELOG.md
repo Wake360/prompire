@@ -3,7 +3,7 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
-## 0.10.0 — 2026-08-02
+## 0.10.0 — 2026-08-03
 
 **The verdict is legible, the modal task reports its evidence, and the package
 carries its own documentation.**
@@ -20,7 +20,7 @@ carries its own documentation.**
   still blocks acceptance outright, and an uncorroborated base
   (`base_source: null`) still refuses to execute the brief's commands — in that
   state the brief is agent-writable and its commands run through the shell.
-- `verify` in human mode ends in one verdict line — `clean`,
+- `verify` in human mode leads with one verdict line — `clean`,
   `caught: N violation(s)`, `caught: acceptance did not pass`,
   `review: N flag(s) — needs a human`, or `no verdict: <reason>` — followed by
   the findings and per-command acceptance rows. An unacknowledged `repin`
