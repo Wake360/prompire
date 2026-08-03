@@ -10,25 +10,39 @@ short. If it grew long, it failed.
 
 ## Primary workflow
 
+Compile the brief through the proposal gate — that is this skill's job. Read the
+repository, write your proposed brief as plain YAML (the draft keys: goal, scope,
+forbidden, constraints, tests_policy, tests_editable, oracle, acceptance,
+manual_checks, context, plan_first, rollback, autonomy — never baseline, base_rev or
+dirty_baseline, which are measured), then run
+`prompire draft "<the user's request>" --proposal <your-proposal-file> --out
+.prompire/<slug>.yaml`. The proposal is parsed as data and re-serialized: your
+comments are dropped, measured
+fields are refused, and every authority-sensitive line — the boundary, each acceptance
+command, a relaxed tests policy, the deny-list, the constraints, the manual checks,
+any context — comes back marked `# prompire:unconfirmed`. Present the marked lines to
+the user; delete a marker only when the user has confirmed that line. Do not confirm
+your own proposal: `prepare` and `--activate` both refuse while a marker remains, and
+that refusal is the trust boundary, not an obstacle.
+
+`prompire draft "<one sentence>"` without `--proposal` is the fallback for callers
+without a model: it proposes only acceptance commands the repo evidences and marks
+everything else. `draft --agent claude`, `--agent codex`, `--agent antigravity` (or
+any CLI via `--agent-cmd`) borrows a host model for the same step and flows through
+the identical gate. Agent-assisted
+drafting runs against a disposable Git-visible snapshot, not the source checkout. The
+snapshot excludes ignored files, carries a symlink only where its target resolves inside
+the repository, and is removed after the agent exits; drafting is read-only, and a run
+that writes to the snapshot is refused with the written paths named. An absolute path
+the agent composes for itself still reaches the machine.
+
 ### Prepare
 
-After writing `.prompire/<slug>.yaml`, prepare the handoff:
+After the confirmed brief exists at `.prompire/<slug>.yaml`, prepare the handoff:
 
 ```bash
 prompire prepare .prompire/<slug>.yaml --target generic
 ```
-
-Write the brief yourself — that is this skill's job. `prompire draft "<one sentence>"`
-exists for callers without a model: it proposes only acceptance commands the repo
-evidences and marks everything else `# prompire:unconfirmed`, which `prepare` refuses
-until the line is fixed and the marker deleted. `draft --agent claude`, `--agent
-codex`, `--agent antigravity` (or any CLI via `--agent-cmd`) borrows a host model for
-the same step; the reply is re-serialized without the model's comments, the boundary
-and the acceptance commands stay marked until a human confirms each line. Agent-assisted
-drafting runs against a disposable Git-visible snapshot, not the source checkout. The
-snapshot excludes ignored files, carries a symlink only where its target resolves inside
-the repository, and is removed after the agent exits. An absolute path the agent composes
-for itself still reaches the machine.
 
 ### Hand off — Prompire does not launch the agent
 
@@ -89,7 +103,9 @@ the brief. This is for work you're delegating and won't watch.
    for a field you cannot infer and cannot default. The one usually worth asking: *what
    command tells us this worked?*
 
-2. **Write the brief** to `.prompire/<slug>.yaml`. State files and rendered
+2. **Write the proposal and compile it** through `prompire draft "<request>"
+   --proposal <file> --out .prompire/<slug>.yaml`, then walk the user through the
+   `# prompire:unconfirmed` lines (see Primary workflow). State files and rendered
    artifacts stay ignored; the brief itself is committed when the GitHub Action
    verifies the pull request (`references/ci.md`) and may stay local otherwise.
    Every

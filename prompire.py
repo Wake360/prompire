@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 import yaml
 
@@ -47,8 +48,12 @@ DRAFT_AGENTS = {
     "antigravity": ["agy", "-p", "{prompt}", "--add-dir", "{root}",
                     "--print-timeout", "540s"],
 }
+# Everything the schema lets a task declare, minus what Prompire measures. A key
+# missing here is a key no compiler frontend can propose — that asymmetry is how the
+# pre-compiler drafts made `named`/`authoring`/refactor tasks structurally impossible.
 DRAFT_KEYS = ("goal", "scope", "forbidden", "constraints", "tests_policy",
-              "acceptance", "manual_checks", "autonomy")
+              "tests_editable", "oracle", "acceptance", "manual_checks",
+              "context", "plan_first", "rollback", "autonomy")
 DRAFT_MEASURED = ("baseline", "base_rev", "dirty_baseline")
 DRAFT_PROMPT = """\
 Compile the request below into a draft Prompire brief. Inspect this repository
@@ -58,14 +63,22 @@ Request: {sentence}
 
 Output only a YAML mapping with these keys and no others:
 - goal: one imperative sentence, at most 30 words, sharpened from the request.
-- scope: the exact files or narrow globs the work may edit. Never `.`.
+- scope: the exact files or narrow globs the work may edit, including files it
+  must create. Never `.`.
 - forbidden: paths that must not change; [] after considering it.
 - constraints: observable facts that must stay true; omit if none.
-- tests_policy: immutable, unless the request itself is about writing tests.
+- tests_policy: immutable, unless the request itself is about changing tests —
+  then named, or authoring when the tests are the deliverable.
+- tests_editable: only with named/authoring — the exact test paths that may change.
+- oracle: only with authoring — what judges the work when the suite cannot.
 - acceptance: commands this repository evidences (a package script, a configured
-  test runner, an existing file). Each item carries cmd and expect. If nothing
-  runnable proves the work, write acceptance: [].
+  test runner, an existing file). Each item carries cmd and expect; add
+  `transition: flip` when it fails today and making it pass is the goal. If
+  nothing runnable proves the work, write acceptance: [].
 - manual_checks: what only a human can confirm; omit if none.
+- context: at most three lines of repository fact the agent would otherwise
+  rediscover the hard way; omit unless it changes the implementation.
+- plan_first: true for a refactor/migration or a scope wider than three paths.
 - autonomy: ask
 Never output baseline, base_rev or dirty_baseline; they are measured, not drafted.
 No prose, no code fences.
@@ -420,22 +433,6 @@ def detect_acceptance(root):
     return found
 
 
-def draft_text(sentence, detected):
-    out = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker.",
-           "goal: |", f"  {sentence}",
-           f"scope: []  # {DRAFT_MARKER} — list the exact files the agent may edit",
-           "autonomy: ask"]
-    if detected:
-        out.append("acceptance:")
-        for cmd, src in detected:
-            out += [f"  - cmd: {cmd}  # {DRAFT_MARKER} — detected from {src}; confirm it",
-                    "    expect: exit 0"]
-    else:
-        out.append(f"acceptance: []  # {DRAFT_MARKER} — no test command detected; "
-                   "add one that exists in this repo")
-    return "\n".join(out) + "\n"
-
-
 def _yaml_scalar(value):
     # A scalar dumped as its own document ends with a `...` end marker on the
     # next line; only the scalar itself belongs on the line being built.
@@ -478,6 +475,10 @@ def parse_agent_brief(text):
         stray = sorted(str(k) for k in set(item) - ACCEPTANCE_KEYS)
         if stray:
             return None, "acceptance keys a draft does not carry: " + ", ".join(stray)
+        # A compiler writes the current spelling; the legacy one would only make the
+        # linter warn the human about a line the model chose.
+        if item.pop("must_flip", None) and not item.get("transition"):
+            item["transition"] = "flip"
         entries.append(item)
     data["acceptance"] = entries
     return data, None
@@ -499,55 +500,112 @@ def matches_tracked(pattern, tracked):
     return any(rx.match(path) for path in tracked)
 
 
-def agent_draft_text(sentence, data, root):
-    """Same contract as draft_text: the boundary and the judge stay unconfirmed
-    until a human deletes each marker, however fluent the agent's proposal."""
+def _marked(line, note):
+    return f"{line}  # {DRAFT_MARKER} — {note}"
+
+
+def agent_draft_text(sentence, data, root, source="agent"):
+    """The one serializer every compiler frontend flows through — deterministic
+    heuristic, `--agent`/`--agent-cmd`, and `--proposal` alike. The boundary and the
+    judge stay unconfirmed until a human deletes each marker, however fluent the
+    proposal; what the repository itself corroborates (a tracked path, a command a
+    config file declares) is counted in `stats` but still shown for confirmation,
+    because corroboration says the thing exists, not that it is the right boundary
+    or the right judge. Returns (text, stats)."""
     detected = dict(detect_acceptance(root))
     tracked = tracked_paths(root)
+    stats = {"tracked_scope": 0, "detected_acceptance": 0}
     out = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker.",
            "goal: |", f"  {' '.join(str(data.get('goal') or sentence).split())}"]
     scope = [str(s) for s in as_list(data.get("scope"))]
     if scope:
         out.append("scope:")
         for entry in scope:
-            note = ("agent-proposed boundary; confirm it" if matches_tracked(entry, tracked)
-                    else "matches nothing tracked today — new file or typo? confirm it")
-            out.append(f"  - {_yaml_scalar(entry)}  # {DRAFT_MARKER} — {note}")
+            if matches_tracked(entry, tracked):
+                stats["tracked_scope"] += 1
+                note = "agent-proposed boundary; confirm it"
+            else:
+                note = "matches nothing tracked today — new file or typo? confirm it"
+            out.append(_marked(f"  - {_yaml_scalar(entry)}", note))
     else:
-        out.append(f"scope: []  # {DRAFT_MARKER} — list the exact files the agent may edit")
-    for key in ("forbidden", "constraints"):
+        out.append(_marked("scope: []", "list the exact files the agent may edit"))
+    for key, note, empty_note in (
+            ("forbidden", "agent-proposed deny-list; confirm it names what must not change",
+             "the agent says nothing is off-limits; confirm that"),
+            ("constraints", "agent-proposed invariants; confirm each is true and observable",
+             None)):
         if key in data:
             values = [str(v) for v in as_list(data.get(key))]
             if values:
-                out.append(f"{key}:")
+                out.append(_marked(f"{key}:", note))
                 out += [f"  - {_yaml_scalar(v)}" for v in values]
             else:
-                out.append(f"{key}: []")
+                out.append(_marked(f"{key}: []", empty_note) if empty_note
+                           else f"{key}: []")
     policy = data.get("tests_policy")
     if policy is not None:
         line = f"tests_policy: {_yaml_scalar(str(policy))}"
         if policy != "immutable":
-            line += f"  # {DRAFT_MARKER} — agent proposed relaxing test protection; confirm it"
+            line = _marked(line, "agent proposed relaxing test protection; confirm it")
         out.append(line)
+    editable = [str(t) for t in as_list(data.get("tests_editable"))]
+    if editable:
+        out.append(_marked("tests_editable:",
+                           "only these test paths may change; confirm the list is exact"))
+        out += [f"  - {_yaml_scalar(t)}" for t in editable]
+    oracle = " ".join(str(data.get("oracle") or "").split())
+    if oracle:
+        out.append(_marked(f"oracle: {_yaml_scalar(oracle)}",
+                           "agent-proposed judge for authored tests; confirm you trust it"))
     if data["acceptance"]:
         out.append("acceptance:")
         for item in data["acceptance"]:
             cmd = str(item["cmd"])
-            note = (f"detected from {detected[cmd]}; confirm it" if cmd in detected
-                    else "agent-proposed; run it yourself before trusting it")
-            out.append(f"  - cmd: {_yaml_scalar(cmd)}  # {DRAFT_MARKER} — {note}")
+            if cmd in detected:
+                stats["detected_acceptance"] += 1
+                note = f"detected from {detected[cmd]}; confirm it"
+            else:
+                note = "agent-proposed; run it yourself before trusting it"
+            # The sub-keys that move authority are disclosed on the marked line, so
+            # deleting the marker is a decision about them too, not only about `cmd`.
+            requires = [str(r) for r in as_list(item.get("requires"))]
+            if requires:
+                note += ("; declares requires: " + ", ".join(requires)
+                         + " — the baseline will never run it")
+            transition = str(item.get("transition") or "").strip().lower()
+            if transition == "flip":
+                note += "; claims it fails on HEAD and the work must flip it green"
+            elif transition == "hold":
+                note += "; claims it must stay exactly as measured"
+            out.append(_marked(f"  - cmd: {_yaml_scalar(cmd)}", note))
             rest = {str(k): v for k, v in item.items() if k != "cmd"}
             rest.setdefault("expect", "exit 0")
             out += [f"    {key}: {_yaml_scalar(rest[key])}" for key in sorted(rest)]
     else:
-        out.append(f"acceptance: []  # {DRAFT_MARKER} — the agent proposed no runnable "
-                   "check; add one that exists in this repo")
+        out.append(_marked("acceptance: []",
+                           "no test command detected; add one that exists in this repo"
+                           if source == "deterministic" else
+                           "the agent proposed no runnable check; add one that exists "
+                           "in this repo"))
     manual = [str(m) for m in as_list(data.get("manual_checks"))]
     if manual:
-        out.append("manual_checks:")
+        out.append(_marked("manual_checks:",
+                           "only a human can check these, and they may be all that "
+                           "says done; confirm them"))
         out += [f"  - {_yaml_scalar(m)}" for m in manual]
+    context = str(data.get("context") or "").strip()
+    if context:
+        out.append(_marked("context: |",
+                           "the prompt carries this as fact; confirm it is true and "
+                           "worth its words"))
+        out += [f"  {line}".rstrip() for line in context.splitlines()]
+    if data.get("plan_first"):
+        out.append("plan_first: true")
+    rollback = " ".join(str(data.get("rollback") or "").split())
+    if rollback:
+        out.append(f"rollback: {_yaml_scalar(rollback)}")
     out.append("autonomy: ask")
-    return "\n".join(out) + "\n"
+    return "\n".join(out) + "\n", stats
 
 
 def agent_argv(entry, prompt, root):
@@ -649,25 +707,54 @@ def run_draft_agent(argv, prompt, root):
         return None, f"agent did not answer within {DRAFT_AGENT_TIMEOUT}s"
 
 
+def _snapshot_writes(agent_root):
+    """What the drafting agent left changed in its snapshot, or None on an unreadable
+    audit. The snapshot was committed at setup, so anything porcelain reports is the
+    agent's own write."""
+    audited = subprocess.run(["git", "-C", str(agent_root), "status", "--porcelain"],
+                             capture_output=True, encoding="utf-8", errors="replace")
+    if audited.returncode:
+        return None
+    return sorted(line[3:].strip() for line in audited.stdout.splitlines()
+                  if line.strip())
+
+
 def draft(args, extra):
+    started = time.monotonic()
     if extra:
-        return report_refusal("unrecognized arguments: " + " ".join(extra))
-    if args.agent and args.agent_cmd:
-        return report_refusal("--agent and --agent-cmd name the same thing; pick one")
+        return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
+    backends = [flag for flag, value in (("--agent", args.agent),
+                                         ("--agent-cmd", args.agent_cmd),
+                                         ("--proposal", args.proposal)) if value]
+    if len(backends) > 1:
+        return report_refusal(" and ".join(backends)
+                              + " name the same thing; pick one", args.json)
     if args.agent and args.agent not in DRAFT_AGENTS:
         known = ", ".join(sorted(DRAFT_AGENTS))
         return report_refusal(f"unknown agent `{args.agent}`; known: {known} — "
-                              "or spell the whole command with --agent-cmd")
+                              "or spell the whole command with --agent-cmd", args.json)
     try:
         root = repo_root(pathlib.Path("."))
     except RepoError as exc:
-        return report_refusal(str(exc))
+        return report_refusal(str(exc), args.json)
     # The default lands at the repo root, because that is the only place the Action's
     # `find_brief` looks. A path the caller typed keeps its cwd-relative meaning.
     out = root / DEFAULT_DRAFT_OUT if args.out is None else pathlib.Path(args.out)
     if os.path.lexists(out):  # a dangling symlink counts — never write through one
-        return report_refusal(f"`{out}` already exists; pick another --out")
-    if args.agent or args.agent_cmd:
+        return report_refusal(f"`{out}` already exists; pick another --out", args.json)
+    if args.proposal:
+        backend = "proposal"
+        try:
+            proposed = (sys.stdin.read() if args.proposal == "-"
+                        else pathlib.Path(args.proposal).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            return report_refusal(f"could not read the proposal: {exc}", args.json)
+        data, trouble = parse_agent_brief(proposed)
+        if trouble:
+            return report_refusal(f"proposal rejected: {trouble}", args.json)
+        text, stats = agent_draft_text(args.sentence, data, root)
+    elif args.agent or args.agent_cmd:
+        backend = f"agent:{args.agent}" if args.agent else "agent-cmd"
         prompt = DRAFT_PROMPT.format(sentence=args.sentence)
         try:
             # The host arguments are built inside the snapshot, so a `{root}` a host
@@ -678,10 +765,24 @@ def draft(args, extra):
                 else:
                     argv, feed = shlex.split(args.agent_cmd), prompt
                 if not argv:
-                    return report_refusal("--agent-cmd is empty")
+                    return report_refusal("--agent-cmd is empty", args.json)
                 answered, trouble = run_draft_agent(argv, feed, agent_root)
+                if trouble is None:
+                    # A drafting run only reads. A write is evidence the run broke
+                    # its contract, not a mess to tidy: the snapshot absorbed it, and
+                    # the refusal names it instead of repairing it.
+                    written = _snapshot_writes(agent_root)
+                    if written is None:
+                        trouble = "could not audit the snapshot after the agent ran"
+                    elif written:
+                        shown = ", ".join(written[:5]) + (
+                            f" (+{len(written) - 5} more)" if len(written) > 5 else "")
+                        trouble = ("the drafting agent modified the repository "
+                                   f"snapshot: {shown} — drafting is read-only; the "
+                                   "writes were discarded with the snapshot")
         except (OSError, subprocess.CalledProcessError) as exc:
-            return report_refusal(f"could not build the draft snapshot: {exc}")
+            return report_refusal(f"could not build the draft snapshot: {exc}",
+                                  args.json)
         if trouble is None and answered.returncode:
             tail = (answered.stderr or answered.stdout).strip().splitlines()
             trouble = f"agent exited {answered.returncode}" + (
@@ -689,15 +790,32 @@ def draft(args, extra):
         if trouble is None:
             data, trouble = parse_agent_brief(answered.stdout)
         if trouble:
-            return report_refusal(f"agent draft rejected: {trouble}")
-        text = agent_draft_text(args.sentence, data, root)
+            return report_refusal(f"agent draft rejected: {trouble}", args.json)
+        text, stats = agent_draft_text(args.sentence, data, root)
     else:
-        text = draft_text(args.sentence, detect_acceptance(root))
+        backend = "deterministic"
+        data = {"acceptance": [{"cmd": cmd, "expect": "exit 0"}
+                               for cmd, _ in detect_acceptance(root)]}
+        text, stats = agent_draft_text(args.sentence, data, root,
+                                       source="deterministic")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
-    print(f"drafted {out}")
+    unconfirmed = text.count(f"# {DRAFT_MARKER}")
+    corroborated = sum(stats.values())
+    seconds = round(time.monotonic() - started, 2)
     next_command = display_command(["prompire", "prepare", out])
-    print(f"confirm every `# {DRAFT_MARKER}` line, then: {next_command}")
+    if args.json:
+        print(json.dumps({"status": "drafted", "out": str(out), "backend": backend,
+                          "unconfirmed": unconfirmed, "corroborated": stats,
+                          "seconds": seconds, "next": next_command},
+                         ensure_ascii=False))
+    else:
+        print(f"drafted {out}")
+        print(f"{_counted(unconfirmed, 'decision')} to confirm, "
+              f"{_counted(corroborated, 'fact')} corroborated by the repository "
+              f"(tracked scope: {stats['tracked_scope']}, detected acceptance: "
+              f"{stats['detected_acceptance']})")
+        print(f"confirm every `# {DRAFT_MARKER}` line, then: {next_command}")
     return 0
 
 
@@ -1024,6 +1142,11 @@ def build_parser():
     drafted.add_argument("--agent-cmd", default=None,
                          help="any command that reads the drafting prompt on stdin "
                               "and prints the brief on stdout")
+    drafted.add_argument("--proposal", default=None,
+                         help="a YAML proposal to compile instead of invoking a "
+                              "model; `-` reads stdin. Same validation and markers "
+                              "as an agent reply")
+    drafted.add_argument("--json", action="store_true")
     drafted.set_defaults(handler=draft)
 
     demoed = commands.add_parser(

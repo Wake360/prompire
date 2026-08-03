@@ -29,6 +29,22 @@ Unknown keys are a warning, not an error: the renderer drops them.
 Paths are repo-relative. An absolute path or one containing `..` is an error — it moves
 the boundary the guard is supposed to enforce.
 
+## What a compiler may propose
+
+Every compiler frontend — the deterministic heuristic, `draft --agent`/`--agent-cmd`,
+and `draft --proposal` — flows through one parser and one serializer in `prompire.py`.
+Field by field, the authority classes are:
+
+| class | fields | what enforces it |
+|---|---|---|
+| propose, human confirms | `scope`, `forbidden`, `constraints`, `tests_policy` (≠ immutable), `tests_editable`, `oracle`, `acceptance` entries and their authority-moving sub-keys (`requires`, `transition`), `manual_checks`, `context` | serialized with `# prompire:unconfirmed`; `prepare`, `lint` (B18) and `--activate` all refuse while one remains |
+| propose, no marker | `goal` (rewritten into the draft for editing), `plan_first` (only adds a gate), `rollback` (inert below `autonomy: auto`) | the linter's ordinary rules |
+| clamped | `autonomy` | a draft always says `ask`; raising it is a human edit to the confirmed brief |
+| measured, never proposed | `baseline`, `base_rev`, `dirty_baseline` | a proposal carrying one is rejected outright — these are written by `baseline.py` and read against the pin |
+
+Confirmation is the *absence* of a marker, and Prompire owns the serialization: model
+comments never survive the parse, so model output cannot manufacture a confirmed line.
+
 ## Acceptance entry
 
 | field | required | meaning |
