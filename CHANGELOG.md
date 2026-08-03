@@ -3,12 +3,40 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
-## Unreleased
+## 0.10.0 — 2026-08-02
 
-**Agent-assisted drafting is isolated by construction instead of audited afterwards.**
+**The verdict is legible, the modal task reports its evidence, and the package
+carries its own documentation.**
 
 ### Changed
 
+- `verify` gathers and reports acceptance evidence when the scope check finds
+  zero violations and the base is corroborated (`pin` or `repin`), instead of
+  holding the evidence hostage to REVIEW flags it can never clear. A
+  `tests_policy: named` or `authoring` brief with a perfect in-scope run now
+  prints its policy REVIEW *and* its acceptance result. Exit semantics are
+  unchanged: any REVIEW still fails the strict run with exit 1, a violation
+  still blocks acceptance outright, and an uncorroborated base
+  (`base_source: null`) still refuses to execute the brief's commands — in that
+  state the brief is agent-writable and its commands run through the shell.
+- `verify` in human mode ends in one verdict line — `clean`,
+  `caught: N violation(s)`, `caught: acceptance did not pass`,
+  `review: N flag(s) — needs a human`, or `no verdict: <reason>` — followed by
+  the findings and per-command acceptance rows. An unacknowledged `repin`
+  prints the exact `prompire verify <brief> --ack-disarms <digest>` command to
+  run after reading the tombstone log. `--json` output is byte-identical
+  to 0.9.1.
+- A `prepare` that fails after measuring the baseline restores the brief's
+  bytes, so a lint failure no longer leaves a half-written
+  `baseline:`/`base_rev:` block that refuses the corrected retry. The restore
+  never runs after a successful activation — `prepare` decides "activation
+  committed" by reading the pointer itself, not by trusting an exit code.
+- The checker's coverage claim carries its own limit wherever it appears: what
+  is seen is every *git-visible* change, and a write under a gitignored path
+  never enters the evidence. `references/threat-model.md` gained the
+  limitation row, `references/hosts.md` the instruction to run the verifying
+  copy from outside the governed workspace, and `check_scope.py --activate` no
+  longer claims a refusal only an installed hook can make.
 - `draft --agent` and `--agent-cmd` now run the host model inside a disposable git
   repository holding a copy of the checkout's Git-visible files, removed when the agent
   exits. Ignored files, submodules and nested checkouts are not copied, and the
@@ -42,6 +70,11 @@ lints clean today can fail on the next minor, and this file is where that is rec
 
 ### Added
 
+- `prompire --version`, and a one-line description per subcommand in
+  `prompire --help`. Names and semantics are unchanged.
+- `[project.urls]` in the package metadata, and the wheel ships `SKILL.md`,
+  `references/` and `examples/` under `share/prompire/`, so a pip install
+  carries the documentation the README points at.
 - Three ablations in `bench/variants.py` — `no_ask_clause`,
   `no_redundant_forbidden` and `durable_dedupe` — each cutting something a coding
   agent's own system prompt already carries, so the matrix can say whether Prompire

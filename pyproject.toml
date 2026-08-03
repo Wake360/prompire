@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompire"
-version = "0.9.1"
+version = "0.10.0"
 description = "Pin the contract before a coding agent works; read the verdict from the real git diff after."
 readme = "README.md"
 requires-python = ">=3.11"
