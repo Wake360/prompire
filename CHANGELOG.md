@@ -101,9 +101,15 @@ verdict stands; nothing here claims outcomes until E2 runs.**
 
 ### Verifier
 
-- `check_scope.py` and `verify_acceptance.py` are byte-identical to 0.11.0. The
-  verify path changes only through the two shared-classifier corrections above,
-  which `verify_acceptance` inherits by importing `classify`/`run_one`: the
+- `check_scope.py` and `verify_acceptance.py` are byte-identical to 0.11.0, but
+  they are not behaviourally frozen: both reach changed code through shared
+  modules, and one of those changes moves a `check_scope` exit code. Stated
+  exactly, the verify path changes in three places. `load_brief` (used by both)
+  now reports a brief with an unconstructable tag as unreadable — `check_scope`
+  exits 2 where it previously crashed and exited 1, which is strictly the safe
+  direction, since 1 is the code for a real finding. The other two are the
+  shared-classifier corrections above, which `verify_acceptance` inherits by
+  importing `classify`/`run_one`: the
   command-position interactive match (strictly more permissive — a 65-command
   differential fuzz found no command newly refused) and verbatim execution (see
   the migration note above, which is the one direction that can turn a

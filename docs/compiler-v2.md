@@ -173,7 +173,13 @@ rather than trusting the old block; nothing detects this for you, because the
 pointer carries no tool version. This is the one direction in which a
 previously-clean armed brief can turn red.
 
-The only verifier-path edits are the two shared-classifier corrections above:
+The verify path changes in exactly three places, all through shared modules —
+`check_scope.py` and `verify_acceptance.py` are themselves byte-identical to
+0.11.0. `load_brief` now reports a brief carrying a YAML tag the loader cannot
+construct as unreadable, so `check_scope` exits 2 where it previously crashed with
+a traceback and exit 1; since 1 is this repo's code for a real finding, that is
+strictly the safe direction and the only `check_scope` exit code that moved. The
+other two are the shared-classifier corrections above:
 `baseline.py`'s INTERACTIVE match (command-position, not substring) and `run_one`'s
 verbatim execution (which changes behavior only for a multi-line command — a single
 line is byte-identical after normalisation). `verify_acceptance.py` imports
