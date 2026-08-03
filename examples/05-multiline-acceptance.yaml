@@ -1,28 +1,29 @@
-# 02-must-flip — a criterion that is red today, and turning it green is the goal
+# 05-multiline-acceptance — a multi-line command, measured and rendered verbatim
 #
 # The `baseline:` block below was measured, not written: it is what baseline.py
 # recorded against the fixture repo in tests/fixtures.py. Reproduce with
 #   python3 tests/examples.py --regenerate
-goal: Fix the off-by-one in src/cart.total().
+goal: Add a count() helper to src/cart.py.
 scope:
   - src/cart.py
 forbidden:
   - tests/**
 tests_policy: immutable
 acceptance:
-  - cmd: python3 -m unittest -q tests.test_total
+  - cmd: |
+      STATUS="cart  ok"
+      test "$STATUS" = "cart  ok"
     expect: exit 0
-    transition: flip
   - cmd: python3 -m unittest -q tests.test_cart
     expect: exit 0
 manual_checks:
-  - read the diff of src/cart.py and confirm only the arithmetic moved
+  - done: the diff adds count() to src/cart.py
 autonomy: ask
 base_rev: 21561245bf73
 baseline:
-  - cmd: "python3 -m unittest -q tests.test_total"
-    status: fail
-    evidence: "exit 1, 0 line(s) stdout, 0.3s"
+  - cmd: "STATUS=\"cart ok\" test \"$STATUS\" = \"cart ok\""
+    status: pass
+    evidence: "exit 0, 0 line(s) stdout, 0.0s"
   - cmd: "python3 -m unittest -q tests.test_cart"
     status: pass
     evidence: "exit 0, 0 line(s) stdout, 0.3s"

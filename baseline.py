@@ -20,8 +20,10 @@ brief is a local file you wrote. Never run this against a brief from someone els
 """
 import hashlib
 import json
+import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -49,9 +51,50 @@ DESTRUCTIVE = re.compile(
     r"git\s+reset\s+--hard|git\s+clean\s+-\w*[fd]|\bdeploy\b|terraform\s+apply|"
     r"kubectl\s+(apply|delete)|npm\s+publish|cargo\s+publish|alembic\s+upgrade|"
     r"prisma\s+migrate\s+deploy|flyway\s+migrate|\bmkfs\b|\bdd\s+if=", re.I)
-INTERACTIVE = re.compile(
-    r"\b(vim?|nano|emacs|less|more|top|htop|ssh|sudo|su)\b|--interactive\b|\bgit\s+rebase\s+-i|"
-    r"\bread\s+-p|\bgh\s+auth\s+login|\bnpx\s+.*--watch|--watch\b|\bwatch\b", re.I)
+# Tools that are interactive when *executed* — matched only in command position
+# (see `_command_words`), never as an argument. E1's T06 baseline refused
+# `stubtest more_itertools.more more_itertools.recipes` as "interactive (`more`)":
+# a pager name inside a module path is a string, not a pager.
+INTERACTIVE_TOOLS = frozenset(
+    ("vi", "vim", "nano", "emacs", "less", "more", "top", "htop", "ssh", "sudo",
+     "su", "watch"))
+# Flags and idioms that mean interactive/long-running wherever they appear.
+INTERACTIVE_FLAGS = re.compile(
+    r"--interactive\b|\bgit\s+rebase\s+-i|\bread\s+-p|\bgh\s+auth\s+login|--watch\b",
+    re.I)
+# Wrappers that pass execution through to the next word on the line.
+COMMAND_PREFIXES = frozenset(("env", "command", "nohup", "time", "exec", "xargs"))
+
+
+def _command_words(cmd):
+    """The word in executable position of each simple command in a shell line.
+
+    Split on the shell's command separators, then take the first word of each
+    segment that is not an environment assignment or a pass-through wrapper.
+    This does not parse quoting — a separator inside a quoted string still
+    splits — which errs toward one extra candidate word, never a missed one."""
+    words = []
+    for segment in re.split(r"\|\||&&|;|\||\$\(|`|\n", str(cmd)):
+        for token in segment.strip().split():
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", token):
+                continue
+            name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if name in COMMAND_PREFIXES:
+                continue
+            words.append(name)
+            break
+    return words
+
+
+def interactive_hit(cmd):
+    """Why this command counts as interactive, or None."""
+    m = INTERACTIVE_FLAGS.search(str(cmd))
+    if m:
+        return m.group(0).strip()
+    for word in _command_words(cmd):
+        if word in INTERACTIVE_TOOLS:
+            return word
+    return None
 WRITES_REPO = re.compile(
     r"git\s+(commit|checkout|switch|apply|stash|merge|rebase|cherry-pick|add)\b|"
     r"\bsed\s+-i|\b(pip|npm|yarn|pnpm|bun|cargo|go)\s+(install|add|get)\b|"
@@ -73,9 +116,12 @@ def classify(entry):
     m = DESTRUCTIVE.search(cmd)
     if m:
         return f"destructive command (`{m.group(0).strip()}`); not run for a baseline"
-    m = INTERACTIVE.search(cmd)
-    if m:
-        return f"interactive or long-running (`{m.group(0).strip()}`)"
+    # The raw text, not the normalised one: a newline is a command separator, so
+    # `foo\nmore x` puts `more` in executable position and normalising first would
+    # hide that from the command-position scan.
+    hit = interactive_hit(str(entry.get("cmd") or ""))
+    if hit:
+        return f"interactive or long-running (`{hit}`)"
     m = WRITES_REPO.search(cmd)
     if m:
         return f"writes to the repository (`{m.group(0).strip()}`); HEAD must stay untouched"
@@ -83,6 +129,114 @@ def classify(entry):
     if m:
         return (f"needs a service or the network (`{m.group(0).strip()}`) — declare "
                 "`requires: [network]` or `[services]` if that is intended")
+    return None
+
+
+# --- workspace-consistency probe (E1, T05) ---------------------------------------
+# The compiled T05 contract's baseline was measured against the system site-packages
+# copy of the library — which already contained the upstream fix — so a green
+# baseline signed off code nobody was modifying. When a command exercises a package
+# this checkout itself defines, the import must resolve into this checkout; if it
+# resolves elsewhere, the measurement describes the wrong code and is refused as
+# unclassified rather than recorded. Deliberately narrow: explicit python/py
+# interpreters only, and only imports the evidence ties to the repo's own packages.
+# A bare `pytest`/`tox` entry point, or a script argument, is not probed — their
+# interpreter is not knowable from the command line, and guessing would probe the
+# wrong environment.
+
+PYTHON_INTERP = re.compile(r"^(python(\d+(\.\d+)?)?|py)(\.exe)?$", re.I)
+TEST_RUNNER_MODULES = ("pytest", "unittest")
+_PROBE_CACHE = {}
+
+
+def workspace_packages(root, cwd):
+    """Top-level package names this checkout itself defines: a directory with an
+    __init__.py at the repo root, under src/, or the same pair under the entry's
+    cwd (monorepos). Existence of the name is what creates the shadowing hazard."""
+    names = set()
+    for base in (root, root / "src", cwd, cwd / "src"):
+        try:
+            children = list(base.iterdir()) if base.is_dir() else []
+        except OSError:
+            children = []
+        for child in children:
+            if child.is_dir() and (child / "__init__.py").is_file():
+                names.add(child.name)
+    return names
+
+
+def _probe_plan(entry, packages):
+    """(interpreter, package names to probe), or None when the command gives no
+    evidence of exercising a workspace package through an explicit interpreter."""
+    raw = str(entry.get("cmd") or "")
+    try:
+        tokens = shlex.split(raw, posix=True)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    name = tokens[0].replace("\\", "/").rsplit("/", 1)[-1]
+    if not PYTHON_INTERP.match(name):
+        return None
+    args = tokens[1:]
+    for i, tok in enumerate(args):
+        if tok == "-m" and i + 1 < len(args):
+            module = args[i + 1].split(".")[0]
+            if module in TEST_RUNNER_MODULES:
+                # the repo's own suite exercises the repo's own packages
+                return tokens[0], sorted(packages)
+            if module in packages:
+                return tokens[0], [module]
+            return None
+        if tok == "-c" and i + 1 < len(args):
+            named = sorted(p for p in packages
+                           if re.search(rf"\b{re.escape(p)}\b", args[i + 1]))
+            return (tokens[0], named) if named else None
+    return None
+
+
+def import_origin(interp, package, cwd):
+    """Where `import <package>` under this interpreter resolves, or None when the
+    probe is inconclusive (interpreter missing, package not importable at all)."""
+    key = (interp, package, str(cwd))
+    if key not in _PROBE_CACHE:
+        code = (f"import {package}, os; print(os.path.abspath((getattr({package}, "
+                f"'__file__', None) or (list(getattr({package}, '__path__', [])) "
+                f"or [''])[0]) or ''))")
+        try:
+            # Through the shell like the measurement itself, so PATH resolves the
+            # interpreter token the same way the acceptance command will.
+            r = subprocess.run(f'{interp} -c "{code}"', shell=True, cwd=str(cwd),
+                               capture_output=True, encoding="utf-8",
+                               errors="replace", timeout=30)
+            out = (r.stdout or "").strip()
+            _PROBE_CACHE[key] = out if r.returncode == 0 and out else None
+        except (subprocess.TimeoutExpired, OSError):
+            _PROBE_CACHE[key] = None
+    return _PROBE_CACHE[key]
+
+
+def workspace_mismatch(root, entry):
+    """Why this measurement would describe an installed copy instead of this
+    checkout, or None. Only fires on positive evidence: the repo defines the
+    package, the command exercises it, and the import resolves outside the repo."""
+    cwd = root / norm_cwd(entry.get("cwd"))
+    packages = workspace_packages(root, cwd)
+    if not packages:
+        return None
+    plan = _probe_plan(entry, packages)
+    if not plan:
+        return None
+    interp, targets = plan
+    real_root = os.path.realpath(root)
+    for package in targets:
+        origin = import_origin(interp, package, cwd)
+        if origin and not os.path.realpath(origin).startswith(real_root + os.sep):
+            return (f"`import {package}` under `{interp}` resolves to {origin} — "
+                    "outside this workspace, so the measurement would describe an "
+                    "installed copy, not the checkout under modification. Point the "
+                    "command at the workspace copy (install it editable, or fix the "
+                    "interpreter/PYTHONPATH), then re-run")
     return None
 
 
@@ -103,6 +257,13 @@ def verdict(expect, rc, stdout):
 
 def run_one(root, entry):
     cmd = norm_cmd(entry.get("cmd"))
+    # What runs is the brief's command verbatim, not the whitespace-normalised
+    # display/keying form: newlines and doubled spaces inside quotes are shell
+    # syntax, and E1 showed a flattened multi-line command is a *different*
+    # command — three delivered contracts carried criteria that could never
+    # execute as communicated. `cmd` stays the normalised spelling for display
+    # and for the (cmd, cwd) key the baseline block and renderer match on.
+    script = str(entry.get("cmd") or "")
     cwd = root / norm_cwd(entry.get("cwd"))
     timeout = entry.get("timeout") if isinstance(entry.get("timeout"), int) else DEFAULT_TIMEOUT
     if not cwd.is_dir():
@@ -114,7 +275,7 @@ def run_one(root, entry):
         # this repo's fixtures are Czech, the locale default would decode them as cp1252
         # on Windows, and a suite that prints a byte nobody can decode must still be
         # measurable — `evidence` is a line count and an exit code, not a transcript.
-        r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True,
+        r = subprocess.run(script, shell=True, cwd=str(cwd), capture_output=True,
                            encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"status": "not_runnable",
@@ -246,7 +407,14 @@ def main(argv):
     for a in acceptance_entries(brief):
         cmd, cwd = norm_cmd(a.get("cmd")), norm_cwd(a.get("cwd"))
         why = classify(a)
-        res = {"status": "not_runnable", "reason": why} if why else run_one(root, a)
+        if why:
+            res = {"status": "not_runnable", "reason": why}
+        else:
+            mismatch = workspace_mismatch(root, a)
+            # unclassified (exit 1), not a recorded status: a number measured
+            # against the wrong copy is worse than no number at all
+            res = ({"status": None, "reason": mismatch} if mismatch
+                   else run_one(root, a))
         res.update({"cmd": cmd, "cwd": cwd, "transition": effective_transition(a)})
         results.append(res)
 

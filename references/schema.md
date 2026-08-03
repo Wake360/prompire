@@ -16,9 +16,9 @@ Unknown keys are a warning, not an error: the renderer drops them.
 | `acceptance` | yes | list of entries | the criteria (below) |
 | `baseline` | in practice | list of entries | what each criterion said on HEAD (below) |
 | `autonomy` | yes | `manual`\|`ask`\|`auto` | `auto` also requires `rollback` |
-| `plan_first` | no | bool | agent produces a plan and stops |
+| `plan_first` | no | bool (a real boolean; B8 rejects a quoted string) | one extra stop inside a writing run: plan, get it approved, then edit. Requires an operator present mid-run — see *Execution modes* below. A compiled draft marks it for confirmation |
 | `rollback` | if `auto` | string | the branch or worktree that makes this undoable |
-| `manual_checks` | no | list of strings | what only a human can confirm |
+| `manual_checks` | no | list of strings, or `- done: <text>` mappings | what only a human can confirm. A plain string is a review note. The `done:` spelling is the human's declaration that this judgment is the task's completion condition — the only manual shape B17 accepts as carrying done-ness, and one a compiler proposal may not contain |
 | `tests_policy` | see B7 | enum | `immutable`\|`named`\|`authoring` |
 | `tests_editable` | if `named`/`authoring` | list of globs | the only test paths that may change |
 | `oracle` | if `authoring` | string | what judges the work when the local suite cannot |
@@ -37,10 +37,28 @@ Field by field, the authority classes are:
 
 | class | fields | what enforces it |
 |---|---|---|
-| propose, human confirms | `scope`, `forbidden`, `constraints`, `tests_policy` (≠ immutable), `tests_editable`, `oracle`, `acceptance` entries — with every sub-key that moves what the criterion decides (`expect`, `requires`, `transition`, `before_after`, `cwd`, `timeout`) named on the marked line — `manual_checks`, `context` | serialized with `# prompire:unconfirmed` *and* listed in the `unconfirmed:` ledger; `prepare`, `lint` (B18) and `--activate` all refuse while either remains |
-| propose, no marker | `goal` (rewritten into the draft for editing), `plan_first` (only adds a gate), `rollback` (inert below `autonomy: auto`) | the linter's ordinary rules. `goal` buys nothing on its own: B17 stopped accepting a behavior-preserving word there as evidence of done-ness precisely because no marker covers this field |
+| propose, human confirms | `scope`, `forbidden`, `constraints`, `tests_policy` (≠ immutable), `tests_editable`, `oracle`, `acceptance` entries — with every sub-key that moves what the criterion decides (`expect`, `requires`, `transition`, `before_after`, `cwd`, `timeout`) named on the marked line — `manual_checks`, `context`, `plan_first` | serialized with `# prompire:unconfirmed` *and* listed in the `unconfirmed:` ledger; `prepare`, `lint` (B18) and `--activate` all refuse while either remains. `plan_first` moved into this class after E1: the one unmarked field determined every delivered execution outcome — a plan gate stops an unattended run, so it is the human's decision, never furniture copied from an example. A proposal's `plan_first` must be a real boolean; a truthy string is refused at the parse |
+| propose, no marker | `goal` (rewritten into the draft for editing), `rollback` (inert below `autonomy: auto`) | the linter's ordinary rules. `goal` buys nothing on its own: B17 stopped accepting a behavior-preserving word there as evidence of done-ness precisely because no marker covers this field |
 | clamped | `autonomy` | a draft always says `ask`; raising it is a human edit to the confirmed brief |
 | measured, never proposed | `baseline`, `base_rev`, `dirty_baseline` | a proposal carrying one is rejected outright — these are written by `baseline.py` and read against the pin |
+| human-only, never proposed | the `done:` spelling of a `manual_checks` entry | a proposal carrying one is rejected outright — declaring that a human judgment is what decides done is the human's own act, not a line to confirm (B17) |
+
+## Execution modes — plan_first and autonomy
+
+Two fields describe how a run proceeds, and they answer different questions.
+
+`autonomy` is who acts: `manual` — the agent proposes and never writes (the plan *is*
+the deliverable, reviewed between runs); `ask` — the agent confirms risky steps with an
+operator who is present; `auto` — the agent runs unattended on `rollback`.
+
+`plan_first: true` is one extra stop inside a writing run: produce the plan, get it
+approved, then edit. It requires an operator mid-run by definition. That is why a
+compiled draft marks it for confirmation: delegated work is often fire-and-forget, and
+a session with nobody there to approve stalls at the gate and delivers nothing — E1
+measured exactly that, eight tasks out of eight. Keep it only for an attended run;
+delete it for unattended delegation and let the confirmed contract be the control.
+The renderer emits the approval stop only for a literal boolean `true` (B8 rejects
+anything else), and a brief without the field renders with no mid-run stop at all.
 
 Confirmation is the *absence* of both records, and Prompire owns the serialization:
 model comments never survive the parse, so model output cannot manufacture a confirmed
@@ -53,11 +71,11 @@ refuses to prepare or arm.
 
 | field | required | meaning |
 |---|---|---|
-| `cmd` | yes | the command you would actually run. A shell command line: pipes and redirects are part of it |
+| `cmd` | yes | the command you would actually run. A shell command line: pipes, redirects, quoting and newlines are part of it. It executes **verbatim** — `baseline.py` and `verify` run the exact text, and every renderer shows a multi-line command as a verbatim block (E1: flattening one produced a different, invalid command). Only matching on the `(cmd, cwd)` key is whitespace-normalised |
 | `expect` | yes | the observable result, in prose a human reads |
 | `cwd` | no | repo-relative directory to run it in; default `.` |
 | `timeout` | no | positive whole seconds; default 300 in `baseline.py` |
-| `requires` | no | `network`, `credentials`, `services`, `docker`, `database`, `display`, `interactive`, `writes-repo`, `manual`. Any entry means `baseline.py` will not run it |
+| `requires` | no | `network`, `credentials`, `services`, `docker`, `database`, `display`, `interactive`, `writes-repo`, `manual`. Any entry means `baseline.py` (and `verify`) will not run it — which is why a value outside this vocabulary is a lint error (B5), not a warning: a typo would silently disable the criterion |
 | `transition` | no | `green` (default), `flip`, `hold` — see below |
 | `before_after` | no | its stdout must reproduce the digest recorded in the baseline |
 | `must_flip` | legacy | the pre-2026-07-27 spelling of `transition: flip`; accepted, warned |
@@ -78,6 +96,17 @@ grep in the `cmd` and expect its exit code.
 declares. Everything else — a virtualenv, a running service, credentials — is declared
 by naming it in `requires`, which makes the baseline `not_runnable` with that reason
 instead of running something that will fail for the wrong reason.
+
+**Workspace consistency (Python).** When a command exercises a package this checkout
+itself defines — an explicit `python`/`py` interpreter importing it in `-c`, running
+it with `-m`, or running `-m pytest`/`-m unittest` in a repo that defines packages —
+`baseline.py` first probes where that import resolves. If it resolves outside the
+checkout (a site-packages copy shadowing an uninstalled `src/` layout), the criterion
+is refused as unclassified instead of measured: E1's T05 baseline signed off the
+system copy of the library, which already contained the fix. A workspace copy that
+shadows an installed one, and imports of dependencies the repo does not define, are
+untouched. A bare `pytest`/`tox` entry point is not probed — its interpreter is not
+knowable from the command line, and that gap is documented rather than guessed at.
 
 ## Transitions
 

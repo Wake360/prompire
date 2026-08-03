@@ -1,0 +1,24 @@
+Add a count() helper to src/cart.py.
+
+Files you may edit:
+- src/cart.py
+
+Never touch:
+- tests/**
+
+Done when all of these hold:
+1. the command below → exit 0 (green today; keep it green):
+```
+STATUS="cart  ok"
+test "$STATUS" = "cart  ok"
+```
+2. `python3 -m unittest -q tests.test_cart` → exit 0 (green today; keep it green)
+
+Human review — no command covers these:
+- the diff adds count() to src/cart.py
+
+Do not create, edit, rename or delete any test file.
+
+Ask before any risky or hard-to-undo step. The listed paths are the whole boundary: widening it needs a revised brief, not a yes in chat.
+
+After you stop, <SKILL>/check_scope.py examples/05-multiline-acceptance.yaml` checks the real git diff from outside. A file changed outside the list above fails it. Do not edit the brief or Prompire's state files.

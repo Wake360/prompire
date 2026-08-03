@@ -3,6 +3,78 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## 0.12.0 — 2026-08-03
+
+**Compiler v2: the five defects E1 reproduced, closed. No new capability — the
+pipeline is harder to fool, harder to mis-deliver, and easier to test fairly. E1's
+verdict stands; nothing here claims outcomes until E2 runs.**
+
+### Changed — trust model
+
+- `plan_first` moved into the confirmation-required class. E1's one unmarked field
+  determined every delivered execution outcome: all eight compile agents copied
+  `plan_first: true` from the skill example, and every headless session stalled at
+  "Get the plan approved". A proposal's `plan_first` now comes back marked
+  `# prompire:unconfirmed` and listed in the ledger, must be a real boolean (a
+  quoted string is refused at the parse, and B8 errors on it in a hand-written
+  brief), and the renderer emits the approval stop only for a literal `true`.
+  `references/schema.md` documents the execution-mode state machine — `autonomy`
+  is who acts, `plan_first` is one extra mid-run stop that requires an operator.
+  B10 no longer demands a plan gate at `autonomy: manual`, which never writes.
+- B17 stopped accepting a manual check's mere existence as a carrier of done-ness.
+  E1's T05 and T08 armed with every criterion green on untouched HEAD because a
+  non-empty `manual_checks` silenced the rule — and the compiler writes those lines
+  freely. The carrier is now the `done:` spelling (`- done: <text>`), a
+  human-only declaration: `draft` rejects any proposal whose manual entries are not
+  plain strings, so the classification cannot be proposed and rubber-stamped back
+  in. Plain strings remain review notes; `hold`, `before_after` and flip criteria
+  are unchanged, so preserve-behavior tasks stay expressible.
+- `B5 unknown-requires` is an error, not a warning. Any `requires` entry makes
+  `baseline.py` and `verify` refuse to run the command, so an out-of-vocabulary
+  value (E1's T07 gold brief shipped a file path there) silently converts the
+  criterion into one nothing ever executes.
+
+### Changed — delivery fidelity
+
+- Acceptance commands execute and render verbatim. `run_one` runs the brief's
+  exact text instead of the whitespace-normalised display form, and every renderer
+  target shows a multi-line command as a fenced verbatim block ("the command
+  below") instead of flattening it — E1 delivered a never-passing criterion in 3
+  of 7 prompts that way, and the measured baseline itself ran a different command
+  than the brief declared. `(cmd, cwd)` keying stays normalised, so baselines
+  still match their criteria.
+- The 250-word render budget is checked at compile time. `draft` previews every
+  prompt target through `render_brief.preview_counts()` — the renderer itself over
+  a provisional baseline synthesized from each criterion's declared transition, so
+  there is no second budget arithmetic to drift (pinned by a test) — and reports
+  the overrun with per-section word attribution before any confirmation effort is
+  spent. E1's eight briefs all discovered the budget at handoff; T06 burned its
+  whole confirmation budget without ever producing a prompt. The budget itself is
+  unchanged, `prepare` still refuses, and the preview measures and executes
+  nothing.
+- The INTERACTIVE heuristic matches command position, not substrings. E1's T06
+  baseline refused `stubtest more_itertools.more …` as "interactive (`more`)"; a
+  pager name is interactive where a shell would execute it (first word of a
+  segment, after pipes/`;`/`&&`), not as an argument, module path or quoted text.
+  `--interactive`, `--watch`, `git rebase -i` and friends still match anywhere.
+  This also closes 2 of E1's 4 GOLD verify false-negatives, which were this same
+  false positive reached through `verify_acceptance`.
+- `baseline.py` probes workspace consistency for Python. When a command exercises
+  a package this checkout itself defines (an explicit `python`/`py` importing it
+  via `-c`/`-m`, or `-m pytest`/`-m unittest` in a repo defining packages) and the
+  import resolves outside the checkout, the criterion is refused as unclassified
+  instead of measured — E1's T05 baseline signed off the system site-packages copy
+  of click, which already contained the upstream fix. A workspace copy shadowing
+  an installed one, and dependencies the repo does not define, are untouched; a
+  bare `pytest` entry point is a documented gap, not a guess.
+
+### Verifier
+
+- Unchanged, except the two shared-classifier corrections above (`more`
+  false-positive; verbatim execution), each a bounded fix of a reproduced defect
+  with the regression direction pinned by tests. The scope guard, the pin, the
+  digest and `check_scope.py` verdict semantics did not move.
+
 ## 0.11.0 — 2026-08-03
 
 **The compiler proposes; the human and the deterministic checks establish

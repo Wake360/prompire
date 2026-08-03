@@ -1,14 +1,21 @@
-# Checklist — 03-known-red-hold
+# Checklist — 05-multiline-acceptance
 
 Run from the repo root. Every box is something you can see for yourself.
 
-- [ ] `python3 <SKILL>/check_scope.py examples/03-known-red-hold.yaml`
+- [ ] `python3 <SKILL>/check_scope.py examples/05-multiline-acceptance.yaml`
       → `0 violation(s)`. Checks the scope, the forbidden paths and the tests policy
         against the real diff. Independent of anything the agent reported.
 
+- [ ] the command below → exit 0
+      → was green; must still be green
+```
+STATUS="cart  ok"
+test "$STATUS" = "cart  ok"
+```
 - [ ] `python3 -m unittest -q tests.test_cart` → exit 0
       → was green; must still be green
-- [ ] `python3 -m unittest -q tests.test_legacy` → exit 1 — the one known failure, unchanged
-      → must stay exactly as measured (exit 1, 0 line(s) stdout, 0.3s) — do not 'fix' it. A different result is a regression even if it looks better
+
+Manual — no command covers these:
+- [ ] the diff adds count() to src/cart.py ← this judgment is what decides done
 
 If any box is unchecked, the task is not done regardless of what the agent reported.

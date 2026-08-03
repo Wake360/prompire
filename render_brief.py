@@ -24,6 +24,8 @@ from brief_common import (
     effective_transition,
     entry_key,
     load_brief,
+    manual_check_entries,
+    manual_check_texts,
     norm_cmd,
     norm_cwd,
     tests_policy_of,
@@ -107,20 +109,38 @@ def state_of(brief, entry):
     return ("must pass", f"baseline: {status or 'unrecorded'}")
 
 
+def cmd_block(entry):
+    """The brief's command exactly as written when one line cannot show it, else None.
+
+    Newlines and repeated spaces inside quotes are shell syntax: E1's renderer
+    flattened multi-line commands into invalid one-liners, so three delivered
+    prompts carried a criterion that could never execute as communicated. What the
+    runner executes (`baseline.run_one`) is the verbatim text, and what a prompt
+    communicates must be the same command."""
+    raw = str(entry.get("cmd") or "").strip("\n")
+    return raw if "\n" in raw else None
+
+
 def criteria_lines(brief, long=False):
     out = []
     for a in acceptance_entries(brief):
-        cmd = norm_cmd(a.get("cmd"))
         cwd = norm_cwd(a.get("cwd"))
         where = f" (in {cwd}/)" if cwd != "." else ""
         short, longer = state_of(brief, a)
-        out.append((f"`{cmd}`{where} → {a.get('expect')}", longer if long else short))
+        block = cmd_block(a)
+        label = "the command below" if block else f"`{norm_cmd(a.get('cmd'))}`"
+        out.append((f"{label}{where} → {a.get('expect')}",
+                    longer if long else short, block))
     return out
 
 
 def numbered(brief):
-    return [f"{i}. {cmd} ({note})"
-            for i, (cmd, note) in enumerate(criteria_lines(brief), 1)]
+    lines = []
+    for i, (head, note, block) in enumerate(criteria_lines(brief), 1):
+        lines.append(f"{i}. {head} ({note})" + (":" if block else ""))
+        if block:
+            lines += ["```", *block.splitlines(), "```"]
+    return lines
 
 
 def _bullets(title, items, prefix="- "):
@@ -148,7 +168,7 @@ def render_prompt(brief, brief_path, flavour):
         lines += ["Done when all of these hold:"]
     lines += numbered(brief)
     lines.append("")
-    manual = [str(m) for m in as_list(brief.get("manual_checks"))]
+    manual = manual_check_texts(brief)
     if flavour == "codex":
         lines += _bullets("## Human review — no command covers these", manual)
     else:
@@ -156,7 +176,9 @@ def render_prompt(brief, brief_path, flavour):
     ts = tests_sentence(brief)
     if ts:
         lines += [ts, ""]
-    if brief.get("plan_first"):
+    # `is True`, not truthy: a quoted "false" is a truthy string, and the lint (B8)
+    # refuses it — rendering must not turn that accident into a mid-run stop.
+    if brief.get("plan_first") is True:
         lines += ["Get the plan approved before editing anything.", ""]
     lines += [autonomy_sentence(brief), ""]
     rel = brief_path if flavour != "generic" else "the brief"
@@ -188,9 +210,16 @@ def render_durable(brief, heading):
     ts = tests_sentence(brief)
     if ts:
         lines += ["## Tests", ts, ""]
-    verify = [f"- `{norm_cmd(a.get('cmd'))}` → {a.get('expect')}"
-              for a in acceptance_entries(brief)
-              if effective_transition(a, baseline_map(brief).get(entry_key(a))) != "hold"]
+    verify = []
+    for a in acceptance_entries(brief):
+        if effective_transition(a, baseline_map(brief).get(entry_key(a))) == "hold":
+            continue
+        block = cmd_block(a)
+        if block:
+            verify += [f"- the command below → {a.get('expect')}",
+                       "```", *block.splitlines(), "```"]
+        else:
+            verify.append(f"- `{norm_cmd(a.get('cmd'))}` → {a.get('expect')}")
     if verify:
         lines += ["## Verify", *verify, ""]
     lines += ["<!-- The task-specific half of the brief is deliberately absent here: it "
@@ -214,13 +243,17 @@ def render_checklist(brief, brief_path, guard=None):
              "tests policy",
              "        against the real diff. Independent of anything the agent reported.",
              ""]
-    for cmd, note in criteria_lines(brief, long=True):
-        lines.append(f"- [ ] {cmd}")
+    for head, note, block in criteria_lines(brief, long=True):
+        lines.append(f"- [ ] {head}")
         lines.append(f"      → {note}")
-    manual = [str(m) for m in as_list(brief.get("manual_checks"))]
+        if block:
+            lines += ["```", *block.splitlines(), "```"]
+    manual = manual_check_entries(brief)
     if manual:
         lines += ["", "Manual — no command covers these:"]
-        lines += [f"- [ ] {m}" for m in manual]
+        for text, carries_done, _ in manual:
+            suffix = " ← this judgment is what decides done" if carries_done else ""
+            lines.append(f"- [ ] {text}{suffix}")
     policy = tests_policy_of(brief)
     if policy in ("named", "authoring"):
         lines += ["", "Read yourself — the guard cannot judge it:",
@@ -229,6 +262,52 @@ def render_checklist(brief, brief_path, guard=None):
     lines += ["", "If any box is unchecked, the task is not done regardless of what the "
               "agent reported."]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def preview_counts(brief, brief_path, targets=PROMPT_TARGETS):
+    """Word count per prompt target for a brief whose baseline is not measured yet.
+
+    This is the compile-time budget gate (E1: all eight compiled briefs blew the
+    250-word budget, discovered only at handoff, after the confirmation effort was
+    already spent). It reuses `render` itself — the authority for rendered bytes —
+    over a provisional baseline synthesized from each criterion's own declared
+    transition, so there is no second budget arithmetic to drift. A flip criterion
+    is synthesized `not_runnable`, whose state label is the longest of flip's two
+    measured spellings: the preview may overcount by one word per flip, and can
+    never undercount. Nothing here runs a command or touches the tree.
+    """
+    provisional = []
+    for a in acceptance_entries(brief):
+        entry = {"cmd": a.get("cmd")}
+        if a.get("cwd") is not None:
+            entry["cwd"] = a.get("cwd")
+        if effective_transition(a) == "flip":
+            entry.update(status="not_runnable", reason="preview")
+        else:
+            entry.update(status="pass", evidence="preview")
+        provisional.append(entry)
+    data = {k: v for k, v in brief.items()
+            if k not in ("baseline", "base_rev", "dirty_baseline")}
+    data["baseline"] = provisional
+    return {t: len(render(data, brief_path, t).split()) for t in targets}
+
+
+def budget_attribution(brief):
+    """(section, words) pairs summing the budget a prompt spends, built from the
+    same helpers the prompt renderer uses. Coarse on purpose: enough to tell a
+    human *what* to cut, not a second renderer."""
+    sections = [
+        ("goal", len(str(brief.get("goal") or "").split())),
+        ("boundary", len(" ".join(str(s) for s in as_list(brief.get("scope"))
+                                  + as_list(brief.get("forbidden"))).split())),
+        ("constraints", len(" ".join(str(c) for c in
+                                     as_list(brief.get("constraints"))).split())),
+        ("criteria", len("\n".join(numbered(brief)).split())),
+        ("manual checks", len(" ".join(manual_check_texts(brief)).split())),
+        ("tests", len(tests_sentence(brief).split())),
+        ("context", len(str(brief.get("context") or "").split())),
+    ]
+    return [(name, words) for name, words in sections if words]
 
 
 def render(brief, brief_path, target):

@@ -16,7 +16,11 @@ These hold for every target and are asserted in `tests/golden.py`:
 2. **Every criterion carries its state**: green today and must stay green, red today and
    must end green, or frozen exactly as measured. A bare list of commands loses the only
    distinction the reviewer needs.
-3. **Prompts stay under 250 words.** Over budget is exit 1, not a warning.
+3. **Prompts stay under 250 words.** Over budget is exit 1, not a warning. The same
+   budget is checked at compile time: `prompire draft` previews every prompt target
+   with `preview_counts()` — the renderer itself over a provisional baseline — and
+   reports the overrun with per-section attribution *before* any confirmation effort
+   is spent (E1: all eight compiled briefs learned the budget only at handoff).
 4. **No role-play, no motivation, no restated field.** "You are a senior engineer" buys
    nothing and costs words.
 5. **Manual checks appear as manual, in every prompt target.** Rendered under a Human
@@ -28,6 +32,13 @@ These hold for every target and are asserted in `tests/golden.py`:
 7. **A prompt says what is checked, never what is not.** The hook's blind spots are
    documented in `references/threat-model.md`, for the operator deciding whether to
    deploy. Naming them in the prompt hands the running agent a route and buys nothing.
+8. **A multi-line command renders verbatim.** Newlines and quoting are shell syntax,
+   so any target that shows a command shows the brief's text exactly — one line
+   inline in backticks, more than one as a fenced block introduced by "the command
+   below". Flattening produced a *different*, invalid command in 3 of E1's 7
+   delivered prompts. The runner executes the same verbatim text
+   (`baseline.run_one`), so the command measured, the command communicated, and the
+   command verified are one command.
 
 ## The targets
 

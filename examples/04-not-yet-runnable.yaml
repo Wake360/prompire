@@ -17,7 +17,7 @@ acceptance:
     expect: exit 0
     transition: flip
 autonomy: ask
-base_rev: 80e4d7cbc050
+base_rev: 21561245bf73
 baseline:
   - cmd: "python3 -m unittest -q tests.test_cart"
     status: pass

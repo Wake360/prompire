@@ -391,6 +391,11 @@ acceptance:
 autonomy: ask
 """, ["B5"], [], []),
 
+    # E1, T07 GOLD: `requires: [tests/test_orderedset.py]` — a path, not a vocabulary
+    # word — armed, and both baseline and verify then refused to run the criterion,
+    # so the contract's only executable check was one nothing ever executed. A
+    # declared requires disables execution by design; an unrecognized value doing
+    # that silently is an error, not a style note.
     ("unknown-requires-token", """
 goal: Add a --json flag to the report CLI.
 scope: [src/cli/report.py]
@@ -400,7 +405,7 @@ acceptance:
     expect: exit 0
     requires: [quantum-annealer]
 autonomy: ask
-""", [], ["B5"], []),
+""", ["B5"], [], []),
 
     # --- B7, the three arrangements --------------------------------------------------
 
@@ -622,7 +627,11 @@ baseline:
 autonomy: ask
 """, [], [], ["B17"]),
 
-    ("manual-checks-carry-doneness", """
+    # E1's T05 and T08 armed with every criterion green on untouched HEAD because a
+    # non-empty manual_checks suppressed B17. A manual check *existing* proves
+    # nothing; only the human's own `done:` spelling declares that this judgment is
+    # the completion condition — and a compiler proposal cannot carry that spelling.
+    ("manual-check-strings-do-not-carry-doneness", """
 goal: Add a retry to the upload client.
 scope: [src/upload.py]
 forbidden: [tests/**]
@@ -636,7 +645,65 @@ baseline:
 manual_checks:
   - the diff adds a retry loop to upload()
 autonomy: ask
+""", ["B17"], [], []),
+
+    ("manual-done-declaration-carries-doneness", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+baseline:
+  - cmd: pytest -q tests/test_upload.py
+    status: pass
+    evidence: exit 0, 1 passed
+manual_checks:
+  - done: the diff adds a retry loop to upload() and a test exercises it
+  - the changelog entry matches neighboring style
+autonomy: ask
 """, [], [], ["B17"]),
+
+    # the T05/T08 shape verbatim: authoring policy, a free-text oracle, review-style
+    # manual checks, acceptance green on HEAD. The oracle is the compiler's own
+    # prose, so it cannot stand in for a completion condition either.
+    ("authoring-oracle-manual-strings-still-vacuous", """
+goal: Preserve custom prompt validation errors when input is hidden.
+scope: [src/termui.py]
+forbidden: [src/core.py]
+tests_policy: authoring
+tests_editable: [tests/test_termui.py]
+oracle: author a test asserting the message appears in output
+acceptance:
+  - cmd: pytest -q tests/test_termui.py
+    expect: exit 0
+baseline:
+  - cmd: pytest -q tests/test_termui.py
+    status: pass
+    evidence: exit 0, 4 passed
+manual_checks:
+  - confirm the changelog gets a terse entry
+  - confirm no regression in hidden-input echo
+autonomy: ask
+""", ["B17"], [], []),
+
+    # a mapping that is not exactly `done: <text>` is neither a note nor a
+    # declaration — refuse it rather than guess which it meant to be
+    ("manual-check-shape-must-be-string-or-done", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+baseline:
+  - cmd: pytest -q tests/test_upload.py
+    status: pass
+    evidence: exit 0, 1 passed
+manual_checks:
+  - carries_done: the diff adds a retry loop
+autonomy: ask
+""", ["B17"], [], []),
 
     ("preserve-goal-green-is-legitimate", """
 goal: Refactor the report module into renderer and writer halves.
@@ -653,6 +720,32 @@ baseline:
     evidence: "exit 0, 2 line(s) stdout, 0.3s, sha256:2c913d0e74e2"
 autonomy: ask
 """, [], [], ["B17"]),
+
+    # autonomy: manual already decouples planning from execution — the run never
+    # writes — so B10 must not demand a mid-run approval stop on top of it
+    ("wide-manual-run-needs-no-plan-gate", """
+goal: Refactor the report module into renderer and writer halves.
+scope: [src/report.py, src/render.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: python -m src.report
+    expect: exit 0
+autonomy: manual
+""", [], [], ["B10"]),
+
+    # a truthy string is not a plan gate: YAML `plan_first: "false"` is truthy, and
+    # rendering it as a hard approval stop would gate execution on a typo
+    ("plan-first-string-is-an-error", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+tests_policy: immutable
+plan_first: "false"
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+autonomy: ask
+""", ["B8"], [], []),
 
     # before the baseline is measured, B17 stays silent — B15 owns that gap
     ("unmeasured-green-not-yet-vacuous", """

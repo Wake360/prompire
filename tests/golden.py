@@ -78,6 +78,13 @@ def wording_checks(name, target, text):
     if target in PROMPTS and name == "worked-example":
         if "<context>" not in text or "</context>" not in text:
             problems.append("context must be delimited as data, not instructions")
+    if name == "05-multiline-acceptance":
+        # E1: the renderer flattened multi-line commands into invalid one-liners.
+        # Every target that shows the command must show it verbatim — newlines and
+        # the doubled space inside the quotes intact.
+        if 'STATUS="cart  ok"\ntest "$STATUS" = "cart  ok"' not in text:
+            problems.append("multi-line command flattened or reflowed — the rendered "
+                            "command must be the brief's command verbatim")
     if target in ("agents.md", "claude.md"):
         for leaked in ("## Task", "autonomy", "baseline:", "Files you may edit"):
             if leaked.lower() in low:
@@ -87,6 +94,36 @@ def wording_checks(name, target, text):
             problems.append("checklist must start from the independent scope check")
         if "[ ]" not in text:
             problems.append("checklist has no boxes")
+    return problems
+
+
+def preview_drift_checks():
+    """The compile-time budget preview must reuse the renderer, not approximate it.
+
+    For every example: strip the measured block, run the preview, and compare with
+    the actual rendered word count. A flip criterion is previewed at its longest
+    state label ("cannot run yet…", 7 words) while a measured flip may read "fails
+    today…" (6), so the preview may exceed the real count by at most one word per
+    flip — and must never undercount, because undercounting is exactly the E1
+    failure: a contract confirmed at length that could not be rendered."""
+    sys.path.insert(0, str(SKILL))
+    import yaml
+    from brief_common import acceptance_entries, effective_transition
+    from render_brief import PROMPT_TARGETS, preview_counts, render
+    problems = []
+    for ex in sorted(EXAMPLES.glob("*.yaml")):
+        brief = yaml.safe_load(ex.read_text(encoding="utf-8"))
+        unmeasured = {k: v for k, v in brief.items()
+                      if k not in ("baseline", "base_rev", "dirty_baseline")}
+        flips = sum(1 for a in acceptance_entries(brief)
+                    if effective_transition(a) == "flip")
+        counts = preview_counts(unmeasured, str(ex))
+        for target in PROMPT_TARGETS:
+            actual = len(render(brief, str(ex), target).split())
+            drift = counts[target] - actual
+            if not 0 <= drift <= flips:
+                problems.append(f"{ex.stem}.{target}: preview {counts[target]} vs "
+                                f"rendered {actual} (allowed 0..+{flips})")
     return problems
 
 
@@ -119,7 +156,12 @@ def main():
     if regen:
         print(f"wrote {total} snapshots to {GOLDEN.relative_to(SKILL)}")
         return 0
-    print(f"{total - fails}/{total} renderer snapshots match")
+    drift = preview_drift_checks()
+    for p in drift:
+        print(f"FAIL  budget-preview  {p}")
+    fails += len(drift)
+    print(f"{total - fails}/{total} renderer snapshots match"
+          + ("" if drift else " and the budget preview tracks the renderer"))
     return 1 if fails else 0
 
 

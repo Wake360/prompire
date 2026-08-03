@@ -274,6 +274,39 @@ def acceptance_entries(brief):
     return out
 
 
+def manual_check_entries(brief):
+    """(text, carries_done, well_formed) per `manual_checks` entry.
+
+    A plain string is a review note. The mapping spelling `- done: <text>` is the
+    human's own declaration that this judgment is the task's completion condition —
+    the one shape B17 accepts as a carrier of done-ness when nothing mechanical
+    (a flip, a hold, a before/after comparison) distinguishes untouched HEAD from
+    done. E1 armed two contracts whose every criterion was green on HEAD because a
+    manual check merely *existing* silenced B17; existing is not carrying. The
+    spelling is deliberately not proposable: `prompire draft` rejects a proposal
+    whose manual entries are not plain strings, so the declaration can only be
+    written by the human editing the confirmed brief.
+
+    Any other mapping shape is malformed (well_formed False): neither a note nor a
+    declaration, and guessing which it meant to be would guess about authority.
+    """
+    out = []
+    for m in as_list(brief.get("manual_checks")):
+        if isinstance(m, dict):
+            if set(m) == {"done"} and str(m.get("done") or "").strip():
+                out.append((str(m["done"]).strip(), True, True))
+            else:
+                out.append((str(m), False, False))
+        else:
+            out.append((str(m), False, True))
+    return out
+
+
+def manual_check_texts(brief):
+    """The displayable text of every manual check, whatever its spelling."""
+    return [text for text, _, _ in manual_check_entries(brief)]
+
+
 def baseline_entries(brief):
     b = brief.get("baseline")
     if not isinstance(b, list):

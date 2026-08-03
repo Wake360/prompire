@@ -10,6 +10,6 @@ Run from the repo root. Every box is something you can see for yourself.
       → was green; must still be green
 
 Manual — no command covers these:
-- [ ] the diff adds count() to src/cart.py
+- [ ] the diff adds count() to src/cart.py ← this judgment is what decides done
 
 If any box is unchecked, the task is not done regardless of what the agent reported.

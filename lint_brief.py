@@ -33,6 +33,7 @@ from brief_common import (
     is_test_path,
     legacy_pinned,
     load_brief,
+    manual_check_entries,
     norm_cmd,
     tests_policy_of,
     utf8_stdio,
@@ -188,8 +189,15 @@ def check_acceptance(b, acceptance):
                 "positive whole number of seconds")
         for r in as_list(a.get("requires")):
             if str(r).strip().lower() not in REQUIRES_VOCAB:
-                warn("B5 unknown-requires", f"acceptance[{i}] requires `{r}` — not one of "
-                     + " | ".join(REQUIRES_VOCAB))
+                # any requires entry makes baseline AND verify refuse to run the
+                # command, so a typo here silently converts the criterion into one
+                # nothing ever executes (E1: a gold brief shipped a file path in
+                # `requires` and its only pytest criterion never ran again)
+                err("B5 unknown-requires", f"acceptance[{i}] requires `{r}` — not one of "
+                    + " | ".join(REQUIRES_VOCAB),
+                    "a declared requirement disables execution by design; name one "
+                    "of the known environment needs, or delete the entry so the "
+                    "command runs")
         t = str(a.get("transition") or "").strip().lower()
         if t and t not in TRANSITIONS:
             err("B5 bad-transition", f"acceptance[{i}] transition `{t}` — must be "
@@ -204,7 +212,9 @@ def check_acceptance(b, acceptance):
             err("B5 acceptance-not-a-command", f"acceptance[{i}] `{cmd[:60]}` reads as prose",
                 "the toolchain is the evaluator — give the command you would actually run")
         elif len(cmd.split()) >= 4 and not any(t.startswith("-") for t in cmd.split()) \
-                and "/" not in cmd and "." not in cmd:
+                and "/" not in cmd and "." not in cmd \
+                and "\n" not in str(a.get("cmd") or "") and "=" not in cmd:
+            # a multi-line block or an assignment is shell syntax, not prose
             warn("B5 acceptance-maybe-prose", f"acceptance[{i}] `{cmd[:60]}` may not be runnable")
         if not expect:
             err("B5 acceptance-no-expect", f"acceptance[{i}] has no `expect`",
@@ -463,16 +473,25 @@ def check_discrimination(b, acceptance):
                  "let a `hold` criterion or a manual check carry done-ness")
         return not empty
 
+    # A manual check that merely exists is not a carrier: E1's T05 and T08 armed
+    # with acceptance green on untouched HEAD because any non-empty manual_checks
+    # silenced this rule — and the compiler writes those lines freely. Only the
+    # `done:` spelling counts, and only a human can write it (`prompire draft`
+    # rejects it in a proposal), so the declaration cannot be rubber-stamped in.
     holds = any(effective_transition(a, measured.get(entry_key(a))) == "hold"
                 for a in acceptance)
-    manual = bool(as_list(b.get("manual_checks")))
-    if not (holds or any(compares(a) for a in acceptance) or manual):
+    manual_done = any(carries for _, carries, _ in manual_check_entries(b))
+    if not (holds or any(compares(a) for a in acceptance) or manual_done):
+        has_manual = bool(as_list(b.get("manual_checks")))
         err("B17 vacuous-acceptance",
             "every criterion already passes on untouched HEAD, so `verify` says "
-            "`clean` on a repo nobody touched",
+            "`clean` on a repo nobody touched"
+            + (" — the manual checks are notes, not a completion condition"
+               if has_manual else ""),
             "add a criterion that fails today and flips (`transition: flip`), a "
-            "`before_after` comparison, or name in `manual_checks` the judgment that "
-            "decides done")
+            "`before_after` comparison, or — if a human judgment really is what "
+            "decides done — respell that one manual check `- done: <text>` "
+            "yourself; that declaration is yours to write, not the compiler's")
 
 
 def check(b):
@@ -498,6 +517,17 @@ def check(b):
         for w in vague_hits(str(c)):
             warn("B3 vague-constraint", f"constraint \"{str(c)[:60]}\" leans on \"{w}\"")
 
+    # manual_checks entries are strings (notes) or `done: <text>` (the human's
+    # completion-condition declaration, B17). Any other mapping is a guess about
+    # authority this linter refuses to make.
+    for text, _, well_formed in manual_check_entries(b):
+        if not well_formed:
+            err("B17 manual-check-shape",
+                f"manual_checks entry `{text[:60]}` is neither a plain string nor "
+                "`done: <text>`",
+                "a review note is a plain string; the declaration that this judgment "
+                "decides done is spelled `- done: <text>`")
+
     keys = check_acceptance(b, acceptance)
     good = acceptance_entries(b)
     cmds = [k[0] for k in keys if k]
@@ -518,6 +548,16 @@ def check(b):
         if not cmds:
             err("B8 auto-without-check", "autonomy: auto with no executable acceptance")
 
+    # B8 also owns the other execution-mode field: a non-boolean `plan_first` is a
+    # YAML accident ("false" is a truthy string), and the renderer must never turn
+    # an accident into a hard approval stop
+    if b.get("plan_first") is not None and not isinstance(b.get("plan_first"), bool):
+        err("B8 plan-first-not-bool",
+            f"`plan_first: {b.get('plan_first')}` is not a boolean — a quoted "
+            "string here is truthy by accident, and rendering it would stop the "
+            "agent for plan approval nobody chose",
+            "write `plan_first: true`, or delete the line")
+
     # B9 destructive verbs need a human in the loop (AIE ch.6; BAA least privilege)
     haystack = " ".join([gl, text_of(constraints), text_of(b.get("notes")), " ".join(cmds).lower()])
     hit = DESTRUCTIVE_RX.search(haystack)
@@ -526,9 +566,11 @@ def check(b):
             f"brief involves `{hit.group(0)}` at autonomy `{autonomy or 'undeclared'}`",
             "set autonomy: ask, or move the operation out of the brief")
 
-    # B10 decouple planning from execution when the task is big (AIE ch.6)
+    # B10 decouple planning from execution when the task is big (AIE ch.6).
+    # `autonomy: manual` already decouples them completely — the run produces a plan
+    # and never writes — so demanding a mid-run approval stop there is incoherent.
     big = BIG_RX.search(goal)
-    if (big or len(scope) > 3) and not b.get("plan_first"):
+    if (big or len(scope) > 3) and not b.get("plan_first") and autonomy != "manual":
         err("B10 no-plan-gate",
             "wide task ({}) without `plan_first: true`".format(
                 f"goal says '{big.group(0)}'" if big else f"{len(scope)} scope entries"),

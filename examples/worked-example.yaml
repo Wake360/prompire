@@ -29,14 +29,14 @@ manual_checks:
 autonomy: ask
 context: |
   golden/report.txt holds the current output of `python3 -m src.report`.
-base_rev: 80e4d7cbc050
+base_rev: 21561245bf73
 baseline:
   - cmd: "python3 -m src.report"
     status: pass
-    evidence: "exit 0, 2 line(s) stdout, 0.3s, sha256:2c913d0e74e2"
+    evidence: "exit 0, 2 line(s) stdout, 0.2s, sha256:2c913d0e74e2"
   - cmd: "python3 -m unittest -q tests.test_cart"
     status: pass
-    evidence: "exit 0, 0 line(s) stdout, 0.4s"
+    evidence: "exit 0, 0 line(s) stdout, 0.3s"
   - cmd: "python3 -m unittest -q tests.test_legacy"
     status: pass
-    evidence: "exit 1, 0 line(s) stdout, 0.4s"
+    evidence: "exit 1, 0 line(s) stdout, 0.3s"

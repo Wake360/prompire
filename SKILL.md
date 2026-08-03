@@ -21,9 +21,17 @@ comments are dropped, measured
 fields are refused, and every authority-sensitive line — the boundary, each acceptance
 command, a relaxed tests policy, the deny-list, the constraints, the manual checks,
 any context — comes back marked `# prompire:unconfirmed` and listed in an
-`unconfirmed:` block at the top of the file. Present those decisions to the user;
+`unconfirmed:` block at the top of the file. The draft output also carries a render
+preview: if any prompt target is over the 250-word budget, narrow the contract *now*,
+before confirmation — `prepare` will refuse an over-budget prompt. Present the marked
+decisions to the user;
 delete a marker only when the user has confirmed that line, and delete the
-`unconfirmed:` block only once every one of them is confirmed. Never reserialize a
+`unconfirmed:` block only once every one of them is confirmed. Two decisions need
+more than a deleted marker: `plan_first: true` stops the run mid-way for plan
+approval, so keep it only for an attended run; and if a manual check is what decides
+the task is done, the *user* respells that line `- done: <text>` — a spelling you
+cannot propose, because the declaration is theirs (B17 rejects manual-only briefs
+without it). Never reserialize a
 draft to clear it — the block exists because comments do not survive a round-trip, and
 clearing it without reading the decisions is exactly the failure it prevents. Do not
 confirm your own proposal: `prepare`, `lint` and `--activate` all refuse while either
@@ -213,9 +221,13 @@ baseline:                 # written by baseline.py, never by hand
     status: pass          # pass | fail | not_runnable — did it meet its own `expect`?
     evidence: <exit code and the number that mattered>
 autonomy: ask             # manual = propose only | ask = confirm risky steps | auto
-plan_first: true
+plan_first: true          # ONLY for an attended run — it stops the agent mid-run for
+                          # plan approval, so an unattended session stalls on it. Omit
+                          # for fire-and-forget delegation. A compiled draft marks it.
 rollback: <branch or worktree — required for autonomy: auto>
-manual_checks: [<what only a human can confirm>]
+manual_checks:            # strings are review notes; the human may respell ONE line
+  - done: <the judgment that decides the task is complete — human-written only>
+  - <a plain review note>
 ```
 
 A lint-clean brief in this exact shape, with baselines that were measured rather than
@@ -257,9 +269,12 @@ explicit inference. Five carry the weight:
   commit. Without it an agent that commits its own work hands the checker a base that
   already contains it, and an empty diff reads as a compliant one.
 - **B17** — once the baseline is measured, something must distinguish the untouched
-  tree from done: a criterion that flips, or a declared preservation shape (`hold`,
-  `before_after`, a manual check, a behavior-preserving goal). Otherwise `verify`
-  prints `clean` on a repo nobody touched, and the verdict is worth nothing.
+  tree from done: a criterion that flips, a declared preservation shape (`hold`, a
+  `before_after` that actually printed something), or a manual check the *user has
+  respelled* `- done: <text>` — their own declaration that this judgment decides
+  completion. A manual check that merely exists carries nothing, and the `done:`
+  spelling is refused in proposals, so you cannot write it for them. Otherwise
+  `verify` prints `clean` on a repo nobody touched, and the verdict is worth nothing.
 
 Full table with what each rule can and cannot catch: **`references/rules.md`**.
 Where each one comes from: **`references/grounding.md`**.

@@ -16,11 +16,11 @@ acceptance:
     expect: exit 1 — the one known failure, unchanged
     transition: hold
 autonomy: ask
-base_rev: 80e4d7cbc050
+base_rev: 21561245bf73
 baseline:
   - cmd: "python3 -m unittest -q tests.test_cart"
     status: pass
-    evidence: "exit 0, 0 line(s) stdout, 0.4s"
+    evidence: "exit 0, 0 line(s) stdout, 0.3s"
   - cmd: "python3 -m unittest -q tests.test_legacy"
     status: pass
-    evidence: "exit 1, 0 line(s) stdout, 0.4s"
+    evidence: "exit 1, 0 line(s) stdout, 0.3s"

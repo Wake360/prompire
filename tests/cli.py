@@ -60,7 +60,8 @@ def run(*args, cwd=None, env=None):
 def run_with_replaced_tools(args, replacements):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-tools-") as tmp:
         tool_root = pathlib.Path(tmp)
-        for name in ("prompire.py", "check_scope.py", "brief_common.py"):
+        for name in ("prompire.py", "check_scope.py", "brief_common.py",
+                     "render_brief.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         for name, body in replacements.items():
             (tool_root / name).write_text(body, encoding="utf-8")
@@ -83,7 +84,7 @@ acceptance:
     expect: exit 0
 """ + extra + """\
 manual_checks:
-  - the diff adds the count helper
+  - done: the diff adds the count helper
 autonomy: ask
 """, encoding="utf-8")
     return path
@@ -304,6 +305,8 @@ autonomy: auto
     checks.ok("flip" in line_with("unittest"),
               "a claimed flip is disclosed on the marked command line")
     checks.ok("plan_first: true" in text, "plan_first survives")
+    checks.ok("prompire:unconfirmed" in line_with("plan_first:"),
+              "plan_first decides the execution mode, so it is a marked decision")
     checks.ok("rollback: branch fix/totals" in text, "rollback survives")
     checks.ok("autonomy: ask" in text and "autonomy: auto" not in text,
               "a draft always asks, whatever the proposal wanted")
@@ -319,6 +322,111 @@ autonomy: auto
               "a new-file scope entry is marked as matching nothing tracked today")
     blocked = run("prepare", pathlib.Path(repo) / ".prompire" / "full.yaml", cwd=repo)
     checks.equal(blocked.returncode, 2, "prepare must refuse the unconfirmed draft")
+
+
+@case("an over-budget proposal is surfaced at draft, before confirmation")
+def _(repo, checks):
+    # E1: all eight compiled briefs exceeded the 250-word render budget, discovered
+    # only at handoff — T06 spent its whole confirmation budget and never produced a
+    # prompt. The compile step must know renderability before confirmation starts.
+    filler = " ".join(f"fact{i}" for i in range(300))
+    proposal = pathlib.Path(repo) / "big.yaml"
+    proposal.write_text(f"""\
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+acceptance:
+  - cmd: python -c "import pathlib; pathlib.Path('boom.txt').write_text('x')"
+    expect: exit 0
+context: {filler}
+""", encoding="utf-8")
+    result = run("draft", "add a count helper", "--proposal", proposal,
+                 "--out", ".prompire/big.yaml", "--json", cwd=repo)
+    checks.equal(result.returncode, 0, f"draft exit: {result.stdout}{result.stderr}")
+    data = json_out(result)
+    preview = data.get("render_preview") or {}
+    checks.ok(preview.get("over"),
+              f"the preview must name the over-budget prompt targets: {preview}")
+    checks.ok(preview.get("budget") == 250, "the budget itself must stay 250 words")
+    checks.ok(preview.get("sections"),
+              "the preview must attribute the words so the human can cut")
+    checks.ok(not (pathlib.Path(repo) / "boom.txt").exists(),
+              "a render preview must never execute an acceptance command")
+    text = (pathlib.Path(repo) / ".prompire" / "big.yaml").read_text(encoding="utf-8")
+    checks.ok("fact299" in text, "the preview must not silently truncate the draft")
+    checks.ok("base_rev" not in text and "baseline" not in text,
+              "the preview must not measure anything")
+
+    human = run("draft", "add a count helper", "--proposal", proposal,
+                "--out", ".prompire/big2.yaml", cwd=repo)
+    checks.ok("over the 250-word render budget" in human.stdout,
+              f"the human draft output must surface the budget: {human.stdout}")
+
+    small = pathlib.Path(repo) / "small.yaml"
+    small.write_text("""\
+goal: Add a count helper to src/cart.py.
+scope: [src/cart.py]
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+""", encoding="utf-8")
+    fits = run("draft", "add a count helper", "--proposal", small,
+               "--out", ".prompire/small.yaml", "--json", cwd=repo)
+    checks.equal(fits.returncode, 0, "under-budget draft exit")
+    fits_preview = json_out(fits).get("render_preview") or {}
+    checks.equal(fits_preview.get("over"), [], "an under-budget proposal has no "
+                 "over-budget targets")
+
+
+@case("plan_first is an execution-mode decision the compiler cannot slip through")
+def _(repo, checks):
+    # E1: all eight compile agents copied `plan_first: true`, the field carried no
+    # marker, and every delivered COMPILED session stalled at "Get the plan approved".
+    # An unrequested plan gate must reach the human as a decision, not as furniture.
+    proposal = pathlib.Path(repo) / "planful.yaml"
+    proposal.write_text("""\
+goal: Fix doubled brackets in optional Choice usage.
+scope: [src/cart.py]
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+plan_first: true
+""", encoding="utf-8")
+    result = run("draft", "Fix doubled brackets in optional Choice usage.",
+                 "--proposal", proposal, "--out", ".prompire/planful.yaml", cwd=repo)
+    checks.equal(result.returncode, 0, f"draft exit: {result.stdout}{result.stderr}")
+    text = (pathlib.Path(repo) / ".prompire" / "planful.yaml").read_text(encoding="utf-8")
+    plan_line = next((li for li in text.splitlines() if "plan_first" in li and
+                      not li.strip().startswith("-")), "")
+    checks.ok("prompire:unconfirmed" in plan_line,
+              f"an unrequested plan gate must be marked: {plan_line!r}")
+    checks.ok("- plan_first" in text,
+              "plan_first must be listed in the unconfirmed ledger")
+    blocked = run("prepare", ".prompire/planful.yaml", cwd=repo)
+    checks.equal(blocked.returncode, 2,
+                 "prepare must refuse while the plan gate is unconfirmed")
+
+    # A truthy non-boolean must not become an execution gate by YAML accident.
+    proposal.write_text("""\
+goal: Fix doubled brackets in optional Choice usage.
+scope: [src/cart.py]
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+plan_first: "false"
+""", encoding="utf-8")
+    refused = run("draft", "fix brackets", "--proposal", proposal,
+                  "--out", ".prompire/planful2.yaml", cwd=repo)
+    checks.equal(refused.returncode, 2, "a non-boolean plan_first must be refused")
+    checks.ok("plan_first" in refused.stdout, "the refusal names the field")
+
+    # The deterministic frontend never invents a plan gate.
+    plain = run("draft", "Fix doubled brackets in optional Choice usage.",
+                "--out", ".prompire/plain.yaml", cwd=repo)
+    checks.equal(plain.returncode, 0, "deterministic draft exit")
+    plain_text = (pathlib.Path(repo) / ".prompire" / "plain.yaml").read_text(
+        encoding="utf-8")
+    checks.ok("plan_first" not in plain_text,
+              "a deterministic draft must not acquire a plan gate")
 
 
 @case("a YAML round-trip cannot launder a draft into a confirmed brief")
@@ -363,6 +471,9 @@ manual_checks:
 
     body = yaml.safe_load(laundered)
     body.pop("unconfirmed")
+    # The human's confirmation edit: the review note that actually decides done is
+    # respelled `done:` — a spelling the compiler could not have proposed (B17).
+    body["manual_checks"] = [{"done": body["manual_checks"][0]}]
     path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
     checks.equal(run("prepare", path, cwd=repo).returncode, 0,
                  "deleting the block is what confirms the draft")
@@ -1005,7 +1116,7 @@ acceptance:
   - cmd: python -c "import pathlib; flag=pathlib.Path('.prompire/run-acceptance'); flag.exists() and pathlib.Path('outside.py').write_text('x')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     prepared_result = run("prepare", path)
@@ -1105,7 +1216,7 @@ acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/violation-named.ran').write_text('x')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -1172,7 +1283,7 @@ acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/symlinked.ran').write_text('x')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -1211,7 +1322,7 @@ acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/named-evidence.ran').write_text('x')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -1252,7 +1363,7 @@ acceptance:
     expect: exit 0
 oracle: human review
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -1286,7 +1397,7 @@ acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/tracked.ran').write_text('x')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     fixtures.git(repo, "add", "-f", str(path))
@@ -1325,7 +1436,7 @@ acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/{name}.ran').write_text('x')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     first = task_brief("first")
@@ -1715,7 +1826,7 @@ acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", path).returncode, 0, "prepare exit")
@@ -1801,7 +1912,7 @@ acceptance:
   - cmd: {regress}
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", path).returncode, 0, "prepare exit")
@@ -1860,7 +1971,7 @@ acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """
     path = fixtures.write(repo, ".prompire/named.yaml", named)
@@ -1897,7 +2008,7 @@ acceptance:
   - cmd: {regress}
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", path).returncode, 0, "prepare exit")
@@ -1929,7 +2040,7 @@ acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     first = task_brief("first")
@@ -1988,7 +2099,7 @@ baseline:
     status: pass
     evidence: exit 0, 1 line(s) stdout, 0.0s
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     result = run("verify", path)
@@ -2009,7 +2120,7 @@ acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
 manual_checks:
-  - the diff does what the goal says
+  - done: the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", linked).returncode, 0, "symlink-case prepare exit")
@@ -2076,7 +2187,8 @@ def _(repo, checks):
     )
     with tempfile.TemporaryDirectory(prefix="prompire-cli-bare-") as tmp:
         tool_root = pathlib.Path(tmp)
-        for name in ("prompire.py", "check_scope.py", "brief_common.py"):
+        for name in ("prompire.py", "check_scope.py", "brief_common.py",
+                     "render_brief.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         result = subprocess.run(
             [sys.executable, "-c", probe],

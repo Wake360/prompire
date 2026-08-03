@@ -9,19 +9,19 @@ traced there gets deleted, not weakened. Field meanings are `schema.md`.
 | B2 | goal is one sentence, ≤30 words, one task | error (sequenced goal: warn) |
 | B3 | no vague terms in `goal` or `expect` | error (in `constraints`: warn) |
 | B4 | an `acceptance` block exists | error |
-| B5 | criteria are `cmd` + `expect`, unique on `(cmd, cwd)`, with a well-formed `cwd`, `timeout`, `requires`, `transition` | error (unrunnable-looking cmd, unreadable `expect`, unknown `requires`: warn) |
+| B5 | criteria are `cmd` + `expect`, unique on `(cmd, cwd)`, with a well-formed `cwd`, `timeout`, `requires`, `transition`. An unrecognized `requires` value is an error: any `requires` entry makes `baseline.py` and `verify` refuse to run the command, so a typo silently converts the criterion into one nothing ever executes (E1: a gold brief shipped a file path there and its only pytest criterion never ran again) | error (unrunnable-looking cmd, unreadable `expect`: warn) |
 | B6 | `scope` exists, is not the whole tree, is repo-relative | error (whole top-level directory: warn) |
 | B7 | a test-suite criterion is only a judge if the tests are pinned — see below | error |
-| B8 | `autonomy` is one of three words; `auto` needs `rollback` and a runnable criterion | error |
+| B8 | `autonomy` is one of three words; `auto` needs `rollback` and a runnable criterion; `plan_first` is a real boolean — a quoted string is truthy by accident and would render a plan-approval stop nobody chose | error |
 | B9 | destructive verbs require `manual` or `ask` | error |
-| B10 | a wide task needs `plan_first: true` | error |
+| B10 | a wide task needs `plan_first: true` — except at `autonomy: manual`, which never writes, so planning is already decoupled | error |
 | B11 | constraints do not contradict each other, the goal, or the scope | error (duplicate constraint: warn) — *inference, not a quoted passage* |
 | B12 | unknown keys | warn — *no book source; schema hygiene* |
 | B13 | `forbidden` is present (`[]` counts) | warn |
 | B14 | behaviour-preserving work compares before and after | warn |
 | B15 | every criterion carries a measured baseline, and one that is not green today declares which transition it is making | error (missing baseline, missing evidence, unverifiable criterion: warn) |
 | B16 | `base_rev` is present and names a fixed commit SHA, not `HEAD` or a branch | error |
-| B17 | once the baseline is measured, something distinguishes untouched HEAD from done: a criterion that flips, or a declared carrier of done-ness — `hold`, a `before_after` comparison over a command that actually printed something, or `manual_checks` | error (a `before_after` over empty output: warn, and it stops counting) — *inference, not a quoted passage* |
+| B17 | once the baseline is measured, something distinguishes untouched HEAD from done: a criterion that flips, or a declared carrier of done-ness — `hold`, a `before_after` comparison over a command that actually printed something, or a manual check the *human* respelled `- done: <text>`. A manual check that merely exists carries nothing (E1: two contracts armed with every criterion green on HEAD because any non-empty `manual_checks` silenced this rule), and the `done:` spelling is rejected in compiler proposals, so it cannot be rubber-stamped in | error (a `before_after` over empty output: warn, and it stops counting; a malformed `manual_checks` mapping: error) — *inference, not a quoted passage* |
 | B18 | no `# prompire:unconfirmed` marker and no `unconfirmed:` ledger block remains | error — *no book source; the confirmation contract made visible* |
 
 ## B7 — the Goodhart rule, in three arrangements

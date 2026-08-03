@@ -46,6 +46,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python3 -m unittest -q tests.test_cart
     expect: exit 0
+manual_checks:
+  - done: the diff adds count() to src/cart.py
 autonomy: ask
 """),
 
@@ -97,6 +99,25 @@ acceptance:
     cwd: src/render
     expect: exit 0
     transition: flip
+autonomy: ask
+"""),
+
+    ("05-multiline-acceptance", "a multi-line command, measured and rendered verbatim", """
+goal: Add a count() helper to src/cart.py.
+scope:
+  - src/cart.py
+forbidden:
+  - tests/**
+tests_policy: immutable
+acceptance:
+  - cmd: |
+      STATUS="cart  ok"
+      test "$STATUS" = "cart  ok"
+    expect: exit 0
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+manual_checks:
+  - done: the diff adds count() to src/cart.py
 autonomy: ask
 """),
 

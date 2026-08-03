@@ -20,6 +20,11 @@ from brief_common import (ACCEPTANCE_KEYS, DRAFT_LEDGER, DRAFT_MARKER, as_list,
                           glob_re, norm_path, utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
 
+# After the siblings above: render_brief prepends its own directory to sys.path,
+# so importing a stray installed copy first would make every later sibling import
+# resolve beside *it* instead of beside this file.
+import render_brief  # noqa: E402
+
 HERE = pathlib.Path(__file__).resolve().parent
 TOOLS = {
     "baseline": "baseline.py",
@@ -78,7 +83,10 @@ Output only a YAML mapping with these keys and no others:
 - manual_checks: what only a human can confirm; omit if none.
 - context: at most three lines of repository fact the agent would otherwise
   rediscover the hard way; omit unless it changes the implementation.
-- plan_first: true for a refactor/migration or a scope wider than three paths.
+- plan_first: true only when the request asks for a plan or approval step, or
+  the task is a refactor/migration or wider than three paths (the linter
+  demands a plan gate there). It stops the agent mid-run for a human to
+  approve the plan, so an unattended run stalls on it; omit it otherwise.
 - autonomy: ask
 Never output baseline, base_rev or dirty_baseline; they are measured, not drafted.
 No prose, no code fences.
@@ -95,7 +103,7 @@ acceptance:
   - cmd: {DEMO_PYTHON} check.py
     expect: exit 0
 manual_checks:
-  - greeting.py no longer says hello
+  - done: greeting.py no longer says hello
 """
 DEMO_CHECK = """\
 import pathlib
@@ -466,6 +474,19 @@ def parse_agent_brief(text):
     unknown = sorted(str(k) for k in set(data) - set(DRAFT_KEYS))
     if unknown:
         return None, "keys a draft does not carry: " + ", ".join(unknown)
+    # `plan_first` gates execution, so a YAML accident must not set it: the string
+    # "false" is truthy, and rendering it would stop an unattended run for approval.
+    if "plan_first" in data and not isinstance(data.get("plan_first"), bool):
+        return None, (f"`plan_first: {data.get('plan_first')}` is not a boolean — "
+                      "write true or false")
+    # The `done:` spelling of a manual check declares that a human judgment is the
+    # task's completion condition (B17). That declaration is the human's own act —
+    # a compiler that could propose it could also rubber-stamp vacuity back in.
+    for item in as_list(data.get("manual_checks")):
+        if not isinstance(item, str):
+            return None, ("a manual_checks entry in a proposal must be a plain "
+                          "string — the `done:` completion-condition spelling is "
+                          "the human's to write, never the compiler's")
     entries = []
     for item in as_list(data.get("acceptance")):
         if isinstance(item, str):
@@ -612,8 +633,11 @@ def agent_draft_text(sentence, data, root, source="agent"):
     manual = [str(m) for m in as_list(data.get("manual_checks"))]
     if manual:
         out.append(_marked("manual_checks:",
-                           "only a human can check these, and they may be all that "
-                           "says done; confirm them", ledger, "manual_checks"))
+                           "only a human can check these; if one of them is what "
+                           "decides the task is done, respell that line "
+                           "`- done: <text>` yourself as you confirm — a note that "
+                           "merely exists carries nothing (B17)",
+                           ledger, "manual_checks"))
         out += [f"  - {_yaml_scalar(m)}" for m in manual]
     # A model told "at most three lines" plausibly answers with a YAML list; carry
     # the lines, not the list's repr.
@@ -626,8 +650,15 @@ def agent_draft_text(sentence, data, root, source="agent"):
                            "the prompt carries this as fact; confirm it is true and "
                            "worth its words", ledger, "context"))
         out += [f"  {line}".rstrip() for line in context.splitlines()]
-    if data.get("plan_first"):
-        out.append("plan_first: true")
+    # E1: all eight compile agents copied `plan_first: true`, the field carried no
+    # marker, and every delivered session stalled at "Get the plan approved". It is
+    # an execution-mode decision, so it is the human's — marked like the boundary.
+    if data.get("plan_first") is True:
+        out.append(_marked(
+            "plan_first: true",
+            "stops the agent for plan approval before any edit — an unattended run "
+            "stalls here; keep it only if someone will review the plan mid-run",
+            ledger, "plan_first"))
     rollback = " ".join(str(data.get("rollback") or "").split())
     if rollback:
         out.append(f"rollback: {_yaml_scalar(rollback)}")
@@ -870,6 +901,16 @@ def draft(args, extra):
                                for cmd, _ in detect_acceptance(root)]}
         text, stats = agent_draft_text(args.sentence, data, root,
                                        source="deterministic")
+    # The budget preview runs at compile time, before any confirmation effort is
+    # spent: E1's eight briefs all blew the 250-word render budget and learned it
+    # only at handoff. Deterministic, measures nothing, executes nothing — it
+    # reuses the renderer itself over a provisional baseline (see preview_counts).
+    proposed = yaml.safe_load(text)
+    counts = render_brief.preview_counts(proposed, str(out))
+    preview = {"words": counts, "budget": render_brief.WORD_BUDGET,
+               "over": sorted(t for t, n in counts.items()
+                              if n > render_brief.WORD_BUDGET),
+               "sections": dict(render_brief.budget_attribution(proposed))}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     unconfirmed = text.count(f"# {DRAFT_MARKER}")
@@ -879,6 +920,7 @@ def draft(args, extra):
     if args.json:
         print(json.dumps({"status": "drafted", "out": str(out), "backend": backend,
                           "unconfirmed": unconfirmed, "corroborated": stats,
+                          "render_preview": preview,
                           "seconds": seconds, "next": next_command},
                          ensure_ascii=False))
     else:
@@ -887,6 +929,14 @@ def draft(args, extra):
               f"{_counted(corroborated, 'fact')} corroborated by the repository "
               f"(tracked scope: {stats['tracked_scope']}, detected acceptance: "
               f"{stats['detected_acceptance']})")
+        if preview["over"]:
+            worst_target = max(preview["words"], key=preview["words"].get)
+            worst = preview["words"][worst_target]
+            print(f"render preview: {worst_target} is {worst} words — "
+                  f"{worst - preview['budget']} over the 250-word render budget "
+                  "(prepare will refuse). Narrow the contract before confirming:")
+            print("  " + ", ".join(f"{name} {words}"
+                                   for name, words in preview["sections"].items()))
         print(f"confirm every `# {DRAFT_MARKER}` line, then: {next_command}")
     return 0
 

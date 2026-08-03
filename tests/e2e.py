@@ -159,7 +159,7 @@ acceptance:
   - cmd: python3 -m unittest -q tests.test_cart
     expect: exit 0
 manual_checks:
-  - the diff adds count() to src/cart.py
+  - done: the diff adds count() to src/cart.py
 autonomy: ask
 """)
     c.ok(data["results"][0]["status"] == "pass",
@@ -289,7 +289,7 @@ acceptance:
     cwd: services
     expect: exit 0
 manual_checks:
-  - the diff adds the version field
+  - done: the diff adds the version field
 autonomy: ask
 """)
     c.ok(data["results"][0]["status"] == "pass",
@@ -342,6 +342,166 @@ autonomy: ask
     c.ok(subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
                         capture_output=True, text=True, encoding="utf-8").stdout.strip() == "",
          "measuring a baseline must not dirty the tree")
+
+
+@case("baseline-refuses-to-measure-an-installed-copy-as-the-workspace")
+def _(repo, c):
+    # E1, T05: the compiled contract's baseline was measured against the system
+    # site-packages copy of click — which already contained the upstream fix — so
+    # a vacuous green baseline signed off the wrong code. The ambiguity here is
+    # deliberate: the repo defines the package under src/ (importable only via an
+    # install), and a decoy "installed" copy sits on PYTHONPATH.
+    decoy = pathlib.Path(repo) / ".." / f"{pathlib.Path(repo).name}-decoy"
+    decoy = decoy.resolve()
+    (decoy / "clickpkg").mkdir(parents=True, exist_ok=True)
+    (decoy / "clickpkg" / "__init__.py").write_text("FIXED = True\n", encoding="utf-8")
+    fixtures.write(repo, "src/clickpkg/__init__.py", "FIXED = False\n")
+    fixtures.git(repo, "add", "src/clickpkg/__init__.py")
+    fixtures.git(repo, "commit", "-qm", "src layout package")
+    env = {**os.environ, "PYTHONPATH": str(decoy)}
+
+    def measure_with_env(name, body):
+        p = brief(repo, name, body)
+        r = subprocess.run([sys.executable, str(SKILL / "baseline.py"), str(p),
+                            "--json"], capture_output=True, text=True,
+                           encoding="utf-8", env=env)
+        return r, (json.loads(r.stdout) if r.stdout.strip().startswith("{") else {})
+
+    r, data = measure_with_env("wrongcopy", """
+goal: Fix the flag in clickpkg.
+scope: [src/clickpkg/__init__.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import clickpkg; raise SystemExit(0 if clickpkg.FIXED else 1)"
+    expect: exit 0
+autonomy: ask
+""")
+    c.ok(r.returncode == 1,
+         f"a wrong-workspace measurement needs a human, got exit {r.returncode}")
+    row = data.get("results", [{}])[0]
+    c.ok(row.get("status") is None and "workspace" in str(row.get("reason", "")),
+         f"the mismatch must be named, not measured: {row}")
+
+    # A test runner in the same repo exercises the repo's package implicitly.
+    r2, data2 = measure_with_env("wrongcopy-runner", """
+goal: Fix the flag in clickpkg.
+scope: [src/clickpkg/__init__.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+autonomy: ask
+""")
+    row2 = data2.get("results", [{}])[0]
+    c.ok(r2.returncode == 1 and row2.get("status") is None,
+         f"a test-runner baseline over a shadowed package is not a measurement: {row2}")
+
+    # The workspace copy shadowing the installed one is the healthy case.
+    fixtures.write(repo, "clickpkg/__init__.py", "FIXED = False\n")
+    fixtures.git(repo, "add", "clickpkg/__init__.py")
+    fixtures.git(repo, "commit", "-qm", "flat layout copy")
+    r3, data3 = measure_with_env("rightcopy", """
+goal: Fix the flag in clickpkg.
+scope: [clickpkg/__init__.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import clickpkg; raise SystemExit(0 if clickpkg.FIXED else 1)"
+    expect: exit 0
+    transition: flip
+autonomy: ask
+""")
+    row3 = data3.get("results", [{}])[0]
+    c.ok(row3.get("status") == "fail",
+         f"the workspace copy wins and measures honestly: {row3}")
+
+    # A dependency the repo does not define is not the repo's to police.
+    (decoy / "decoyonly").mkdir(parents=True, exist_ok=True)
+    (decoy / "decoyonly" / "__init__.py").write_text("OK = 1\n", encoding="utf-8")
+    r4, data4 = measure_with_env("external-dep", """
+goal: Fix the flag in clickpkg.
+scope: [clickpkg/__init__.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import decoyonly; print(decoyonly.OK)"
+    expect: exit 0
+autonomy: ask
+""")
+    row4 = data4.get("results", [{}])[0]
+    c.ok(row4.get("status") == "pass",
+         f"an external dependency import is legitimate: {row4}")
+    shutil.rmtree(decoy, ignore_errors=True)
+
+
+@case("multi-line-and-quoted-commands-execute-verbatim")
+def _(repo, c):
+    # E1: the renderer flattened multi-line acceptance commands into invalid
+    # one-liners, and the runner itself executed the flattened text. The command
+    # in the brief is the contract; measuring or communicating any other command
+    # is a second, semantically different contract.
+    _, data = measured(repo, "verbatim", """
+goal: Add a count() helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: |
+      if true
+      then
+        exit 0
+      fi
+    expect: exit 0
+  - cmd: |
+      STATUS="cart  ok"
+      test "$STATUS" = "cart  ok"
+    expect: exit 0
+autonomy: ask
+""")
+    kinds = [(r["status"], r.get("tail", "")) for r in data["results"]]
+    c.ok(kinds[0][0] == "pass",
+         f"a newline-separated shell block must run as written: {kinds[0]}")
+    c.ok(kinds[1][0] == "pass",
+         f"doubled spaces inside quotes are part of the command: {kinds[1]}")
+
+
+@case("pager-lookalike-arguments-are-not-interactive")
+def _(repo, c):
+    # E1, T06: `stubtest more_itertools.more more_itertools.recipes` was refused as
+    # "interactive (`more`)" — the pager list matched *arguments*, not the command.
+    # A pager name is interactive where a shell would execute it, not where it is a
+    # path, a module, or a word inside a string.
+    _, data = measured(repo, "pagerish", """
+goal: Add a count() helper to src/cart.py.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: echo more_itertools/more.py
+    expect: exit 0
+  - cmd: python3 -c "print('watch this top ssh more less')"
+    expect: exit 0
+  - cmd: more README.md
+    expect: exit 0
+  - cmd: git log --oneline | more
+    expect: exit 0
+  - cmd: pytest --watch
+    expect: exit 0
+autonomy: ask
+""")
+    kinds = [(r["status"], r.get("reason", "")) for r in data["results"]]
+    c.ok(kinds[0][0] == "pass",
+         f"`more` as an argument path must run: {kinds[0]}")
+    c.ok(kinds[1][0] == "pass",
+         f"pager words inside a quoted string must run: {kinds[1]}")
+    c.ok(kinds[2][0] == "not_runnable" and "interactive" in kinds[2][1],
+         f"`more` as the command is still a pager: {kinds[2]}")
+    c.ok(kinds[3][0] == "not_runnable" and "interactive" in kinds[3][1],
+         f"`| more` pipes into a pager: {kinds[3]}")
+    c.ok(kinds[4][0] == "not_runnable" and "interactive" in kinds[4][1],
+         f"a --watch flag is long-running wherever it appears: {kinds[4]}")
 
 
 @case("dirty-tree-is-refused-then-declared")
@@ -2141,7 +2301,7 @@ def _(repo, c):
         b"scope: []\n"
         b"tests_policy: immutable\n"
         b'acceptance:\n  - cmd: python3 -c "pass"\n    expect: exit 0\n'
-        b"manual_checks:\n  - the diff adds the count helper\n"
+        b"manual_checks:\n  - done: the diff adds the count helper\n"
         b"autonomy: ask\n")
     original = p.read_bytes()
 
@@ -2180,7 +2340,7 @@ acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
 manual_checks:
-  - the diff adds the count helper
+  - done: the diff adds the count helper
 autonomy: ask
 """)
     original = p.read_bytes()
@@ -2207,7 +2367,7 @@ acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
 manual_checks:
-  - the diff adds the count helper
+  - done: the diff adds the count helper
 autonomy: ask
 """)
     r = cli(repo, "prepare", ".prompire/p3-commit.yaml")
@@ -2260,7 +2420,7 @@ acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
 manual_checks:
-  - the diff adds the count helper
+  - done: the diff adds the count helper
 autonomy: ask
 """)
     r = cli(repo, "prepare", ".prompire/p3-wedge.yaml",
@@ -2323,7 +2483,7 @@ acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
 manual_checks:
-  - the diff adds the count helper
+  - done: the diff adds the count helper
 autonomy: ask
 """)
     original = p.read_bytes()

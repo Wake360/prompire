@@ -48,8 +48,8 @@ import fixtures
 import verify_acceptance
 from behaviors import BEHAVIORS
 from brief_common import (DRAFT_LEDGER, DRAFT_MARKER, acceptance_entries, as_list,
-                          effective_transition, glob_re, load_brief, norm_cmd,
-                          norm_path, utf8_stdio)
+                          effective_transition, glob_re, load_brief,
+                          manual_check_entries, norm_cmd, norm_path, utf8_stdio)
 from prompire import DRAFT_KEYS, detect_acceptance
 
 BRIEF_REL = ".prompire/task.yaml"
@@ -183,7 +183,9 @@ def classify(compiled, lint_data):
                 for a in acceptance_entries(compiled))
     if flips:
         return "discriminating"
-    if as_list(compiled.get("manual_checks")):
+    # Only the human-written `done:` spelling makes a manual check the completion
+    # condition (B17); a note that merely exists no longer classifies the contract.
+    if any(carries for _, carries, _ in manual_check_entries(compiled)):
         return "manual-semantic"
     return "preservation-only"
 

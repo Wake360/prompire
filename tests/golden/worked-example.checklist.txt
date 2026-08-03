@@ -11,7 +11,7 @@ Run from the repo root. Every box is something you can see for yourself.
 - [ ] `python3 -m unittest -q tests.test_cart` → exit 0
       → was green; must still be green
 - [ ] `python3 -m unittest -q tests.test_legacy` → exit 1 — the one known failure, unchanged
-      → must stay exactly as measured (exit 1, 0 line(s) stdout, 0.4s) — do not 'fix' it. A different result is a regression even if it looks better
+      → must stay exactly as measured (exit 1, 0 line(s) stdout, 0.3s) — do not 'fix' it. A different result is a regression even if it looks better
 
 Manual — no command covers these:
 - [ ] open src/render/text.py and confirm it does not import src.report
