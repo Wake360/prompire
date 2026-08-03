@@ -5,11 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prompire"
 version = "0.9.1"
-description = "Scope, verify and enforce what a coding agent is allowed to change."
+description = "Pin the contract before a coding agent works; read the verdict from the real git diff after."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dependencies = ["PyYAML>=6"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/Wake360/prompire"
+Repository = "https://github.com/Wake360/prompire"
+Issues = "https://github.com/Wake360/prompire/issues"
+Documentation = "https://github.com/Wake360/prompire#documentation"
+Changelog = "https://github.com/Wake360/prompire/blob/master/CHANGELOG.md"
 
 [project.scripts]
 prompire = "prompire:entrypoint"
@@ -27,4 +42,33 @@ py-modules = [
   "lint_brief",
   "render_brief",
   "verify_acceptance",
+]
+
+[tool.setuptools.data-files]
+"share/prompire" = ["SKILL.md"]
+"share/prompire/references" = [
+  "references/benchmark.md",
+  "references/ci.md",
+  "references/grounding.md",
+  "references/hosts.md",
+  "references/maintaining.md",
+  "references/rendering.md",
+  "references/rules.md",
+  "references/schema.md",
+  "references/threat-model.md",
+]
+"share/prompire/examples" = [
+  "examples/01-green-baseline.yaml",
+  "examples/02-must-flip.yaml",
+  "examples/03-known-red-hold.yaml",
+  "examples/04-not-yet-runnable.yaml",
+  "examples/worked-example.yaml",
+]
+"share/prompire/examples/hooks" = [
+  "examples/hooks/antigravity-repo.json",
+  "examples/hooks/antigravity-user.json",
+  "examples/hooks/claude-user.json",
+  "examples/hooks/copilot-pascalcase.json",
+  "examples/hooks/copilot-repo.json",
+  "examples/hooks/copilot-user.json",
 ]
