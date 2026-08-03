@@ -718,6 +718,9 @@ def brief_lifecycle_problems():
     if "belongs in `.gitignore`" in read("README.md"):
         out.append("README.md reverted to the one-rule gitignore claim; the "
                    "brief-tracking rule depends on whether CI reads the brief")
+    if "references/ci.md" not in read("SKILL.md"):
+        out.append("SKILL.md never points at references/ci.md, so the tracked-"
+                   "brief half of the lifecycle is undiscoverable from the skill")
     return out
 
 
@@ -861,6 +864,7 @@ def main():
     problems += brief_lifecycle_problems()
     problems += verdict_vocabulary_problems()
     problems += benchmark_claim_problems()
+    problems += ci_pin_problems()
 
     skill_md = read("SKILL.md")
     for rel, name in (("README.md", "hook_copilot_guard.py"),

@@ -89,7 +89,10 @@ the brief. This is for work you're delegating and won't watch.
    for a field you cannot infer and cannot default. The one usually worth asking: *what
    command tells us this worked?*
 
-2. **Write the brief** to `.prompire/<slug>.yaml` (repo-local, gitignored). Every
+2. **Write the brief** to `.prompire/<slug>.yaml`. State files and rendered
+   artifacts stay ignored; the brief itself is committed when the GitHub Action
+   verifies the pull request (`references/ci.md`) and may stay local otherwise.
+   Every
    field is inferred, answered, or absent — never invented. Especially never invent an
    acceptance command. If you cannot name one, write `acceptance: []`, let the lint
    fail, and say the brief is not ready and why.
