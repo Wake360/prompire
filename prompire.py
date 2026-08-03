@@ -540,7 +540,20 @@ def agent_draft_text(sentence, data, root, source="agent"):
     tracked = tracked_paths(root)
     stats = {"tracked_scope": 0, "detected_acceptance": 0}
     ledger = []
-    body = ["goal: |", f"  {' '.join(str(data.get('goal') or sentence).split())}"]
+    # The goal is line 1 of every rendered prompt and the compiler rewrites it
+    # freely, which makes it an execution-control field in practice: adversarial
+    # review put "…once a human has approved your written plan" there and walked
+    # E1's stall straight past the plan_first gate. A comment is legal after a
+    # block-scalar header, so the marker rides on `goal: |` itself. The user's own
+    # sentence, carried through unchanged, is not the compiler's decision.
+    goal_line = "goal: |"
+    if str(data.get("goal") or "").strip():
+        goal_line = _marked(goal_line,
+                            "the compiler rewrote your request into this goal; it is "
+                            "the first line the agent reads — confirm it says the task "
+                            "and nothing about how the run is conducted",
+                            ledger, "goal")
+    body = [goal_line, f"  {' '.join(str(data.get('goal') or sentence).split())}"]
     out = body
     scope = [str(s) for s in as_list(data.get("scope"))]
     if scope:
@@ -661,7 +674,13 @@ def agent_draft_text(sentence, data, root, source="agent"):
             ledger, "plan_first"))
     rollback = " ".join(str(data.get("rollback") or "").split())
     if rollback:
-        out.append(f"rollback: {_yaml_scalar(rollback)}")
+        # Inert at `ask`, but B8 requires a rollback before `autonomy: auto`, so
+        # this string is what the operator raises autonomy on — and the renderer
+        # interpolates it into the autonomy sentence itself.
+        out.append(_marked(f"rollback: {_yaml_scalar(rollback)}",
+                           "becomes part of the autonomy sentence if this brief is "
+                           "ever raised to unattended autonomy; confirm it names an "
+                           "undo and nothing else", ledger, "rollback"))
     out.append("autonomy: ask")
     head = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker,",
             f"# then delete the `{DRAFT_LEDGER}:` block below. Prompire refuses to "

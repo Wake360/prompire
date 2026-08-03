@@ -2,7 +2,7 @@
 title: Compiler v2 — E1 defect closure
 tags: [prompire, compiler, e1, e2, trust-boundary]
 date: 2026-08-03
-source: implementation session on branch compiler-v2, commit 691ee16
+source: implementation session on branch compiler-v2, frozen at the commit named below
 related: [docs/compiler-v1.md, references/schema.md, references/rules.md]
 ---
 
@@ -14,8 +14,9 @@ five, adds no capability, and leaves the verifier's authority intact. No E2 was 
 and no outcome is claimed. This note records what changed and confirms the treatment
 is ready to be tested on a different population.
 
-Starting point: `21a83b2` (v1, 0.11.0). End state: `691ee16` on `compiler-v2`,
-version 0.12.0. Not tagged, not published.
+Starting point: `21a83b2` (v1, 0.11.0). End state: `compiler-v2` at version 0.12.0
+— `691ee16` closed the five E1 defects, and two further commits closed what five
+adversarial reviewers then found. Not tagged, not published.
 
 ## The five defects and their fixes
 
@@ -33,6 +34,15 @@ which never writes and so already decouples planning from execution. The executi
 state machine is documented in `references/schema.md`: `autonomy` is who acts,
 `plan_first` is one extra mid-run stop that requires an operator present.
 
+Adversarial review then showed this fix was field-specific: the same stall walked in
+through `goal`, which the compiler rewrites freely and which is line 1 of every
+rendered prompt, and `rollback`, which the renderer interpolates into the autonomy
+sentence once a brief is raised to unattended autonomy. Both are now
+confirmation-required too. The rule is the class, not the field: anything the
+compiler writes into the prompt is confirmed. A request carried through verbatim —
+the user's own sentence, when the compiler proposed no goal — stays unmarked,
+because those are already the human's words.
+
 **V2-2 — B17 manual_checks vacuity.** E1's T05 and T08 armed with every criterion
 green on untouched HEAD because any non-empty `manual_checks` suppressed B17. A manual
 check now carries done-ness only in the human-written `done:` spelling
@@ -49,8 +59,17 @@ commands into invalid one-liners, so 3 of 7 delivered prompts carried a criterio
 could never execute, and the measured baseline ran a different command than the brief
 declared. `baseline.run_one` now executes the brief's verbatim `cmd` text (the
 `(cmd, cwd)` key stays whitespace-normalised, so baselines still match), and every
-renderer target shows a multi-line command as a fenced verbatim block introduced by
-"the command below". The command measured, communicated, and verified are one command.
+renderer target shows a command as a fenced verbatim block introduced by "the command
+below" whenever its raw text differs from the display spelling at all — a newline, a
+doubled space inside quotes, a tab, U+2028 — with a fence that outruns any backticks
+the command carries. The command measured, communicated, and verified are one command.
+
+Verbatim execution opened one gap of its own, found by adversarial review rather than
+by E1: the safety classifier was still reading the normalised spelling, so a
+`\`-newline splice (`r\<newline>m -rf x`) matched no guard and ran as `rm -rf x`
+during a baseline. `classify` now reads the raw text with continuations spliced, as
+the shell splices them, and skips heredoc bodies — a heredoc body is data, and
+scanning it had put `less` back in executable position, the E1 pager shape again.
 
 **V2-4 — early budget gate.** E1's eight briefs all blew the 250-word render budget,
 discovered only at handoff; T06 spent its whole confirmation budget without ever
@@ -67,22 +86,30 @@ executes nothing.
 system site-packages copy of click, which already contained the upstream fix, so a
 false green signed off code nobody was modifying. `baseline.py` now probes, before
 measuring, where an import resolves when a command exercises a package this checkout
-itself defines (an explicit `python`/`py` importing it via `-c`/`-m`, or `-m pytest` /
-`-m unittest` in a repo that defines packages). If it resolves outside the checkout the
-criterion is refused as unclassified (exit 1, needs a human) rather than measured. A
-workspace copy that shadows an installed one, and imports of dependencies the repo does
-not define, are untouched. A bare `pytest`/`tox` entry point is not probed — its
-interpreter is not knowable from the command line — and that gap is documented rather
-than guessed at.
+itself defines. It reads every simple command in the line — quote-aware, past inline
+env assignments and `env`/`nohup`-style wrappers, through `&&` and pipes, accepting
+joined `-mpytest`/`-c"…"` spellings — and replays the command's own env assignments
+into the probe, so a command that points itself at an installed copy is asked in the
+environment it builds for itself. A package the repo defines with no `__init__.py`
+(PEP 420, the layout most prone to shadowing) counts too. If the import resolves
+outside the checkout the criterion is refused as unclassified (exit 1, needs a human)
+rather than measured. A workspace copy that shadows an installed one, and imports of
+dependencies the repo does not define, are untouched. Entry points whose interpreter
+is not knowable from the command line — bare `pytest`/`tox`, `make test`, a shell
+script, `uv run`, `coverage run` — are not probed; that gap is documented rather than
+guessed at, and it is the honest limit of a check that refuses to become a dependency
+resolver.
 
 ## Baseline heuristic — the `more` false positive
 
 E1's T06 baseline refused `stubtest more_itertools.more more_itertools.recipes` as
 "interactive (`more`)" because the pager list matched the substring `more` inside an
 argument. The heuristic now matches command position only — the first word of each
-segment after a pipe / `;` / `&&`, past env-assignments and pass-through wrappers — so
-a pager name in a module path or a quoted string is not interactive, while an actual
-pager, `--interactive`, `--watch`, and `git rebase -i` still are.
+simple command, past env-assignments and pass-through wrappers, with separators found
+outside quotes and heredoc bodies skipped — so a pager name in a module path, a quoted
+string or a heredoc is not interactive, while an actual pager, `--interactive`,
+`--watch`, and `git rebase -i` still are. A differential fuzz of 65 commands against
+0.11.0 found the change strictly permissive: no command is newly refused.
 
 ## GOLD verifier mismatch investigation
 
@@ -101,7 +128,50 @@ two mechanical corrections were made in the shared classifier and at lint respec
 each with the regression direction pinned by a test. No change was made to
 `check_scope.py` verdict semantics, the pin, or the digest.
 
+## Adversarial review
+
+Five fresh-context reviewers attacked the frozen `691ee16`. Four found real
+defects; every confirmed finding that is an equivalent of an E1 defect is closed,
+each with its reproduction pinned by a test.
+
+- **A, contract vacuity** — two compiler-proposable equivalents of the
+  `manual_checks` escape: a `hold` over "exit 0, nothing printed" (the state of
+  any trivial command) and a `flip` with no baseline entry (a claim nobody
+  measured, satisfied by an untouched tree). Both closed. It also confirmed the
+  V2-2 fix itself held: plain manual strings, the `done:` spelling through a
+  proposal, and every key-spelling trick were blocked.
+- **B, execution mode** — `plan_first` held against every attack, but showed the
+  fix was field-specific: `goal` (line 1 of every prompt, rewritten freely by the
+  compiler) and `rollback` (interpolated into the autonomy sentence) reached the
+  agent unmarked, and a plan-approval instruction in `goal` reproduced the E1
+  stall past the new gate. Both now confirmation-required; the rule is the class,
+  not the field.
+- **C, render fidelity** — the most severe finding, and a regression verbatim
+  execution itself introduced: `classify` scanned the normalised command while
+  `run_one` executed the raw one, so `r\<newline>m -rf x` matched no guard and
+  ran as `rm -rf x` during a baseline. The classifier now reads the spliced raw
+  text as the shell does, and skips heredoc bodies. Verbatim block rendering now
+  triggers on any divergence from the display spelling (doubled space, tab,
+  U+2028), not only newlines, and the fence outruns backticks in its content.
+- **D, environment** — the workspace probe read only `argv[0]`, so an inline
+  `PYTHONPATH=… python3 -c` (the literal T05 shape), an `env` wrapper, a `&&`
+  chain, a joined `-mpytest` and PEP 420 namespace layouts all measured the
+  installed copy green. Segment parsing is now quote-aware and shared with the
+  interactive check, and the probe replays the command's own env assignments.
+- **E, verifier regression** — `check_scope.py` and `verify_acceptance.py` are
+  byte-identical to 0.11.0 and 14 armed scenarios diffed identical. It correctly
+  caught the changelog overstating verbatim execution as multi-line-only; the
+  claim is corrected and a migration note added (below).
+
 ## Verifier regression
+
+A brief armed before 0.12.0 whose command carries collapsible whitespace was
+measured against the collapsed spelling, so its recorded evidence — a
+`before_after` digest especially — describes a different program than 0.12.0 will
+run. Re-measure such a brief (`--deactivate`, `baseline.py --write`, `--activate`)
+rather than trusting the old block; nothing detects this for you, because the
+pointer carries no tool version. This is the one direction in which a
+previously-clean armed brief can turn red.
 
 The only verifier-path edits are the two shared-classifier corrections above:
 `baseline.py`'s INTERACTIVE match (command-position, not substring) and `run_one`'s
@@ -114,9 +184,9 @@ and repin semantics did not move.
 
 ## Tests
 
-`python3 tests/run_all.py` — 13 suites, all green (battery 61, e2e 69, examples 6,
+`python3 tests/run_all.py` — 13 suites, all green (battery 64, e2e 72, examples 6,
 golden 42 + budget-preview drift, docs 18 rules / 0 inconsistencies, hook, encoding,
-verify 7, bench 649, cli 76, runner, package, ci). New regression coverage:
+verify 7, bench 649, cli 77, runner, package, ci). New regression coverage:
 
 - battery: plan_first-not-bool (B8), wide-manual-run-needs-no-plan-gate (B10),
   manual-check-strings-do-not-carry-doneness, manual-done-declaration-carries-doneness,
@@ -125,7 +195,14 @@ verify 7, bench 649, cli 76, runner, package, ci). New regression coverage:
 - cli: over-budget-proposal-surfaced-at-draft, plan_first-execution-mode decision,
   non-boolean plan_first refused.
 - e2e: pager-lookalike-arguments-are-not-interactive, multi-line-and-quoted-commands-
-  execute-verbatim, baseline-refuses-to-measure-an-installed-copy-as-the-workspace.
+  execute-verbatim, baseline-refuses-to-measure-an-installed-copy-as-the-workspace
+  (including the inline-env, env-prefix, chained, and joined-flag spellings),
+  the-safety-classifier-reads-what-the-shell-will-run,
+  single-line-commands-whose-whitespace-matters-render-verbatim,
+  a-command-containing-backticks-cannot-break-its-rendered-block.
+- battery: hold-over-silent-success-carries-nothing (and its known-red counterpart),
+  flip-without-a-baseline-entry-is-not-a-discriminator.
+- cli: a-compiler-written-goal-and-rollback-are-decisions-not-furniture.
 - golden: 05-multiline-acceptance example locks verbatim rendering across all targets;
   preview_counts vs real render pinned.
 
@@ -144,6 +221,25 @@ Nothing stronger. Still forbidden until E2 runs: that compiled contracts improve
 worsen agent outcomes, that humans specify less with the compiler, that E1 was
 overturned. E1's verdict — keep Prompire verifier-first — stands; this note does not
 reposition the product.
+
+## Known gaps, deliberately left
+
+- Entry points whose interpreter is not knowable from the command line (bare
+  `pytest`/`tox`, `make test`, a shell script, `uv run`, `coverage run`) are not
+  workspace-probed. Closing this means resolving arbitrary Python environments,
+  which is explicitly not what this check is.
+- A `before_after` digest over *constant* output still counts as a carrier. The
+  empty-output case is refused and a `hold` over silent success is refused, but no
+  digest can prove its command reads anything the work changes. Same honest limit
+  as a `done:` declaration: a preservation-shaped carrier records that a human
+  judgment decides, it does not mechanically discriminate.
+- A brief with `base_rev` but no `baseline:` block never comes from `prepare`, but
+  a hand-edited one skips B17 entirely, because the rule only judges a measured
+  brief. Deleting the block is cheaper than defeating the rule.
+- `manual_checks` items, `constraints`, `forbidden` and `tests_editable` carry one
+  marker and one ledger entry per *list*, not per item.
+- A brief armed before 0.12.0 needs re-measuring if its command carries
+  collapsible whitespace (see above); nothing forces or detects that.
 
 ## E2 readiness
 
