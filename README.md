@@ -19,7 +19,7 @@ scope the author's brief declared. The design also takes a sharper threat
 seriously: an agent graded on a suite it can edit, or on a diff whose starting
 point it gets to declare, holds its own grading surface. Prompire pins both
 before the work starts. That threat is why the pin exists; no run in any
-benchmark arm changed either.
+benchmark arm changed the brief or the pin.
 
 ```bash
 prompire prepare .prompire/task.yaml --target generic
