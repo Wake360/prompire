@@ -25,6 +25,13 @@ ACCEPTANCE_KEYS = {"cmd", "expect", "cwd", "timeout", "requires", "transition",
                    "before_after", "must_flip"}
 BASELINE_KEYS = {"cmd", "cwd", "status", "reason", "evidence", "must_flip"}
 
+# A draft is not a brief yet. Every line a compiler could not settle carries this
+# marker, and deleting it is the confirmation. prompire.py writes it, prepare refuses
+# while one remains, lint_brief.py reports a file carrying one as a draft (B18), and
+# check_scope.py refuses to arm one — the marker is Prompire's serialization of
+# "unconfirmed", never the model's to write or to clear.
+DRAFT_MARKER = "prompire:unconfirmed"
+
 AUTONOMY = ("manual", "ask", "auto")
 BASELINE_STATUS = ("pass", "fail", "not_runnable")
 TRANSITIONS = ("green", "flip", "hold")

@@ -43,6 +43,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from brief_common import (
     ALWAYS_ALLOWED,
+    DRAFT_MARKER,
     SKIP_MARKERS,
     BriefError,
     _fold_in,
@@ -753,6 +754,20 @@ def main(argv):
     if "--activate" in argv:
         if rel_brief is None:
             print(f"refused: {brief_path} is outside the repository at {root}")
+            return 2
+        # A marker-laden brief is a proposal, not a contract. `prepare` refuses it one
+        # layer up; refusing here too keeps the low-level diagnostic from arming a
+        # boundary and a judge no human confirmed. Read from the raw bytes — the
+        # markers live in comments the YAML parse above dropped.
+        try:
+            raw = pathlib.Path(brief_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            raw = ""
+        if f"# {DRAFT_MARKER}" in raw:
+            print(f"refused: the brief still carries `# {DRAFT_MARKER}` draft markers, "
+                  "so its boundary and its judge are an unconfirmed proposal.\nArming "
+                  "would give that proposal the pin's authority. Read each marked "
+                  "line, fix it, delete the marker, then re-run --activate.")
             return 2
         return activate(brief, rel_brief, brief_path, root)
 

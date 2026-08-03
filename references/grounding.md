@@ -2,7 +2,7 @@
 
 Every rule in `lint_brief.py` traces to a passage in a book extracted under
 `~/LifeOS/outputs/book-extraction/`, or is recorded below as an explicit internal
-inference (B11, B12). If a rule cannot be traced either way, delete the rule.
+inference (B11, B12, B17, B18). If a rule cannot be traced either way, delete the rule.
 
 Sources:
 - **AIE** — Chip Huyen, *AI Engineering* (O'Reilly 2025) → `ai-engineering/source-text.md`
@@ -285,6 +285,25 @@ one (a goal that renames while a constraint freezes the public API).
 misspelled key is silently dropped by the renderer, so a warning is worth more than the
 line it costs. It is a warning and never an error, precisely because there is nothing
 behind it but experience with typos.
+
+**B17 — a criterion that cannot move is not a check.** An inference from the B15
+passage's own logic: the baseline exists so a result can be compared to where it
+started, and a brief whose every criterion is measured `pass` and declared `green` has
+fixed both ends of that comparison in advance. Reproduced live before the rule existed:
+a brief whose only criterion was green on HEAD and unrelated to the goal linted clean,
+prepared, armed, and `verify` printed `clean` on a completely untouched tree. The rule
+fires only after measurement — before it, B15 owns the gap — errors only when nothing
+else carries done-ness, and warns for the preservation shapes (`hold`, `before_after`,
+`manual_checks`, a behavior-preserving goal) where a no-op passing acceptance is
+inherent and the diff is the evidence. It matters most for compiled briefs: a model can
+propose a perfectly pinned, perfectly green acceptance block that proves nothing, and
+without this rule the verdict would launder that into authority.
+
+**B18 — a marker is a decision not yet made.** An inference from the confirmation
+contract. `# prompire:unconfirmed` is Prompire's own serialization of "a human has not
+confirmed this line"; `prepare` refuses such a file, and a linter that printed
+"shippable" over the same marker contradicted the gate one command later. No book
+source and none is claimed.
 
 ## deliberately not encoded
 

@@ -12,6 +12,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python3 -m unittest -q tests.test_cart
     expect: exit 0
+manual_checks:
+  - the diff adds count() to src/cart.py
 autonomy: ask
 base_rev: 80e4d7cbc050
 baseline:

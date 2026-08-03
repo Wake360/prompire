@@ -81,7 +81,11 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
-""" + extra + "autonomy: ask\n", encoding="utf-8")
+""" + extra + """\
+manual_checks:
+  - the diff adds the count helper
+autonomy: ask
+""", encoding="utf-8")
     return path
 
 
@@ -540,6 +544,20 @@ def _(repo, checks):
               "a refused draft must not write the default brief")
 
 
+@case("an unconfirmed draft cannot be armed, even through the low-level scope tool")
+def _(repo, checks):
+    result = run("draft", "Change the greeting", cwd=repo)
+    checks.equal(result.returncode, 0, "draft exit")
+    armed = run("scope", ".prompire/task.yaml", "--activate", cwd=repo)
+    checks.equal(armed.returncode, 2, "activate must refuse an unconfirmed draft")
+    checks.ok("prompire:unconfirmed" in armed.stdout, "the refusal names the marker")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
+              "no pointer may be written for an unconfirmed draft")
+    linted = run("lint", ".prompire/task.yaml", cwd=repo)
+    checks.equal(linted.returncode, 1, "lint must not call a marker-laden file shippable")
+    checks.ok("B18" in linted.stdout, "lint names the unconfirmed-draft rule")
+
+
 @case("prepare writes baseline, prompt, checklist, then ACTIVE")
 def _(repo, checks):
     path = brief(repo)
@@ -769,6 +787,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "import pathlib; flag=pathlib.Path('.prompire/run-acceptance'); flag.exists() and pathlib.Path('outside.py').write_text('x')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     prepared_result = run("prepare", path)
@@ -867,6 +887,8 @@ tests_editable: [tests/test_total.py]
 acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/violation-named.ran').write_text('x')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -932,6 +954,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/symlinked.ran').write_text('x')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -969,6 +993,8 @@ acceptance:
     expect: exit 0
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/named-evidence.ran').write_text('x')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -1008,6 +1034,8 @@ acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/authoring-evidence.ran').write_text('x')"
     expect: exit 0
 oracle: human review
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     result = run("prepare", path)
@@ -1040,6 +1068,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/tracked.ran').write_text('x')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     fixtures.git(repo, "add", "-f", str(path))
@@ -1077,6 +1107,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "import pathlib; pathlib.Path('.prompire/{name}.ran').write_text('x')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     first = task_brief("first")
@@ -1465,6 +1497,8 @@ tests_editable: [tests/test_total.py]
 acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", path).returncode, 0, "prepare exit")
@@ -1549,6 +1583,8 @@ tests_policy: immutable
 acceptance:
   - cmd: {regress}
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", path).returncode, 0, "prepare exit")
@@ -1606,6 +1642,8 @@ tests_editable: [tests/test_total.py]
 acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """
     path = fixtures.write(repo, ".prompire/named.yaml", named)
@@ -1641,6 +1679,8 @@ tests_editable: [tests/test_total.py]
 acceptance:
   - cmd: {regress}
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", path).returncode, 0, "prepare exit")
@@ -1671,6 +1711,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     first = task_brief("first")
@@ -1728,6 +1770,8 @@ baseline:
   - cmd: python -c "print('ok')"
     status: pass
     evidence: exit 0, 1 line(s) stdout, 0.0s
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     result = run("verify", path)
@@ -1747,6 +1791,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python -c "print('ok')"
     expect: exit 0
+manual_checks:
+  - the diff does what the goal says
 autonomy: ask
 """)
     checks.equal(run("prepare", linked).returncode, 0, "symlink-case prepare exit")

@@ -158,6 +158,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python3 -m unittest -q tests.test_cart
     expect: exit 0
+manual_checks:
+  - the diff adds count() to src/cart.py
 autonomy: ask
 """)
     c.ok(data["results"][0]["status"] == "pass",
@@ -286,6 +288,8 @@ acceptance:
   - cmd: python3 -m unittest -q api.tests.test_handler
     cwd: services
     expect: exit 0
+manual_checks:
+  - the diff adds the version field
 autonomy: ask
 """)
     c.ok(data["results"][0]["status"] == "pass",
@@ -2137,6 +2141,7 @@ def _(repo, c):
         b"scope: []\n"
         b"tests_policy: immutable\n"
         b'acceptance:\n  - cmd: python3 -c "pass"\n    expect: exit 0\n'
+        b"manual_checks:\n  - the diff adds the count helper\n"
         b"autonomy: ask\n")
     original = p.read_bytes()
 
@@ -2174,6 +2179,8 @@ scope: [src/cart.py]
 acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
+manual_checks:
+  - the diff adds the count helper
 autonomy: ask
 """)
     original = p.read_bytes()
@@ -2199,6 +2206,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
+manual_checks:
+  - the diff adds the count helper
 autonomy: ask
 """)
     r = cli(repo, "prepare", ".prompire/p3-commit.yaml")
@@ -2250,6 +2259,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
+manual_checks:
+  - the diff adds the count helper
 autonomy: ask
 """)
     r = cli(repo, "prepare", ".prompire/p3-wedge.yaml",
@@ -2311,6 +2322,8 @@ tests_policy: immutable
 acceptance:
   - cmd: python3 -c "pass"
     expect: exit 0
+manual_checks:
+  - the diff adds the count helper
 autonomy: ask
 """)
     original = p.read_bytes()

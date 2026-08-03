@@ -17,6 +17,7 @@ from brief_common import (
     AUTONOMY,
     BASELINE_KEYS,
     BASELINE_STATUS,
+    DRAFT_MARKER,
     REQUIRES_VOCAB,
     TESTS_POLICIES,
     TOP_KEYS,
@@ -24,6 +25,7 @@ from brief_common import (
     BriefError,
     acceptance_entries,
     as_list,
+    baseline_map,
     effective_transition,
     entry_key,
     glob_re,
@@ -414,6 +416,42 @@ def check_tests_policy(b, acceptance):
              "a human reads the test diff; put that in `manual_checks`")
 
 
+def check_discrimination(b, acceptance, goal):
+    """B17: once the baseline is measured, something must distinguish the untouched
+    tree from done — otherwise `verify` prints `clean` on a repo nobody touched.
+    Judged only after measurement: before it, transitions are claims B15 has not
+    tested, and firing on an unmeasured brief would flag every draft twice."""
+    measured = baseline_map(b)
+    if not acceptance or not measured:
+        return
+
+    def discriminates(a):
+        e = measured.get(entry_key(a))
+        if effective_transition(a, e) != "flip":
+            return False
+        # a declared flip the baseline already meets moves nothing (B15 warns it)
+        return str((e or {}).get("status") or "").strip().lower() != "pass"
+
+    if any(discriminates(a) for a in acceptance):
+        return
+    # A declared preservation shape is the acknowledgment: `hold`, `before_after` and
+    # `manual_checks` each record, in the file, that a no-op passes acceptance and a
+    # human judges done-ness. Warning over that declaration would restate it. A
+    # behavior-preserving goal counts too — and if it lacks a comparison, B14 already
+    # says so.
+    holds = any(effective_transition(a, measured.get(entry_key(a))) == "hold"
+                for a in acceptance)
+    compares = any(a.get("before_after") for a in acceptance)
+    manual = bool(as_list(b.get("manual_checks")))
+    if not (holds or compares or manual or PRESERVE_RX.search(goal)):
+        err("B17 vacuous-acceptance",
+            "every criterion already passes on untouched HEAD, so `verify` says "
+            "`clean` on a repo nobody touched",
+            "add a criterion that fails today and flips (`transition: flip`), a "
+            "`before_after` comparison, or name in `manual_checks` the judgment that "
+            "decides done")
+
+
 def check(b):
     goal = str(b.get("goal") or "").strip()
     scope = as_list(b.get("scope"))
@@ -441,6 +479,7 @@ def check(b):
     good = acceptance_entries(b)
     cmds = [k[0] for k in keys if k]
     check_baseline(b, good, keys)
+    check_discrimination(b, good, goal)
     check_scope_fields(b, scope, forbidden)
     check_tests_policy(b, good)
 
@@ -539,6 +578,20 @@ def main():
     except BriefError as e:
         print(str(e))
         return 2
+
+    # B18 — the marker is a decision not yet made. Read from the raw bytes, because
+    # it lives in comments the YAML parse above already dropped.
+    try:
+        raw = pathlib.Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raw = ""
+    markers = raw.count(f"# {DRAFT_MARKER}")
+    if markers:
+        err("B18 unconfirmed-draft",
+            f"{markers} `# {DRAFT_MARKER}` line(s) remain — this is a draft, "
+            "not a brief",
+            "read each marked line, fix it, delete the marker; `prepare` refuses "
+            "while one remains")
 
     check(brief)
     errors = [f for f in findings if f["severity"] == "error"]

@@ -243,7 +243,7 @@ def skill_shape():
     return yaml.safe_load(text)
 
 
-ENFORCED_RULE_COUNT = 16  # exact, not a floor — a deletion must fail this, not slide under it
+ENFORCED_RULE_COUNT = 18  # exact, not a floor — a deletion must fail this, not slide under it
 
 NUMBER_WORDS = {n: w for n, w in enumerate(
     ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",

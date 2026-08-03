@@ -552,6 +552,129 @@ acceptance:
 autonomy: ask
 base_rev: "HEAD~1"
 """, ["B16"], [], []),
+
+    # B17 — a measured brief whose every criterion already passes on untouched HEAD
+    # cannot tell done from not started. Only judged once a baseline exists: before
+    # measurement, transitions are claims B15 has not tested yet.
+    ("vacuous-measured-green", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+baseline:
+  - cmd: pytest -q tests/test_upload.py
+    status: pass
+    evidence: exit 0, 1 passed
+autonomy: ask
+""", ["B17"], [], []),
+
+    ("flip-criterion-discriminates", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+  - cmd: python -c "from src.upload import retry"
+    expect: exit 0
+    transition: flip
+baseline:
+  - cmd: pytest -q tests/test_upload.py
+    status: pass
+    evidence: exit 0, 1 passed
+  - cmd: python -c "from src.upload import retry"
+    status: fail
+    evidence: exit 1, ImportError
+autonomy: ask
+""", [], [], ["B17"]),
+
+    # a declared flip the baseline already meets is not a discriminator — B15 warns
+    # pointless-flip, and B17 must not count it as telling done apart from untouched
+    ("pointless-flip-does-not-discriminate", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+    transition: flip
+baseline:
+  - cmd: pytest -q tests/test_upload.py
+    status: pass
+    evidence: exit 0, 1 passed
+autonomy: ask
+""", ["B17"], ["B15"], []),
+
+    ("hold-is-a-declared-preservation-shape", """
+goal: Add a count helper to the cart module.
+scope: [src/cart.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_legacy.py
+    expect: exit 1
+    transition: hold
+baseline:
+  - cmd: pytest -q tests/test_legacy.py
+    status: pass
+    evidence: "exit 1, 1 failed"
+autonomy: ask
+""", [], [], ["B17"]),
+
+    ("manual-checks-carry-doneness", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+baseline:
+  - cmd: pytest -q tests/test_upload.py
+    status: pass
+    evidence: exit 0, 1 passed
+manual_checks:
+  - the diff adds a retry loop to upload()
+autonomy: ask
+""", [], [], ["B17"]),
+
+    ("preserve-goal-green-is-legitimate", """
+goal: Refactor the report module into renderer and writer halves.
+scope: [src/report.py, src/render.py]
+forbidden: [tests/**]
+plan_first: true
+acceptance:
+  - cmd: python -m src.report
+    expect: exit 0, output identical to the baseline digest
+    before_after: true
+baseline:
+  - cmd: python -m src.report
+    status: pass
+    evidence: "exit 0, 2 line(s) stdout, 0.3s, sha256:2c913d0e74e2"
+autonomy: ask
+""", [], [], ["B17"]),
+
+    # before the baseline is measured, B17 stays silent — B15 owns that gap
+    ("unmeasured-green-not-yet-vacuous", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+autonomy: ask
+""", [], [], ["B17"]),
+
+    # B18 — a draft marker means the file is a proposal, not a brief
+    ("unconfirmed-marker-is-not-shippable", """
+goal: Add a retry to the upload client.
+scope: [src/upload.py]  # prompire:unconfirmed — list the exact files the agent may edit
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+autonomy: ask
+""", ["B18"], [], []),
 ]
 
 

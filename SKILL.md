@@ -222,7 +222,8 @@ until the code exists.
 
 ## The rules
 
-Sixteen rules, ids `B1`–`B16`, each traced to a book passage. Four carry the weight:
+Eighteen rules, ids `B1`–`B18`, each traced to a book passage or recorded as an
+explicit inference. Five carry the weight:
 
 - **B4** — no acceptance block, no brief. Refusing to emit one is the most valuable
   thing this skill does.
@@ -235,6 +236,10 @@ Sixteen rules, ids `B1`–`B16`, each traced to a book passage. Four carry the w
 - **B16** — a brief must name the commit its work started from, and it has to be a
   commit. Without it an agent that commits its own work hands the checker a base that
   already contains it, and an empty diff reads as a compliant one.
+- **B17** — once the baseline is measured, something must distinguish the untouched
+  tree from done: a criterion that flips, or a declared preservation shape (`hold`,
+  `before_after`, a manual check, a behavior-preserving goal). Otherwise `verify`
+  prints `clean` on a repo nobody touched, and the verdict is worth nothing.
 
 Full table with what each rule can and cannot catch: **`references/rules.md`**.
 Where each one comes from: **`references/grounding.md`**.

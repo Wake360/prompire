@@ -52,6 +52,8 @@ the brief the agent is held to:
      acceptance:
        - cmd: python3 check.py
          expect: exit 0
+     manual_checks:
+       - greeting.py no longer says hello
 1. prepare: measure the acceptance command on untouched HEAD, lint the brief,
    render the prompt, pin the base commit.
      armed: prompt and checklist rendered, base commit pinned

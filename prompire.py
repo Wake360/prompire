@@ -15,7 +15,8 @@ import tempfile
 
 import yaml
 
-from brief_common import ACCEPTANCE_KEYS, as_list, glob_re, norm_path, utf8_stdio
+from brief_common import (ACCEPTANCE_KEYS, DRAFT_MARKER, as_list, glob_re, norm_path,
+                          utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -28,9 +29,6 @@ TOOLS = {
 }
 PROMPT_TARGETS = ("generic", "claude", "codex", "copilot")
 LOW_LEVEL_COMMANDS = ("baseline", "lint", "render", "scope")
-# A draft is not a brief yet. Every line the heuristic could not settle carries this
-# marker, and `prepare` refuses while one remains — deleting it is the confirmation.
-DRAFT_MARKER = "prompire:unconfirmed"
 DEFAULT_DRAFT_OUT = ".prompire/task.yaml"
 DRAFT_AGENT_TIMEOUT = 600
 # Host invocations this tree has actually run. claude is the shape bench/run.py
@@ -83,6 +81,8 @@ autonomy: ask
 acceptance:
   - cmd: {DEMO_PYTHON} check.py
     expect: exit 0
+manual_checks:
+  - greeting.py no longer says hello
 """
 DEMO_CHECK = """\
 import pathlib
