@@ -292,18 +292,28 @@ started, and a brief whose every criterion is measured `pass` and declared `gree
 fixed both ends of that comparison in advance. Reproduced live before the rule existed:
 a brief whose only criterion was green on HEAD and unrelated to the goal linted clean,
 prepared, armed, and `verify` printed `clean` on a completely untouched tree. The rule
-fires only after measurement — before it, B15 owns the gap — errors only when nothing
-else carries done-ness, and warns for the preservation shapes (`hold`, `before_after`,
-`manual_checks`, a behavior-preserving goal) where a no-op passing acceptance is
-inherent and the diff is the evidence. It matters most for compiled briefs: a model can
-propose a perfectly pinned, perfectly green acceptance block that proves nothing, and
-without this rule the verdict would launder that into authority.
+fires only after measurement — before it, B15 owns the gap — and passes silently when
+the brief declares a carrier of done-ness: a criterion that flips, one that `hold`s, a
+`before_after` comparison, or a `manual_checks` entry. Each of those is a statement in
+the file that a no-op passes acceptance and something else decides done.
+
+A behavior-preserving *word in the goal* used to be a fourth escape and is not one
+anymore. Adversarial review reached it through the one field a compiler writes freely
+and no marker covers: `fix the off-by-one in total() and rename the helper` linted
+clean and verified clean on an untouched tree. A refactor states its evidence like
+every other task. It matters most for compiled briefs: a model can propose a perfectly
+pinned, perfectly green acceptance block that proves nothing, and without this rule the
+verdict would launder that into authority.
 
 **B18 — a marker is a decision not yet made.** An inference from the confirmation
 contract. `# prompire:unconfirmed` is Prompire's own serialization of "a human has not
 confirmed this line"; `prepare` refuses such a file, and a linter that printed
-"shippable" over the same marker contradicted the gate one command later. No book
-source and none is claimed.
+"shippable" over the same marker contradicted the gate one command later. The rule
+covers two records, because a comment is the one part of a YAML file no round-trip
+preserves: adversarial review took a six-decision draft — a relaxed `tests_policy`
+among them — through one `safe_load`/`safe_dump` and arrived at an armed brief with the
+pin's authority and not one line read by a human. The `unconfirmed:` ledger is the same
+fact stored where a formatter cannot drop it. No book source and none is claimed.
 
 ## deliberately not encoded
 

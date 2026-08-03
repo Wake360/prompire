@@ -16,8 +16,8 @@ import time
 
 import yaml
 
-from brief_common import (ACCEPTANCE_KEYS, DRAFT_MARKER, as_list, glob_re, norm_path,
-                          utf8_stdio)
+from brief_common import (ACCEPTANCE_KEYS, DRAFT_LEDGER, DRAFT_MARKER, as_list,
+                          glob_re, norm_path, utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -500,7 +500,9 @@ def matches_tracked(pattern, tracked):
     return any(rx.match(path) for path in tracked)
 
 
-def _marked(line, note):
+def _marked(line, note, ledger=None, label=None):
+    if ledger is not None and label is not None:
+        ledger.append(label)
     return f"{line}  # {DRAFT_MARKER} — {note}"
 
 
@@ -511,24 +513,28 @@ def agent_draft_text(sentence, data, root, source="agent"):
     proposal; what the repository itself corroborates (a tracked path, a command a
     config file declares) is counted in `stats` but still shown for confirmation,
     because corroboration says the thing exists, not that it is the right boundary
-    or the right judge. Returns (text, stats)."""
+    or the right judge. Every marked line is also listed in the `unconfirmed:` ledger,
+    which is what survives a YAML round-trip. Returns (text, stats)."""
     detected = dict(detect_acceptance(root))
     tracked = tracked_paths(root)
     stats = {"tracked_scope": 0, "detected_acceptance": 0}
-    out = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker.",
-           "goal: |", f"  {' '.join(str(data.get('goal') or sentence).split())}"]
+    ledger = []
+    body = ["goal: |", f"  {' '.join(str(data.get('goal') or sentence).split())}"]
+    out = body
     scope = [str(s) for s in as_list(data.get("scope"))]
     if scope:
         out.append("scope:")
-        for entry in scope:
+        for index, entry in enumerate(scope):
             if matches_tracked(entry, tracked):
                 stats["tracked_scope"] += 1
                 note = "agent-proposed boundary; confirm it"
             else:
                 note = "matches nothing tracked today — new file or typo? confirm it"
-            out.append(_marked(f"  - {_yaml_scalar(entry)}", note))
+            out.append(_marked(f"  - {_yaml_scalar(entry)}", note,
+                               ledger, f"scope[{index}]"))
     else:
-        out.append(_marked("scope: []", "list the exact files the agent may edit"))
+        out.append(_marked("scope: []", "list the exact files the agent may edit",
+                           ledger, "scope"))
     for key, note, empty_note in (
             ("forbidden", "agent-proposed deny-list; confirm it names what must not change",
              "the agent says nothing is off-limits; confirm that"),
@@ -537,61 +543,77 @@ def agent_draft_text(sentence, data, root, source="agent"):
         if key in data:
             values = [str(v) for v in as_list(data.get(key))]
             if values:
-                out.append(_marked(f"{key}:", note))
+                out.append(_marked(f"{key}:", note, ledger, key))
                 out += [f"  - {_yaml_scalar(v)}" for v in values]
+            elif empty_note:
+                out.append(_marked(f"{key}: []", empty_note, ledger, key))
             else:
-                out.append(_marked(f"{key}: []", empty_note) if empty_note
-                           else f"{key}: []")
+                out.append(f"{key}: []")
     policy = data.get("tests_policy")
     if policy is not None:
         line = f"tests_policy: {_yaml_scalar(str(policy))}"
         if policy != "immutable":
-            line = _marked(line, "agent proposed relaxing test protection; confirm it")
+            line = _marked(line, "agent proposed relaxing test protection; confirm it",
+                           ledger, "tests_policy")
         out.append(line)
     editable = [str(t) for t in as_list(data.get("tests_editable"))]
     if editable:
         out.append(_marked("tests_editable:",
-                           "only these test paths may change; confirm the list is exact"))
+                           "only these test paths may change; confirm the list is exact",
+                           ledger, "tests_editable"))
         out += [f"  - {_yaml_scalar(t)}" for t in editable]
     oracle = " ".join(str(data.get("oracle") or "").split())
     if oracle:
         out.append(_marked(f"oracle: {_yaml_scalar(oracle)}",
-                           "agent-proposed judge for authored tests; confirm you trust it"))
+                           "agent-proposed judge for authored tests; confirm you trust it",
+                           ledger, "oracle"))
     if data["acceptance"]:
         out.append("acceptance:")
-        for item in data["acceptance"]:
+        for index, item in enumerate(data["acceptance"]):
             cmd = str(item["cmd"])
             if cmd in detected:
                 stats["detected_acceptance"] += 1
                 note = f"detected from {detected[cmd]}; confirm it"
             else:
                 note = "agent-proposed; run it yourself before trusting it"
-            # The sub-keys that move authority are disclosed on the marked line, so
-            # deleting the marker is a decision about them too, not only about `cmd`.
-            requires = [str(r) for r in as_list(item.get("requires"))]
-            if requires:
-                note += ("; declares requires: " + ", ".join(requires)
-                         + " — the baseline will never run it")
-            transition = str(item.get("transition") or "").strip().lower()
-            if transition == "flip":
-                note += "; claims it fails on HEAD and the work must flip it green"
-            elif transition == "hold":
-                note += "; claims it must stay exactly as measured"
-            out.append(_marked(f"  - cmd: {_yaml_scalar(cmd)}", note))
+            # Every sub-key that moves what the criterion decides is named on the
+            # marked line, so deleting the marker is a decision about them too and
+            # none of them rides in unread. `before_after` in particular is one of
+            # the shapes B17 accepts as carrying done-ness.
             rest = {str(k): v for k, v in item.items() if k != "cmd"}
             rest.setdefault("expect", "exit 0")
+            disclosures = [f"expects {rest['expect']}"]
+            requires = [str(r) for r in as_list(item.get("requires"))]
+            if requires:
+                disclosures.append("declares requires: " + ", ".join(requires)
+                                   + " — the baseline will never run it")
+            transition = str(item.get("transition") or "").strip().lower()
+            if transition == "flip":
+                disclosures.append("claims it fails on HEAD and the work must flip it green")
+            elif transition == "hold":
+                disclosures.append("claims it must stay exactly as measured")
+            if item.get("before_after"):
+                disclosures.append("compares against the baseline digest, which is what "
+                                   "says this task is done")
+            if item.get("cwd") is not None:
+                disclosures.append(f"runs in {norm_path(item['cwd']) or '.'}/")
+            if item.get("timeout") is not None:
+                disclosures.append(f"times out after {item['timeout']}s")
+            out.append(_marked(f"  - cmd: {_yaml_scalar(cmd)}",
+                               note + "; " + "; ".join(disclosures),
+                               ledger, f"acceptance[{index}]"))
             out += [f"    {key}: {_yaml_scalar(rest[key])}" for key in sorted(rest)]
     else:
         out.append(_marked("acceptance: []",
                            "no test command detected; add one that exists in this repo"
                            if source == "deterministic" else
                            "the agent proposed no runnable check; add one that exists "
-                           "in this repo"))
+                           "in this repo", ledger, "acceptance"))
     manual = [str(m) for m in as_list(data.get("manual_checks"))]
     if manual:
         out.append(_marked("manual_checks:",
                            "only a human can check these, and they may be all that "
-                           "says done; confirm them"))
+                           "says done; confirm them", ledger, "manual_checks"))
         out += [f"  - {_yaml_scalar(m)}" for m in manual]
     # A model told "at most three lines" plausibly answers with a YAML list; carry
     # the lines, not the list's repr.
@@ -602,7 +624,7 @@ def agent_draft_text(sentence, data, root, source="agent"):
     if context:
         out.append(_marked("context: |",
                            "the prompt carries this as fact; confirm it is true and "
-                           "worth its words"))
+                           "worth its words", ledger, "context"))
         out += [f"  {line}".rstrip() for line in context.splitlines()]
     if data.get("plan_first"):
         out.append("plan_first: true")
@@ -610,7 +632,14 @@ def agent_draft_text(sentence, data, root, source="agent"):
     if rollback:
         out.append(f"rollback: {_yaml_scalar(rollback)}")
     out.append("autonomy: ask")
-    return "\n".join(out) + "\n", stats
+    head = [f"# Draft — read every line marked {DRAFT_MARKER}, fix it, delete the marker,",
+            f"# then delete the `{DRAFT_LEDGER}:` block below. Prompire refuses to "
+            "prepare or arm",
+            "# while either remains: comments do not survive a YAML round-trip, the "
+            "block does.",
+            f"{DRAFT_LEDGER}:"]
+    head += [f"  - {_yaml_scalar(label)}" for label in ledger]
+    return "\n".join(head + body) + "\n", stats
 
 
 def agent_argv(entry, prompt, root):
@@ -696,7 +725,12 @@ def draft_snapshot(root):
         for command in commands:
             subprocess.run(command, cwd=str(snapshot), check=True,
                            capture_output=True)
-        yield snapshot
+        # The commit the agent starts from, so a write it commits away is still
+        # visible to the audit afterwards — see `_snapshot_writes`.
+        stamped = subprocess.run(["git", "-C", str(snapshot), "rev-parse", "HEAD"],
+                                 capture_output=True, encoding="utf-8",
+                                 errors="replace")
+        yield snapshot, (stamped.stdout.strip() if stamped.returncode == 0 else None)
     finally:
         _rmtree(snapshot)
 
@@ -712,16 +746,47 @@ def run_draft_agent(argv, prompt, root):
         return None, f"agent did not answer within {DRAFT_AGENT_TIMEOUT}s"
 
 
-def _snapshot_writes(agent_root):
+def draft_ledger(raw):
+    """The still-unconfirmed decisions a draft's `unconfirmed:` block lists.
+
+    Parsed from the text rather than taken from a loaded brief, so the three gates
+    (prepare, lint B18, --activate) all read the same thing from the same bytes. An
+    unparseable file has no ledger to report — the caller's own loader reports that.
+    """
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict) or DRAFT_LEDGER not in data:
+        return []
+    return [str(item) for item in as_list(data.get(DRAFT_LEDGER))] or [DRAFT_LEDGER]
+
+
+def _snapshot_writes(agent_root, setup_rev):
     """What the drafting agent left changed in its snapshot, or None on an unreadable
-    audit. The snapshot was committed at setup, so anything porcelain reports is the
-    agent's own write."""
+    audit.
+
+    Two questions, not one. `status --porcelain` compares the worktree to HEAD, which
+    an agent that commits its own writes moves along with it — the same move the
+    verifier's pinned base exists to refuse, and it hides a write here just as well.
+    So the setup commit recorded before the agent ran is the second comparison, and a
+    committed write shows up in it."""
+    written = set()
     audited = subprocess.run(["git", "-C", str(agent_root), "status", "--porcelain"],
                              capture_output=True, encoding="utf-8", errors="replace")
     if audited.returncode:
         return None
-    return sorted(line[3:].strip() for line in audited.stdout.splitlines()
-                  if line.strip())
+    written.update(line[3:].strip() for line in audited.stdout.splitlines()
+                   if line.strip())
+    if setup_rev:
+        moved = subprocess.run(
+            ["git", "-C", str(agent_root), "diff", "--name-only", setup_rev],
+            capture_output=True, encoding="utf-8", errors="replace")
+        if moved.returncode:
+            return None
+        written.update(line.strip() for line in moved.stdout.splitlines()
+                       if line.strip())
+    return sorted(written)
 
 
 def draft(args, extra):
@@ -766,7 +831,7 @@ def draft(args, extra):
         try:
             # The host arguments are built inside the snapshot, so a `{root}` a host
             # takes as its workspace names the disposable repository too.
-            with draft_snapshot(root) as agent_root:
+            with draft_snapshot(root) as (agent_root, setup_rev):
                 if args.agent:
                     argv, feed = agent_argv(DRAFT_AGENTS[args.agent], prompt, agent_root)
                 else:
@@ -778,7 +843,7 @@ def draft(args, extra):
                     # A drafting run only reads. A write is evidence the run broke
                     # its contract, not a mess to tidy: the snapshot absorbed it, and
                     # the refusal names it instead of repairing it.
-                    written = _snapshot_writes(agent_root)
+                    written = _snapshot_writes(agent_root, setup_rev)
                     if written is None:
                         trouble = "could not audit the snapshot after the agent ran"
                     elif written:
@@ -957,6 +1022,13 @@ def prepare(args, extra):
         return report_refusal(
             f"draft not confirmed: fix and remove each `# {DRAFT_MARKER}` line first",
             args.json)
+    if draft_ledger(raw):
+        return report_refusal(
+            f"draft not confirmed: the `{DRAFT_LEDGER}:` block still lists "
+            + ", ".join(draft_ledger(raw))
+            + ". Comments do not survive a YAML round-trip and this block does, so it "
+              "is what says these decisions are still the compiler's. Read each one, "
+              "then delete the block", args.json)
     try:
         root = repo_root(brief.resolve().parent)
     except RepoError as exc:

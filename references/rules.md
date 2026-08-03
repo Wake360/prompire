@@ -21,8 +21,8 @@ traced there gets deleted, not weakened. Field meanings are `schema.md`.
 | B14 | behaviour-preserving work compares before and after | warn |
 | B15 | every criterion carries a measured baseline, and one that is not green today declares which transition it is making | error (missing baseline, missing evidence, unverifiable criterion: warn) |
 | B16 | `base_rev` is present and names a fixed commit SHA, not `HEAD` or a branch | error |
-| B17 | once the baseline is measured, something distinguishes untouched HEAD from done: a criterion that flips, or a declared preservation/human carrier (`hold`, `before_after`, `manual_checks`, a behavior-preserving goal) | error (acknowledged preservation shapes: warn) — *inference, not a quoted passage* |
-| B18 | no `# prompire:unconfirmed` draft marker remains | error — *no book source; the confirmation contract made visible* |
+| B17 | once the baseline is measured, something distinguishes untouched HEAD from done: a criterion that flips, or a declared carrier of done-ness — `hold`, `before_after`, or `manual_checks` | error — *inference, not a quoted passage* |
+| B18 | no `# prompire:unconfirmed` marker and no `unconfirmed:` ledger block remains | error — *no book source; the confirmation contract made visible* |
 
 ## B7 — the Goodhart rule, in three arrangements
 

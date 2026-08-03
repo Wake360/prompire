@@ -116,13 +116,17 @@ def _(repo, checks):
     checks.ok("prompire:unconfirmed" in text, "open items must be visibly unconfirmed")
     blocked = run("prepare", path)
     checks.equal(blocked.returncode, 2, "prepare must refuse an unconfirmed draft")
-    confirmed = text.replace("# prompire:unconfirmed", "# confirmed")
-    path.write_text(confirmed, encoding="utf-8")
+    ledger_only = "\n".join(
+        line for line in text.replace("# prompire:unconfirmed", "# confirmed")
+        .splitlines() if not line.startswith("unconfirmed:")
+        and not re.match(r"^  - (scope|acceptance|tests_|oracle|context|forbidden"
+                         r"|constraints|manual_checks)", line))
+    path.write_text(ledger_only + "\n", encoding="utf-8")
     # scope [] and an empty acceptance still fall over on lint — but with lint's own
     # verdict, not a draft refusal; the gate must not eat the lint result
     after = run("prepare", path)
     checks.ok("draft not confirmed" not in after.stdout + after.stderr,
-              "removing the markers must clear the draft gate")
+              "removing the markers and the ledger must clear the draft gate")
 
 
 @case("draft proposes only commands the repo evidences")
@@ -317,6 +321,53 @@ autonomy: auto
     checks.equal(blocked.returncode, 2, "prepare must refuse the unconfirmed draft")
 
 
+@case("a YAML round-trip cannot launder a draft into a confirmed brief")
+def _(repo, checks):
+    # Comments are the one part of a YAML file no round-trip preserves: `yq -y .`, a
+    # formatter, or an agent asked to tidy the brief drops every marker. The ledger
+    # is in the data, so the refusal survives what the markers do not.
+    proposal = pathlib.Path(repo) / ".prompire" / "roundtrip.yaml"
+    proposal.parent.mkdir(parents=True, exist_ok=True)
+    proposal.write_text("""\
+goal: Repair the totals test.
+scope: [src/cart.py]
+tests_policy: named
+tests_editable: [tests/test_total.py]
+acceptance:
+  - cmd: python -c "print('ok')"
+    expect: exit 0
+manual_checks:
+  - the repaired assertion still tests the old contract
+""", encoding="utf-8")
+    result = run("draft", "repair totals", "--proposal", proposal,
+                 "--out", ".prompire/rt.yaml", cwd=repo)
+    checks.equal(result.returncode, 0, "draft exit")
+    path = pathlib.Path(repo) / ".prompire" / "rt.yaml"
+    laundered = yaml.safe_dump(yaml.safe_load(path.read_text(encoding="utf-8")),
+                               sort_keys=False)
+    path.write_text(laundered, encoding="utf-8")
+    checks.equal(laundered.count("prompire:unconfirmed"), 0,
+                 "the round-trip really does strip every comment marker")
+
+    blocked = run("prepare", path, cwd=repo)
+    checks.equal(blocked.returncode, 2, "prepare must still refuse the laundered draft")
+    checks.ok("tests_policy" in blocked.stdout,
+              "the refusal names the decisions still unconfirmed")
+    armed = run("scope", ".prompire/rt.yaml", "--activate", cwd=repo)
+    checks.equal(armed.returncode, 2, "activate must still refuse it")
+    checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
+              "no unconfirmed draft may reach the pin")
+    linted = run("lint", ".prompire/rt.yaml", cwd=repo)
+    checks.equal(linted.returncode, 1, "lint must not call it shippable")
+    checks.ok("B18" in linted.stdout, "lint names the unconfirmed-draft rule")
+
+    body = yaml.safe_load(laundered)
+    body.pop("unconfirmed")
+    path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    checks.equal(run("prepare", path, cwd=repo).returncode, 0,
+                 "deleting the block is what confirms the draft")
+
+
 @case("draft --proposal rejects measured fields, unknown keys, and flag mixes")
 def _(repo, checks):
     proposal = pathlib.Path(repo) / "measured.yaml"
@@ -357,6 +408,28 @@ sys.stdout.write(pathlib.Path({str(reply)!r}).read_text(encoding="utf-8"))
               "no draft may come out of a run that broke its read-only contract")
     checks.ok(not (pathlib.Path(repo) / "planted.txt").exists(),
               "the write landed in the snapshot, never in the caller's checkout")
+
+    # `git status` compares the worktree to HEAD, which an agent that commits its own
+    # writes moves along with it — the same move the pinned base exists to refuse.
+    committer = pathlib.Path(repo) / "committing_agent.py"
+    committer.write_text(f"""\
+import pathlib, subprocess, sys
+sys.stdin.read()
+pathlib.Path("committed.txt").write_text("x", encoding="utf-8")
+subprocess.run(["git", "add", "-A"], capture_output=True)
+subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a",
+                "-c", "commit.gpgsign=false", "commit", "--no-verify", "-qm", "hide"],
+               capture_output=True)
+sys.stdout.write(pathlib.Path({str(reply)!r}).read_text(encoding="utf-8"))
+""", encoding="utf-8")
+    cmd = shlex.join([sys.executable, str(committer)]) if os.name != "nt" else \
+        subprocess.list2cmdline([sys.executable, str(committer)])
+    result = run("draft", "Improve the cart", "--agent-cmd", cmd,
+                 "--out", ".prompire/committed.yaml", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "committing the write away must not hide it from the audit")
+    checks.ok("committed.txt" in result.stdout,
+              "the refusal names the committed path")
 
 
 @case("draft --json reports the decisions and the corroborations")
@@ -664,8 +737,10 @@ def _(repo, checks):
         sys.path.remove(str(ROOT))
     snapshot_path = None
     try:
-        with draft_snapshot(pathlib.Path(repo)) as made:
+        with draft_snapshot(pathlib.Path(repo)) as (made, setup_rev):
             snapshot_path = made
+            checks.ok(bool(setup_rev),
+                      "the snapshot records the commit its audit compares against")
             raise RuntimeError("stop inside snapshot")
     except RuntimeError:
         pass
@@ -691,7 +766,8 @@ def _(repo, checks):
     checks.equal(result.returncode, 0, "draft exit")
     armed = run("scope", ".prompire/task.yaml", "--activate", cwd=repo)
     checks.equal(armed.returncode, 2, "activate must refuse an unconfirmed draft")
-    checks.ok("prompire:unconfirmed" in armed.stdout, "the refusal names the marker")
+    checks.ok("prompire:unconfirmed" in armed.stdout or "unconfirmed:" in armed.stdout,
+              "the refusal names what is still unconfirmed")
     checks.ok(not (pathlib.Path(repo) / ".prompire" / "ACTIVE").exists(),
               "no pointer may be written for an unconfirmed draft")
     linted = run("lint", ".prompire/task.yaml", cwd=repo)

@@ -17,6 +17,7 @@ from brief_common import (
     AUTONOMY,
     BASELINE_KEYS,
     BASELINE_STATUS,
+    DRAFT_LEDGER,
     DRAFT_MARKER,
     REQUIRES_VOCAB,
     TESTS_POLICIES,
@@ -416,7 +417,7 @@ def check_tests_policy(b, acceptance):
              "a human reads the test diff; put that in `manual_checks`")
 
 
-def check_discrimination(b, acceptance, goal):
+def check_discrimination(b, acceptance):
     """B17: once the baseline is measured, something must distinguish the untouched
     tree from done — otherwise `verify` prints `clean` on a repo nobody touched.
     Judged only after measurement: before it, transitions are claims B15 has not
@@ -436,14 +437,19 @@ def check_discrimination(b, acceptance, goal):
         return
     # A declared preservation shape is the acknowledgment: `hold`, `before_after` and
     # `manual_checks` each record, in the file, that a no-op passes acceptance and a
-    # human judges done-ness. Warning over that declaration would restate it. A
-    # behavior-preserving goal counts too — and if it lacks a comparison, B14 already
-    # says so.
+    # human judges done-ness. Warning over that declaration would restate it.
+    #
+    # A behavior-preserving *word in the goal* is not one of them. It used to be, and
+    # that made the escape reachable by the one field a compiler writes freely and
+    # nobody confirms: "fix the off-by-one and rename the helper" linted clean and
+    # verified clean on an untouched tree. A refactor states its evidence like every
+    # other task — a before/after comparison, a held criterion, or the human check
+    # that decides it.
     holds = any(effective_transition(a, measured.get(entry_key(a))) == "hold"
                 for a in acceptance)
     compares = any(a.get("before_after") for a in acceptance)
     manual = bool(as_list(b.get("manual_checks")))
-    if not (holds or compares or manual or PRESERVE_RX.search(goal)):
+    if not (holds or compares or manual):
         err("B17 vacuous-acceptance",
             "every criterion already passes on untouched HEAD, so `verify` says "
             "`clean` on a repo nobody touched",
@@ -479,7 +485,7 @@ def check(b):
     good = acceptance_entries(b)
     cmds = [k[0] for k in keys if k]
     check_baseline(b, good, keys)
-    check_discrimination(b, good, goal)
+    check_discrimination(b, good)
     check_scope_fields(b, scope, forbidden)
     check_tests_policy(b, good)
 
@@ -592,6 +598,15 @@ def main():
             "not a brief",
             "read each marked line, fix it, delete the marker; `prepare` refuses "
             "while one remains")
+    listed = [str(item) for item in as_list(brief.get(DRAFT_LEDGER))] \
+        if DRAFT_LEDGER in brief else []
+    if DRAFT_LEDGER in brief:
+        err("B18 unconfirmed-draft",
+            f"the `{DRAFT_LEDGER}:` block still lists "
+            + (", ".join(listed) or "decisions the compiler made"),
+            "this block is the confirmation record that survives a YAML round-trip, "
+            "which the comment markers do not; read each decision, then delete the "
+            "block")
 
     check(brief)
     errors = [f for f in findings if f["severity"] == "error"]

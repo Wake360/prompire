@@ -43,6 +43,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from brief_common import (
     ALWAYS_ALLOWED,
+    DRAFT_LEDGER,
     DRAFT_MARKER,
     SKIP_MARKERS,
     BriefError,
@@ -763,11 +764,17 @@ def main(argv):
             raw = pathlib.Path(brief_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             raw = ""
-        if f"# {DRAFT_MARKER}" in raw:
-            print(f"refused: the brief still carries `# {DRAFT_MARKER}` draft markers, "
-                  "so its boundary and its judge are an unconfirmed proposal.\nArming "
-                  "would give that proposal the pin's authority. Read each marked "
-                  "line, fix it, delete the marker, then re-run --activate.")
+        listed = ([str(item) for item in as_list(brief.get(DRAFT_LEDGER))]
+                  if DRAFT_LEDGER in brief else [])
+        if f"# {DRAFT_MARKER}" in raw or DRAFT_LEDGER in brief:
+            still = (f"lists {', '.join(listed) or 'decisions'} in its "
+                     f"`{DRAFT_LEDGER}:` block" if DRAFT_LEDGER in brief
+                     else f"carries `# {DRAFT_MARKER}` draft markers")
+            print(f"refused: the brief still {still}, so its boundary and its judge "
+                  "are an unconfirmed proposal.\nArming would give that proposal the "
+                  "pin's authority. Read each decision, fix what needs fixing, delete "
+                  f"the markers and the `{DRAFT_LEDGER}:` block, then re-run "
+                  "--activate.")
             return 2
         return activate(brief, rel_brief, brief_path, root)
 

@@ -31,6 +31,14 @@ BASELINE_KEYS = {"cmd", "cwd", "status", "reason", "evidence", "must_flip"}
 # check_scope.py refuses to arm one — the marker is Prompire's serialization of
 # "unconfirmed", never the model's to write or to clear.
 DRAFT_MARKER = "prompire:unconfirmed"
+# The same fact, in the data rather than in comments. A comment is the one part of a
+# YAML file no round-trip preserves: `yq -y .`, a formatter, an editor plugin, or an
+# agent asked to tidy the brief drops every marker above, and the file then reads as
+# fully confirmed. Reproduced end to end — six unconfirmed decisions, a relaxed
+# `tests_policy` among them, went from draft to armed with the pin's authority. So the
+# ledger lists what is still unconfirmed as a key every gate also refuses, and a
+# round-trip carries the refusal instead of erasing it.
+DRAFT_LEDGER = "unconfirmed"
 
 AUTONOMY = ("manual", "ask", "auto")
 BASELINE_STATUS = ("pass", "fail", "not_runnable")

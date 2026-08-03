@@ -29,8 +29,15 @@ authority; the verifier is unchanged.**
   `before_after`, no `manual_checks`, no behavior-preserving goal — is
   refused, because `verify` would print `clean` on a repo nobody touched.
   Declared preservation shapes pass: the declaration is the acknowledgment.
-- Lint `B18 unconfirmed-draft` (error): a `# prompire:unconfirmed` marker
-  makes lint exit 1 instead of printing "brief is shippable" over it.
+- Lint `B18 unconfirmed-draft` (error): a `# prompire:unconfirmed` marker, or a
+  remaining `unconfirmed:` ledger block, makes lint exit 1 instead of printing
+  "brief is shippable" over it.
+- The `unconfirmed:` ledger: a draft lists its open decisions as data, not only
+  as comments, and `prepare`, `lint` and `--activate` refuse while it stands.
+  Adversarial review armed a six-decision draft — a relaxed `tests_policy`
+  among them — by running it through one `yaml.safe_load`/`safe_dump`, which
+  is all a formatter, `yq -y .`, or an agent asked to tidy the file does.
+  Comments are the one part of a YAML file no round-trip preserves.
 - `bench/compile.py`: the offline compiler-stage harness — short request in,
   scored contract out, with a logged mechanical blind-confirm and the
   discrimination triple (untouched HEAD / gold write-set / wrong write-set).
@@ -38,9 +45,20 @@ authority; the verifier is unchanged.**
 
 ### Changed
 
-- Drafting is enforced read-only: the disposable snapshot is audited with
-  `git status` after the agent exits, and a run that wrote anything is refused
-  with the written paths named — surfaced, never silently repaired.
+- Drafting is enforced read-only: after the agent exits the disposable snapshot
+  is audited against both its worktree and the commit recorded before the run,
+  so a drafting agent that commits its writes away does not hide them either.
+  A run that wrote anything is refused with the paths named — surfaced, never
+  silently repaired.
+- B17 no longer accepts a behavior-preserving word in the `goal` as evidence of
+  done-ness. That escape was reachable through the one field a compiler writes
+  freely and no marker covers: "fix the off-by-one and rename the helper"
+  linted clean and verified clean on an untouched tree. A refactor states its
+  evidence like every other task — `hold`, `before_after`, or `manual_checks`.
+- Every acceptance sub-key that moves what a criterion decides — `expect`,
+  `requires`, `transition`, `before_after`, `cwd`, `timeout` — is named on the
+  marked line. `before_after: true` in particular is one of the shapes B17
+  accepts, and it previously rode in unmarked and unnamed.
 - `check_scope.py --activate` refuses a brief still carrying draft markers;
   the confirmation gate is no longer one command deep.
 - Marker coverage widened to what the model actually decided: `forbidden`,

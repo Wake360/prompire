@@ -20,10 +20,14 @@ dirty_baseline, which are measured), then run
 comments are dropped, measured
 fields are refused, and every authority-sensitive line — the boundary, each acceptance
 command, a relaxed tests policy, the deny-list, the constraints, the manual checks,
-any context — comes back marked `# prompire:unconfirmed`. Present the marked lines to
-the user; delete a marker only when the user has confirmed that line. Do not confirm
-your own proposal: `prepare` and `--activate` both refuse while a marker remains, and
-that refusal is the trust boundary, not an obstacle.
+any context — comes back marked `# prompire:unconfirmed` and listed in an
+`unconfirmed:` block at the top of the file. Present those decisions to the user;
+delete a marker only when the user has confirmed that line, and delete the
+`unconfirmed:` block only once every one of them is confirmed. Never reserialize a
+draft to clear it — the block exists because comments do not survive a round-trip, and
+clearing it without reading the decisions is exactly the failure it prevents. Do not
+confirm your own proposal: `prepare`, `lint` and `--activate` all refuse while either
+record remains, and that refusal is the trust boundary, not an obstacle.
 
 `prompire draft "<one sentence>"` without `--proposal` is the fallback for callers
 without a model: it proposes only acceptance commands the repo evidences and marks

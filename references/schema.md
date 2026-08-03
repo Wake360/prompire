@@ -37,13 +37,17 @@ Field by field, the authority classes are:
 
 | class | fields | what enforces it |
 |---|---|---|
-| propose, human confirms | `scope`, `forbidden`, `constraints`, `tests_policy` (≠ immutable), `tests_editable`, `oracle`, `acceptance` entries and their authority-moving sub-keys (`requires`, `transition`), `manual_checks`, `context` | serialized with `# prompire:unconfirmed`; `prepare`, `lint` (B18) and `--activate` all refuse while one remains |
-| propose, no marker | `goal` (rewritten into the draft for editing), `plan_first` (only adds a gate), `rollback` (inert below `autonomy: auto`) | the linter's ordinary rules |
+| propose, human confirms | `scope`, `forbidden`, `constraints`, `tests_policy` (≠ immutable), `tests_editable`, `oracle`, `acceptance` entries — with every sub-key that moves what the criterion decides (`expect`, `requires`, `transition`, `before_after`, `cwd`, `timeout`) named on the marked line — `manual_checks`, `context` | serialized with `# prompire:unconfirmed` *and* listed in the `unconfirmed:` ledger; `prepare`, `lint` (B18) and `--activate` all refuse while either remains |
+| propose, no marker | `goal` (rewritten into the draft for editing), `plan_first` (only adds a gate), `rollback` (inert below `autonomy: auto`) | the linter's ordinary rules. `goal` buys nothing on its own: B17 stopped accepting a behavior-preserving word there as evidence of done-ness precisely because no marker covers this field |
 | clamped | `autonomy` | a draft always says `ask`; raising it is a human edit to the confirmed brief |
 | measured, never proposed | `baseline`, `base_rev`, `dirty_baseline` | a proposal carrying one is rejected outright — these are written by `baseline.py` and read against the pin |
 
-Confirmation is the *absence* of a marker, and Prompire owns the serialization: model
-comments never survive the parse, so model output cannot manufacture a confirmed line.
+Confirmation is the *absence* of both records, and Prompire owns the serialization:
+model comments never survive the parse, so model output cannot manufacture a confirmed
+line. The two records exist because they fail differently — the comment markers are
+what a human reads, and the `unconfirmed:` ledger is what survives `yq -y .`, a
+formatter, or an agent asked to tidy the file. A draft that loses its comments still
+refuses to prepare or arm.
 
 ## Acceptance entry
 

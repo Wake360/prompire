@@ -15,7 +15,11 @@ write-set, and on the wrong write-set. A behavioral contract should read fail / 
 fail; one that reads pass everywhere cannot tell done from untouched.
 
 The gold contract and both write-sets stay in this repository, outside the fixture repo
-the backend inspects — the compiler is never shown what it is graded against. Backends:
+the backend inspects: nothing the harness hands a backend names them, and no route it
+provides reaches them. That is isolation of the *fixture tree*, not a sandbox — a
+`cmd:` backend with filesystem access to this checkout can read `bench/tasks/` for
+itself, and a hostile one is trusted code by construction. Run untrusted backends with
+this checkout out of reach. Backends:
 `deterministic` is `prompire draft` with no model; `gold` compiles the gold brief's own
 fields through `--proposal` (a ceiling: what a perfect proposer would score, still
 subject to the same gate); `cmd:<shell>` hands the request to any drafting command via
@@ -43,7 +47,7 @@ sys.path.insert(0, str(SKILL / "bench"))
 import fixtures
 import verify_acceptance
 from behaviors import BEHAVIORS
-from brief_common import (DRAFT_MARKER, acceptance_entries, as_list,
+from brief_common import (DRAFT_LEDGER, DRAFT_MARKER, acceptance_entries, as_list,
                           effective_transition, glob_re, load_brief, norm_cmd,
                           norm_path, utf8_stdio)
 from prompire import DRAFT_KEYS, detect_acceptance
@@ -128,11 +132,19 @@ def blind_confirm(brief_path):
     E1's blind confirmer is a person; offline, the harness confirms everything and
     reports how many decisions that swallowed — a backend that hides decisions from
     the marker gate shows up here as a suspiciously low count, not as a clean run.
+    Both records are cleared: the comment markers a reader sees and the
+    `unconfirmed:` ledger that survives a round-trip. The count comes from the
+    ledger, which is the one a serialization step cannot quietly shorten.
     """
     text = brief_path.read_text(encoding="utf-8")
-    stripped, n = MARKER_LINE.subn("", text)
-    brief_path.write_text(stripped, encoding="utf-8")
-    return n
+    data = yaml.safe_load(text) or {}
+    decisions = len(as_list(data.get(DRAFT_LEDGER))) if DRAFT_LEDGER in data else 0
+    stripped, marked = MARKER_LINE.subn("", text)
+    body = yaml.safe_load(stripped) or {}
+    body.pop(DRAFT_LEDGER, None)
+    brief_path.write_text(yaml.safe_dump(body, allow_unicode=True, sort_keys=False),
+                          encoding="utf-8")
+    return max(decisions, marked)
 
 
 def acceptance_arm(brief_path):

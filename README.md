@@ -126,7 +126,9 @@ reply is parsed as data and re-serialized, the model's own comments are dropped,
 `baseline` and `base_rev` are refused as measured rather than drafted, and the
 boundary, every acceptance command, any relaxed `tests_policy`, the deny-list, the
 constraints, the manual checks and any `context` come back marked
-`# prompire:unconfirmed` however confident the model sounded. Agent-assisted drafting
+`# prompire:unconfirmed` — and listed in an `unconfirmed:` block, which is the record
+that survives a YAML round-trip when the comments do not — however confident the model
+sounded. Agent-assisted drafting
 runs in a disposable repository containing the checkout's current tracked and untracked,
 non-ignored files. Drafting is read-only: a run that writes to that snapshot is refused,
 the written paths are named, and no draft is produced — the writes are discarded with
@@ -136,8 +138,9 @@ copy, so a path the agent addresses relative to its workspace cannot reach the s
 checkout through one. Ignored files, submodules and nested checkouts are not copied. This
 isolates ordinary repository writes; it does not sandbox network, credentials, or an
 absolute path the agent composes for itself elsewhere on the machine. Read every
-`# prompire:unconfirmed` line, fix it, then delete the marker: `prompire prepare` refuses
-while one remains, and so does arming.
+`# prompire:unconfirmed` line, fix it, delete the marker, then delete the
+`unconfirmed:` block: `prompire prepare`, `lint` and arming all refuse while either
+record remains.
 Under Claude Code, Copilot CLI, Codex CLI or Antigravity CLI the host model fills this
 step instead, following `SKILL.md` — writing a proposal and feeding it through the same
 `--proposal` gate.
