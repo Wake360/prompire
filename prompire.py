@@ -593,7 +593,12 @@ def agent_draft_text(sentence, data, root, source="agent"):
                            "only a human can check these, and they may be all that "
                            "says done; confirm them"))
         out += [f"  - {_yaml_scalar(m)}" for m in manual]
-    context = str(data.get("context") or "").strip()
+    # A model told "at most three lines" plausibly answers with a YAML list; carry
+    # the lines, not the list's repr.
+    raw_context = data.get("context")
+    if isinstance(raw_context, list):
+        raw_context = "\n".join(str(item) for item in raw_context)
+    context = str(raw_context or "").strip()
     if context:
         out.append(_marked("context: |",
                            "the prompt carries this as fact; confirm it is true and "
@@ -741,7 +746,9 @@ def draft(args, extra):
     # `find_brief` looks. A path the caller typed keeps its cwd-relative meaning.
     out = root / DEFAULT_DRAFT_OUT if args.out is None else pathlib.Path(args.out)
     if os.path.lexists(out):  # a dangling symlink counts — never write through one
-        return report_refusal(f"`{out}` already exists; pick another --out", args.json)
+        return report_refusal(
+            f"`{out}` already exists; if it is a draft you no longer want, delete it "
+            "and re-run — or pick another --out", args.json)
     if args.proposal:
         backend = "proposal"
         try:

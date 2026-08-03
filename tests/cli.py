@@ -267,8 +267,9 @@ acceptance:
     requires: [network]
 manual_checks:
   - the repaired assertions still test the old contract
-context: |
-  golden/report.txt holds the current output of python -m src.report.
+context:
+  - golden/report.txt holds the current output of python -m src.report.
+  - the report renderer is line-oriented
 plan_first: true
 rollback: branch fix/totals
 autonomy: auto
@@ -305,6 +306,8 @@ autonomy: auto
     checks.ok("prompire:confirmed" not in text,
               "model comments cannot smuggle confirmation state into the draft")
     checks.ok("golden/report.txt holds" in text, "context content survives")
+    checks.ok("the report renderer is line-oriented" in text and "['" not in text,
+              "a list-valued context is carried as lines, never as a Python repr")
     data = yaml.safe_load(text)
     checks.ok(data.get("tests_editable") == ["tests/test_total.py"],
               "the draft still parses as YAML with the full schema intact")

@@ -238,7 +238,8 @@ def main(argv):
         for p in d[:20]:
             print(f"  {p}")
         print("\ncommit or stash, or list these under `dirty_baseline:` in the brief and "
-              "re-run with --allow-dirty")
+              "re-run with --allow-dirty; an untracked build artifact (`__pycache__/`, "
+              "a build directory) belongs in .gitignore instead")
         return 2
 
     results = []
