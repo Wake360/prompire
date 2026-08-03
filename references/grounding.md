@@ -295,7 +295,9 @@ prepared, armed, and `verify` printed `clean` on a completely untouched tree. Th
 fires only after measurement — before it, B15 owns the gap — and passes silently when
 the brief declares a carrier of done-ness: a criterion that flips, one that `hold`s, a
 `before_after` comparison, or a `manual_checks` entry. Each of those is a statement in
-the file that a no-op passes acceptance and something else decides done.
+the file that a no-op passes acceptance and something else decides done. A
+`before_after` whose command printed nothing on HEAD is not one of them — a digest over
+empty output reproduces whatever the agent does — so it warns and stops counting.
 
 A behavior-preserving *word in the goal* used to be a fourth escape and is not one
 anymore. Adversarial review reached it through the one field a compiler writes freely

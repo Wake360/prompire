@@ -59,6 +59,9 @@ authority; the verifier is unchanged.**
   `requires`, `transition`, `before_after`, `cwd`, `timeout` — is named on the
   marked line. `before_after: true` in particular is one of the shapes B17
   accepts, and it previously rode in unmarked and unnamed.
+- A `before_after` criterion whose command printed nothing on HEAD no longer
+  satisfies B17, and warns: a digest over empty output reproduces whatever the
+  agent does. `python -m unittest -q` on a passing suite is exactly that shape.
 - `check_scope.py --activate` refuses a brief still carrying draft markers;
   the confirmation gate is no longer one command deep.
 - Marker coverage widened to what the model actually decided: `forbidden`,

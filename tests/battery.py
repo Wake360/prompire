@@ -665,10 +665,59 @@ acceptance:
 autonomy: ask
 """, [], [], ["B17"]),
 
+    # a digest over no output reproduces whatever the agent does, so it carries
+    # nothing — the criterion is marked before_after but compares an empty string
+    ("before-after-over-empty-output", """
+goal: Fix the off-by-one in total() so carts add up.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+    before_after: true
+baseline:
+  - cmd: python3 -m unittest -q tests.test_cart
+    status: pass
+    evidence: "exit 0, 0 line(s) stdout, 0.4s, sha256:e3b0c44298fc"
+autonomy: ask
+""", ["B17"], ["B17"], []),
+
+    # a preserve word in the goal is not evidence: goal is the one field a compiler
+    # writes freely and no marker covers
+    ("preserve-word-in-goal-is-not-evidence", """
+goal: Fix the off-by-one in total() and rename the helper.
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -m unittest -q tests.test_cart
+    expect: exit 0
+baseline:
+  - cmd: python3 -m unittest -q tests.test_cart
+    status: pass
+    evidence: "exit 0, 0 line(s) stdout, 0.4s"
+autonomy: ask
+""", ["B17"], [], []),
+
     # B18 — a draft marker means the file is a proposal, not a brief
     ("unconfirmed-marker-is-not-shippable", """
 goal: Add a retry to the upload client.
 scope: [src/upload.py]  # prompire:unconfirmed — list the exact files the agent may edit
+forbidden: [tests/**]
+acceptance:
+  - cmd: pytest -q tests/test_upload.py
+    expect: exit 0
+autonomy: ask
+""", ["B18"], [], []),
+
+    # the same refusal after a round-trip has dropped every comment marker
+    ("unconfirmed-ledger-survives-a-round-trip", """
+unconfirmed:
+  - scope[0]
+  - acceptance[0]
+goal: Add a retry to the upload client.
+scope: [src/upload.py]
 forbidden: [tests/**]
 acceptance:
   - cmd: pytest -q tests/test_upload.py

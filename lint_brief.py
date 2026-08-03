@@ -445,11 +445,28 @@ def check_discrimination(b, acceptance):
     # verified clean on an untouched tree. A refactor states its evidence like every
     # other task — a before/after comparison, a held criterion, or the human check
     # that decides it.
+    def compares(a):
+        """A before/after comparison carries done-ness only if it compares something.
+        `python -m unittest -q` on a passing suite prints nothing, so its digest is
+        the digest of empty output: it reproduces on an untouched tree, on the work,
+        and on any wrong work alike."""
+        if not a.get("before_after"):
+            return False
+        evidence = str((measured.get(entry_key(a)) or {}).get("evidence") or "")
+        empty = re.search(r"\b0 line\(s\) stdout", evidence)
+        if empty:
+            warn("B17 empty-comparison",
+                 f"`{(entry_key(a) or ('', ''))[0][:50]}` is marked `before_after` but "
+                 "printed nothing on HEAD — an output digest over no output reproduces "
+                 "whatever the agent does",
+                 "compare a command that prints the behaviour you are preserving, or "
+                 "let a `hold` criterion or a manual check carry done-ness")
+        return not empty
+
     holds = any(effective_transition(a, measured.get(entry_key(a))) == "hold"
                 for a in acceptance)
-    compares = any(a.get("before_after") for a in acceptance)
     manual = bool(as_list(b.get("manual_checks")))
-    if not (holds or compares or manual):
+    if not (holds or any(compares(a) for a in acceptance) or manual):
         err("B17 vacuous-acceptance",
             "every criterion already passes on untouched HEAD, so `verify` says "
             "`clean` on a repo nobody touched",
