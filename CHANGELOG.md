@@ -11,8 +11,9 @@ carries its own documentation.**
 ### Changed
 
 - `verify` gathers and reports acceptance evidence when the scope check finds
-  zero violations and the base is corroborated (`pin` or `repin`), instead of
-  holding the evidence hostage to REVIEW flags it can never clear. A
+  zero violations, the base has a record outside the brief (`pin` or `repin`),
+  and every open flag is one the checker recognizes as evidence-only, instead
+  of holding the evidence hostage to REVIEW flags it can never clear. A
   `tests_policy: named` or `authoring` brief with a perfect in-scope run now
   prints its policy REVIEW *and* its acceptance result. Exit semantics are
   unchanged: any REVIEW still fails the strict run with exit 1, a violation

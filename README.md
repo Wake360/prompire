@@ -14,11 +14,12 @@ The problem it addresses is delegation without verification: work handed to an
 agent drifts, and "done" arrives as a claim rather than a measurement. In
 Prompire's own committed benchmark, 9 of 20 runs given the goal sentence alone
 changed a test file — caught from the git diff, not from anything the agent
-reported — while 0 of 160 runs that carried a brief left their declared scope.
-The design also takes a sharper threat seriously: an agent graded on a suite it
-can edit, or on a diff whose starting point it gets to declare, holds its own
-grading surface. Prompire pins both before the work starts. That threat is why
-the pin exists; no attempt at it was observed in any benchmark arm.
+reported — while 0 of 160 runs that carried some part of a brief left the
+scope the author's brief declared. The design also takes a sharper threat
+seriously: an agent graded on a suite it can edit, or on a diff whose starting
+point it gets to declare, holds its own grading surface. Prompire pins both
+before the work starts. That threat is why the pin exists; no run in any
+benchmark arm changed either.
 
 ```bash
 prompire prepare .prompire/task.yaml --target generic
@@ -81,10 +82,11 @@ campaigns are pre-registered and their raw rows are committed under `bench/campa
 Drift is the measured failure mode. Across the committed campaigns, 20 runs
 were handed the goal sentence alone — no brief — and 9 of 20 changed a test
 file; scored from outside against the author's brief, the checker caught all
-nine. 0 of 160 runs that carried a brief left their declared scope. No run in
-any arm, briefed or bare, tampered with the brief or the pin — a bound on what
-was observed, not proof of what agents do; manipulation of the grading surface
-is the threat the pinned contract exists to make evident.
+nine. 0 of 160 runs that carried some part of a brief left the scope the
+author's brief declared. No run in any arm, briefed or bare, tampered with
+the brief or the pin — a bound on what was observed, not proof of what agents
+do; manipulation of the grading surface is the threat the pinned contract
+exists to make evident.
 
 The first cross-agent matrix (2026-08-01): six tasks, five repetitions each, on
 Claude Code, Codex CLI and Antigravity CLI. None of the 90 runs left its
@@ -195,19 +197,20 @@ disarm changes the digest, so an acknowledgement never carries forward.
 
 Every `prompire verify` run leads with one line:
 
-- `clean` — exit 0. Nothing outside the boundary changed, no flag is open, and
-  the acceptance commands pass.
+- `clean` — exit 0. Nothing outside the boundary changed, no flag is open
+  that you have not acknowledged, and the acceptance commands pass.
 - `caught: N violation(s)` — exit 1. Something changed outside the declared
   scope. Acceptance is not run on a violated boundary.
 - `caught: acceptance did not pass` — exit 1. The boundary held but an
   acceptance command did not meet its expectation.
 - `review: N flag(s) — needs a human` — exit 1. Nothing was violated, but a
   finding no checker can settle (a `named`/`authoring` tests policy, a re-armed
-  guard) is waiting on your judgment. When the base is corroborated, the
-  acceptance evidence is still gathered and printed beside the flag.
+  guard) is waiting on your judgment. When the base is corroborated and every
+  open flag is one the checker recognizes as evidence-only, the acceptance
+  evidence is still gathered and printed beside the flag.
 - `no verdict: <reason>` — exit 2. The run could not produce a trustworthy
   result — an armed brief was edited, a base is missing — and the output names
-  the next command.
+  the next command where one exists.
 
 `prompire verify --json` emits the raw structured result instead; its shape is
 unchanged from 0.9.1.
