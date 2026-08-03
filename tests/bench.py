@@ -13,7 +13,10 @@ import difflib
 import hashlib
 import io
 import json
+import os
 import pathlib
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1043,6 +1046,78 @@ def check_cli(tmp):
           rep.stdout + rep.stderr)
 
 
+def check_compile_harness(tmp):
+    """bench/compile.py — the offline compile half of E1, scripted backends only."""
+    out = pathlib.Path(tmp) / "compile.jsonl"
+    r = subprocess.run([sys.executable, str(SKILL / "bench" / "compile.py"),
+                        "--backend", "gold", "--only", "T01-flip-fix",
+                        "--out", str(out), "--keep"],
+                       capture_output=True, text=True, encoding="utf-8")
+    rows = [json.loads(l)
+            for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("gold backend compiles one scored row and exits 0",
+          r.returncode == 0 and len(rows) == 1 and not rows[0].get("error"),
+          r.stdout + r.stderr)
+    row = rows[0]
+    check("the gold contract passes the discrimination triple",
+          row.get("triple") == {"head": "fail", "gold": "pass", "wrong": "fail"},
+          json.dumps(row.get("triple")))
+    check("the gold contract is classified discriminating with clean lint",
+          row.get("classification") == "discriminating"
+          and row.get("lint", {}).get("errors") == 0, json.dumps(row))
+    check("the gold contract covers the required scope and invents nothing",
+          row.get("scope_missing") == [] and row.get("invented_cmds") == [],
+          json.dumps(row))
+    check("blind confirmation is on the record, never free",
+          row.get("blind_confirmed", 0) >= 3 and
+          row.get("blind_confirmed") == row.get("unconfirmed"), json.dumps(row))
+    kept = re.search(r"kept: (\S+)", r.stdout)
+    gold_text = (SKILL / "bench" / "tasks" / "T01-flip-fix.yaml").read_text(
+        encoding="utf-8")
+    check("--keep names the workdir", bool(kept), r.stdout)
+    if kept:
+        repo = pathlib.Path(kept.group(1)) / "repo"
+        leaked = [p for p in repo.rglob("*")
+                  if p.is_file() and p.read_bytes() == gold_text.encode("utf-8")]
+        check("the hidden gold contract never enters the compiler's repo",
+              leaked == [], leaked)
+        shutil.rmtree(kept.group(1), ignore_errors=True)
+
+    # A backend that proposes only unrelated, already-green acceptance for a
+    # behavioral request must be rejected before the triple even runs — that is
+    # attack 1 (irrelevant green acceptance), measured rather than asserted.
+    reply = pathlib.Path(tmp) / "vacuous-reply.yaml"
+    reply.write_text(
+        "goal: Fix the off-by-one in the cart total.\n"
+        "scope: [src/cart.py]\n"
+        "forbidden: [tests/**]\n"
+        "tests_policy: immutable\n"
+        "acceptance:\n"
+        "  - cmd: python3 -m unittest -q tests.test_cart\n"
+        "    expect: exit 0\n"
+        "autonomy: ask\n", encoding="utf-8")
+    agent = pathlib.Path(tmp) / "vacuous-agent.py"
+    agent.write_text("import pathlib, sys\nsys.stdin.read()\n"
+                     f"sys.stdout.write(pathlib.Path({str(reply)!r})"
+                     ".read_text(encoding='utf-8'))\n", encoding="utf-8")
+    out2 = pathlib.Path(tmp) / "compile-vacuous.jsonl"
+    quoted = subprocess.list2cmdline([sys.executable, str(agent)]) \
+        if os.name == "nt" else shlex.join([sys.executable, str(agent)])
+    r = subprocess.run([sys.executable, str(SKILL / "bench" / "compile.py"),
+                        "--backend", f"cmd:{quoted}", "--only", "T01-flip-fix",
+                        "--out", str(out2)],
+                       capture_output=True, text=True, encoding="utf-8")
+    rows = [json.loads(l)
+            for l in out2.read_text(encoding="utf-8").splitlines() if l.strip()]
+    row = rows[0] if rows else {}
+    check("a vacuous compiled contract is rejected, not measured",
+          r.returncode == 0 and row.get("classification") == "rejected"
+          and row.get("triple") is None, r.stdout + r.stderr + json.dumps(row))
+    check("the rejection names the discrimination rule",
+          any(rule.startswith("B17") for rule in (row.get("lint") or {}).get("rules", [])),
+          json.dumps(row.get("lint")))
+
+
 def check_report_honesty():
     check("wilson_lo(5,5) reads as ~0.566, not 1.0",
           abs(report.wilson_lo(5, 5) - 0.566) < 0.01, report.wilson_lo(5, 5))
@@ -1208,6 +1283,7 @@ def main():
         check_seed_briefs(tmp)
         check_prepare_rejects_unlintable(tmp)
         check_cli(tmp)
+        check_compile_harness(tmp)
     check_dirty_rev()
     check_behavior_coverage()
     check_variants()

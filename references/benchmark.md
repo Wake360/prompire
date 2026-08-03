@@ -301,6 +301,37 @@ model ran, so a codex or antigravity arm is a population only by `prompt_sha`
 and `prompire_rev` — hold the CLI's configured model constant yourself for the
 duration of an arm, because no field in the row will catch a mid-arm change.
 
+## Compiler-stage harness (offline)
+
+`bench/compile.py` measures the other half of the pipeline: not what a finished brief
+does to an agent, but what the compiler produces from a short request. It is the
+compile half of a future E1, runnable without a paid execution arm. Each task in
+`bench/compile_tasks.yaml` pairs a request with a hidden gold contract
+(`bench/tasks/<name>.yaml`) and two write-sets from `bench/behaviors.py`: the gold one
+and a plausible-but-insufficient wrong one. The compiler backend — `deterministic`,
+`gold` (the gold brief's own fields through `--proposal`, a ceiling), or `cmd:<shell>`
+(any drafting command, scripted offline or a live host for a real arm) — sees only the
+fixture repo and the request, never the gold data; `tests/bench.py` asserts the gold
+contract cannot be found inside the compiler's repo.
+
+Each row records compiler quality (markers proposed, repository-corroborated facts,
+required scope missing, dangerous extra scope, invented commands, tests-policy match,
+the lint verdict including B17) and the **discrimination triple**: the compiled
+acceptance run on untouched HEAD, on the gold write-set, and on the wrong write-set. A
+behavioral contract should read fail / pass / fail. The mechanical blind-confirm step
+strips every `# prompire:unconfirmed` marker and logs how many human decisions that
+stood in for — in a live E1 that step is a person who never sees the hidden contract.
+Classification is `rejected` (lint refused it), `discriminating` (a criterion flips),
+`manual-semantic` (no flip; the manual checks carry done-ness), or `preservation-only`.
+
+    python3 bench/compile.py --backend gold          # ceiling, no model, no cost
+    python3 bench/compile.py --backend deterministic
+    python3 bench/compile.py --backend "cmd:claude -p --setting-sources project"
+
+What this harness cannot say: whether a compiled contract makes the *execution* agent
+perform better. That is E1's live half — same request, RAW vs COMPILED vs GOLD arms
+through `bench/run.py` — and it stays unrun until explicitly authorized and paid for.
+
 ## Growing the set
 
 The target is 15–30 tasks. Add one per category gap, and one per real

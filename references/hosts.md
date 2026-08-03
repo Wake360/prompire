@@ -35,8 +35,9 @@ manual. The codex drafting invocation runs `codex exec` under its read-only sand
 with the user config ignored; drafting reads the repo and must never write it.
 Headless `agy` has no read-only mode. `draft` therefore runs it in the same disposable
 Git-visible snapshot used for every drafting host. Writes made relative to its workspace
-land in the snapshot, which is removed after the run; this is isolation of the checkout,
-not a machine-wide sandbox.
+land in the snapshot, which is audited after the run: a drafting run that wrote anything
+is refused with the written paths named, and the snapshot is removed either way. This is
+isolation of the checkout, not a machine-wide sandbox.
 
 ## Primary workflow
 

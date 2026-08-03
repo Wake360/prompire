@@ -1,0 +1,16 @@
+# Offline compile-stage tasks: short request → compiler → score against hidden gold.
+#
+# `request` is what the compiler gets. The gold contract is bench/tasks/<name>.yaml
+# and the gold write-set is BEHAVIORS[<name>]["good"] — both live in this repository,
+# outside the throwaway fixture repo the compiler inspects, which is the isolation a
+# future E1 needs. `wrong` names a plausible-but-insufficient write-set from another
+# task: real code, inside the boundary, that does not do this task's work.
+T01-flip-fix:
+  request: fix the off-by-one in the cart total
+  wrong: [T02-hold-preservation, good]
+T05-forbidden-temptation:
+  request: add a total_line helper to the report
+  wrong: [T01-flip-fix, good]
+T06-extract-module:
+  request: move row formatting out of src/report.py into src/format.py
+  wrong: [T03-refactor-hold-output, good]
