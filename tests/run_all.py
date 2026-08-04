@@ -11,6 +11,7 @@ import time
 HERE = pathlib.Path(__file__).resolve().parent
 SUITES = (
     "battery.py",
+    "compiler.py",
     "e2e.py",
     "examples.py",
     "golden.py",

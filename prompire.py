@@ -968,6 +968,79 @@ def draft(args, extra):
     return 0
 
 
+def compile_cmd(args, extra):
+    """`prompire compile` — the task compiler. Heavy lifting in compile_task.py;
+    this handler owns only path hygiene and writing the accepted artifacts."""
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
+    try:
+        root = repo_root(pathlib.Path("."))
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
+    slug = args.slug or re.sub(r"[^a-z0-9]+", "-",
+                               args.request.lower()).strip("-")[:40] or "task"
+    brief_path = root / ".prompire" / f"{slug}.yaml"
+    if os.path.lexists(brief_path):
+        return report_refusal(f"`{brief_path}` already exists; delete it or pick "
+                              "another --slug", args.json)
+    import compile_task
+    milestones = []
+
+    def log(line):
+        milestones.append(line)
+        if not args.json:
+            print(line)
+
+    if not args.json:
+        print(f"compiling: {args.request}")
+    try:
+        state, payload = compile_task.compile_request(
+            args.request, root, slug, agent=args.role_agent,
+            role_cmd=args.role_cmd, max_breaker_rounds=args.breaker_rounds,
+            log=log)
+    except compile_task.CompileError as exc:
+        return report_refusal(str(exc), args.json)
+    ledger_path = root / ".prompire" / f"{slug}.ledger.yaml"
+    if state in ("READY", "NEEDS_DECISION"):
+        probe_path = root / payload["probe_rel"]
+        probe_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(probe_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload["probe_source"])
+        brief_path.parent.mkdir(parents=True, exist_ok=True)
+        brief_path.write_text(payload["brief_text"], encoding="utf-8")
+        compile_task.write_ledger(ledger_path, payload["ledger"])
+    if args.json:
+        out = {"status": state.lower(), "brief": str(brief_path),
+               "ledger": str(ledger_path), "milestones": milestones,
+               "questions": payload.get("questions", []),
+               "reason": payload.get("reason"),
+               "rounds": payload.get("rounds", []),
+               "cost": payload.get("cost")}
+        print(json.dumps(out, ensure_ascii=False))
+    elif state == "READY":
+        cost = payload["cost"]
+        print("✓ contract ready — no human decisions required")
+        print(f"  {brief_path}")
+        print(f"  cost: {cost['model_calls']} model call(s), "
+              f"{cost['wall_seconds']}s"
+              + (f", ${cost['cost_usd']}" if cost.get("cost_usd") else ""))
+        print("next: " + display_command(["prompire", "prepare",
+                                          str(brief_path)]))
+    elif state == "NEEDS_DECISION":
+        verb = "remains" if len(payload["questions"]) == 1 else "remain"
+        print(f"{_counted(len(payload['questions']), 'material decision')} "
+              f"{verb}:")
+        for q in payload["questions"]:
+            print(f"  {q['id']}: {q['text']}")
+            for i, option in enumerate(q["options"]):
+                print(f"     {chr(65 + i)}. {option}")
+        print(f"decide in {brief_path} (marked lines), then: "
+              + display_command(["prompire", "prepare", str(brief_path)]))
+    else:
+        print(f"not compiled: {payload.get('reason')}")
+    return {"READY": 0, "NEEDS_DECISION": 1}.get(state, 2)
+
+
 def demo_verdict(result):
     """Retell one `verify` run as prose — the child speaks JSON, the demo speaks English."""
     try:
@@ -1304,6 +1377,23 @@ def build_parser():
                               "as an agent reply")
     drafted.add_argument("--json", action="store_true")
     drafted.set_defaults(handler=draft)
+
+    compiled = commands.add_parser(
+        "compile",
+        help="resolve a short request into a stress-tested contract "
+             "(investigate, probe, attack, strengthen)")
+    compiled.add_argument("request")
+    compiled.add_argument("--slug", default=None,
+                          help="brief name under .prompire/ (default: from "
+                               "the request)")
+    compiled.add_argument("--role-agent", default="claude",
+                          help="host CLI for the compiler roles")
+    compiled.add_argument("--role-cmd", default=None,
+                          help="any command that reads a role prompt on stdin "
+                               "and prints the reply on stdout")
+    compiled.add_argument("--breaker-rounds", type=int, default=2)
+    compiled.add_argument("--json", action="store_true")
+    compiled.set_defaults(handler=compile_cmd)
 
     demoed = commands.add_parser(
         "demo", help="walk a clean run and a caught violation in a throwaway repo")
