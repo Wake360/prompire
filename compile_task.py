@@ -35,7 +35,7 @@ import yaml
 import baseline
 import compile_prompts
 import render_brief
-from brief_common import DRAFT_LEDGER, DRAFT_MARKER, norm_cmd, utf8_stdio
+from brief_common import DRAFT_LEDGER, DRAFT_MARKER
 
 PYTHON = "python" if os.name == "nt" else "python3"
 PROBE_DIR = ".prompire/probes"
@@ -105,8 +105,13 @@ class Meter:
                               "exit": exit_code, "usage": usage, "cost": cost})
 
     def summary(self):
-        tokens_in = sum((s["usage"] or {}).get("input_tokens", 0) or 0
-                        for s in self.sessions)
+        # input volume includes cache reads and writes; the host bills them
+        # differently but the compiler consumed them all
+        tokens_in = sum(
+            ((s["usage"] or {}).get("input_tokens", 0) or 0)
+            + ((s["usage"] or {}).get("cache_read_input_tokens", 0) or 0)
+            + ((s["usage"] or {}).get("cache_creation_input_tokens", 0) or 0)
+            for s in self.sessions)
         tokens_out = sum((s["usage"] or {}).get("output_tokens", 0) or 0
                          for s in self.sessions)
         cost = sum(s["cost"] or 0 for s in self.sessions)
@@ -444,18 +449,15 @@ def write_ledger(path, record):
 
 def build_ledger(request, state, spec, measurement, rounds, questions, meter):
     decisions = []
+    survived = [r["round"] for r in rounds
+                if r.get("verdict") == "no_counterexample"]
     for r in spec["requirements"]:
-        covered = [c for c in r["cases"]]
-        breaker_note = None
-        for rnd in rounds:
-            if rnd.get("confirmed"):
-                breaker_note = f"strengthened after round {rnd['round']}"
         decisions.append({
             "id": r["id"], "claim": r["text"], "kind": r["kind"],
             "class": "derived", "evidence": r["evidence"],
-            "cases": covered,
-            "status": "compiler-established" if covered else "recorded",
-            "breaker": breaker_note,
+            "cases": list(r["cases"]),
+            "status": "compiler-established" if r["cases"] else "recorded",
+            "breaker_survived_rounds": survived,
         })
     for q in questions:
         decisions.append({"id": q["id"], "claim": q["text"],
