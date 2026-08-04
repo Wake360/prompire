@@ -1,0 +1,57 @@
+You are the Breaker stage of a task compiler, in a fresh context. A candidate
+specification was compiled for the short request below. Your single objective:
+find the simplest PLAUSIBLE WRONG implementation that would still satisfy the
+specification's acceptance checks.
+
+Request: An OrderedMultiDict compares equal to a plain dict that holds different values.
+
+Candidate requirements:
+- R1 (behavioral): OrderedMultiDict.__eq__ must return False when compared to a plain dict that has the same keys but at least one differing value. [cases: case_omd_ne_dict_with_different_values, case_omd_ne_dict_partial_value_mismatch, case_omd_ne_dict_with_none_value]
+- R2 (behavioral): The corrected inequality must be observable through the `!=` operator and through the reflected `dict == omd` comparison, not only through `omd == dict`. [cases: case_omd_ne_operator_on_dict_with_different_values, case_reflected_dict_eq_omd_with_different_values]
+- R3 (behavioral): A multi-valued OrderedMultiDict compared to a plain dict must compare against the most-recently-inserted value per key, so a dict holding a superseded value is unequal. [cases: case_multi_valued_omd_ne_dict_with_wrong_value]
+- R4 (behavioral): The same fix must apply to FastIterOrderedMultiDict, which inherits this __eq__. [cases: case_fast_iter_omd_ne_dict_with_different_values]
+- R5 (behavioral): The independently vendored OrderedMultiDict in urlutils (and its QueryParamDict subclass) carries a byte-identical copy of the defect and must be fixed too. [cases: case_urlutils_omd_ne_dict_with_different_values, case_urlutils_omd_ne_operator_on_dict, case_query_param_dict_ne_dict_with_different_values]
+- R6 (regression): An OrderedMultiDict must still compare equal to the plain dict of its flattened last-value-wins items, including when it holds duplicate keys. [cases: case_omd_eq_dict_last_value_wins, case_omd_eq_matching_dict, case_omd_eq_todict_roundtrip, case_urlutils_omd_eq_dict_last_value_wins]
+- R7 (boundary): Existing unequal-detection paths must keep working — missing key, differing length, non-mapping operands, and mappings whose lookup raises KeyError all remain False. [cases: case_omd_ne_dict_missing_key, case_omd_ne_dict_different_length, case_omd_ne_non_mapping, case_mapping_raising_keyerror_is_unequal, case_empty_omd_eq_empty_dict]
+- R8 (regression): OMD-to-OMD equality must be untouched — still multi-aware, order-sensitive, and reflexive. [cases: case_omd_eq_omd_preserved]
+
+Acceptance oracle (every probe case below must pass, plus these commands):
+- python3 .prompire/probes/task.py  # all cases
+- python3 -m pytest --doctest-modules boltons tests -q
+
+The probe file is at .prompire/probes/task.py in this repository copy. Read it. Run it.
+You may modify the repository here freely — it is a disposable copy — to
+develop and test your counterexample.
+
+A counterexample is a write-set that:
+- a hurried but plausible developer could genuinely produce for this request
+  (special-casing the reported example, fixing one code path but not its
+  sibling, one sign, one precision, one locale, the wrapper but not the
+  direct API, changing tests instead of behavior — derive what fits THIS
+  task, do not apply that list mechanically);
+- makes EVERY acceptance check above pass (verify this yourself by running
+  the probe file and the commands);
+- violates behavior the request, read faithfully, actually requires.
+
+Also write a counter-probe: one python case function proving the violation —
+it must FAIL under your write-set, and describe behavior a correct
+implementation would satisfy. Same conventions as the probe file (sys.path
+insert, case_* function, assertions).
+
+Do not critique prose, style, or architecture. Do not invent requirements the
+task cannot support. If after honest attempts every plausible wrong
+implementation is caught by the oracle, say so.
+
+Answer with ONE yaml document, no fences, no prose:
+
+verdict: counterexample | no_counterexample
+attempted:
+  - <attack class you tried, one line each, 2-8 entries>
+counterexample:          # only when verdict: counterexample
+  description: <one sentence — what the wrong implementation does>
+  writes:
+    <repo-relative path>: |
+      <full new content of that file>
+  counter_probe: |
+    <python source: sys.path insert + one case_<name> function + main>
+  counter_case: <the case function name>

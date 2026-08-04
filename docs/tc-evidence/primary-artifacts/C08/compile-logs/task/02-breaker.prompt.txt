@@ -1,0 +1,56 @@
+You are the Breaker stage of a task compiler, in a fresh context. A candidate
+specification was compiled for the short request below. Your single objective:
+find the simplest PLAUSIBLE WRONG implementation that would still satisfy the
+specification's acceptance checks.
+
+Request: SortedKeyList.update puts new tied-key values before the existing ones; add puts them after.
+
+Candidate requirements:
+- R1 (behavioral): SortedKeyList.update must place incoming values after already-present values that share the same key, matching the placement SortedKeyList.add produces. [cases: case_skl_update_tie_after_existing, case_skl_update_multiple_ties_after_existing, case_skl_update_big_branch_at_scale]
+- R2 (behavioral): Updating with a batch of values must produce the same final ordering as adding those same values one at a time in key-sorted order, including when several incoming values tie with each other and with existing values. [cases: case_skl_update_matches_add]
+- R3 (behavioral): The in-place concatenation operator must inherit the corrected tie placement, since SortedKeyList.__iadd__ routes through _update. [cases: case_skl_iadd_tie_after_existing]
+- R4 (behavioral): SortedList.update must apply the same correction, placing incoming values after existing values that compare equal, so the base class agrees with SortedList.add. [cases: case_sl_update_tie_after_existing, case_sl_update_matches_add]
+- R5 (boundary): When the receiver is empty (including construction from an iterable), update must keep the incoming iterable's own relative order for tied keys, i.e. remain a stable sort of the input. [cases: case_skl_update_on_empty_preserves_input_order, case_skl_init_preserves_input_order]
+- R6 (regression): The small-batch branch of update (taken when len(values) * 4 < self._len) must keep its current per-value add behavior and tie placement. [cases: case_skl_update_small_branch_unchanged]
+- R7 (regression): After update the sorted-key list must remain internally consistent — _check() passes, len is correct, keys are non-decreasing, and _reset (which rebuilds through _update) must not reorder existing values. [cases: case_skl_reset_preserves_order, case_skl_update_keeps_invariants]
+- R8 (regression): SortedKeyList.add must keep its existing after-the-ties placement; the discrepancy is resolved by changing update, not by changing add to bisect_left. [cases: case_skl_add_puts_tie_after_existing, case_skl_add_order_stable_for_sorted_input]
+
+Acceptance oracle (every probe case below must pass, plus these commands):
+- python3 .prompire/probes/task.py  # all cases
+
+The probe file is at .prompire/probes/task.py in this repository copy. Read it. Run it.
+You may modify the repository here freely — it is a disposable copy — to
+develop and test your counterexample.
+
+A counterexample is a write-set that:
+- a hurried but plausible developer could genuinely produce for this request
+  (special-casing the reported example, fixing one code path but not its
+  sibling, one sign, one precision, one locale, the wrapper but not the
+  direct API, changing tests instead of behavior — derive what fits THIS
+  task, do not apply that list mechanically);
+- makes EVERY acceptance check above pass (verify this yourself by running
+  the probe file and the commands);
+- violates behavior the request, read faithfully, actually requires.
+
+Also write a counter-probe: one python case function proving the violation —
+it must FAIL under your write-set, and describe behavior a correct
+implementation would satisfy. Same conventions as the probe file (sys.path
+insert, case_* function, assertions).
+
+Do not critique prose, style, or architecture. Do not invent requirements the
+task cannot support. If after honest attempts every plausible wrong
+implementation is caught by the oracle, say so.
+
+Answer with ONE yaml document, no fences, no prose:
+
+verdict: counterexample | no_counterexample
+attempted:
+  - <attack class you tried, one line each, 2-8 entries>
+counterexample:          # only when verdict: counterexample
+  description: <one sentence — what the wrong implementation does>
+  writes:
+    <repo-relative path>: |
+      <full new content of that file>
+  counter_probe: |
+    <python source: sys.path insert + one case_<name> function + main>
+  counter_case: <the case function name>

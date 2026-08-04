@@ -1,0 +1,519 @@
+Verified against the checkout before answering: 11 behavioral cases fail on the current code, all 21 pass under a corrected `__eq__`, and four distinct wrong implementations — last-key flag (the defeating one), first-key early return, any-match disjunction, and `dict.__eq__` shortcut — each fail. Full suite is green (584 passed) and the tree is clean.
+
+```yaml
+requirements:
+- id: R1
+  text: OrderedMultiDict.__eq__ must return False whenever ANY key's value differs from the other
+    mapping's value for that key — at every position (first, middle, last) and at every size. The
+    result must be a conjunction over all keys, not the outcome of one key.
+  kind: behavioral
+  evidence:
+  - boltons/dictutils.py:361 — `other[selfk] == self[selfk]` is computed and discarded; the loop can
+    only exit False through the KeyError branch
+  - 'observed: OMD([(''a'',1),(''b'',2)]) == {''a'':99,''b'':98} returns True on the current checkout'
+  - 'observed: the previous spec was defeated by an implementation that assigned (not accumulated) the
+    comparison into a flag and returned only the LAST key''s verdict; position-specific cases cannot
+    distinguish it, a full positional sweep can'
+  - 'verified: the sweep case fails on the checkout and under last-key-flag, first-key-early-return,
+    and any-match implementations; it passes only under a real all-keys conjunction'
+  cases:
+  - case_value_mismatch_at_every_position
+  - case_omd_ne_dict_with_earlier_key_mismatch
+  - case_all_values_differ_is_unequal
+- id: R2
+  text: A single matching key must never be sufficient for equality. For a mapping in which exactly
+    one key matches and every other key differs, __eq__ must be False regardless of which key matches.
+  kind: behavioral
+  evidence:
+  - 'the natural over-corrections of the defect are quantifier errors: `return other[k] == self[k]`
+    inside the loop (first key wins), `if other[k] == self[k]: return True` (any-match), and a
+    reassigned flag (last key wins). All three satisfy "some key was compared" while violating
+    "every key must match".'
+  - 'verified: case_single_matching_value_is_not_enough fails under last-key, first-key, and any-match
+    variants and under the current checkout; passes under the correct fix'
+  cases:
+  - case_single_matching_value_is_not_enough
+- id: R3
+  text: The corrected inequality must be observable through `!=` and through the reflected
+    `dict == omd` operand order, with the same positional generality as R1, and the comparison must
+    evaluate to the actual booleans True/False.
+  kind: behavioral
+  evidence:
+  - boltons/dictutils.py:367 — `__ne__` delegates to `__eq__` and inherits the defect
+  - boltons/dictutils.py:86 — OrderedMultiDict subclasses dict, so Python gives the subclass __eq__
+    priority and `{'a':99,'b':98} == omd` also returns True today
+  - boltons/dictutils.py:338-365 — the current method returns literal True/False, so pinning
+    `is False` / `is True` is not an added constraint, and it rejects a fix that leaks a raw
+    comparison object out of the loop
+  cases:
+  - case_reflected_value_mismatch_at_every_position
+  - case_value_mismatch_at_every_position
+- id: R4
+  text: Mismatch detection must not depend on the OMD's insertion order — the same key/value mismatch
+    must be detected whichever position that key occupies in iteration order.
+  kind: behavioral
+  evidence:
+  - boltons/dictutils.py:359 — `for selfk in self` iterates in insertion order, so any
+    position-sensitive implementation is silently order-dependent
+  - 'verified: building the same items in forward, reversed, and shuffled insertion order and
+    mismatching each key in turn fails on the checkout and under the last-key-flag variant'
+  cases:
+  - case_mismatch_detection_independent_of_insertion_order
+- id: R5
+  text: For a multi-valued OrderedMultiDict, comparison against a plain mapping is per key against the
+    most-recently-inserted value, for EVERY key — including keys that are not the final key.
+  kind: behavioral
+  evidence:
+  - boltons/dictutils.py:331-332 — `__getitem__` returns the last value for a key
+  - 'observed: len(OMD([(''a'',1),(''a'',2)])) is 1, so the length guard at boltons/dictutils.py:342
+    does not reject {''a'': 1}'
+  - 'observed: OMD([(''a'',1),(''a'',2),(''b'',3)]) == {''a'':1,''b'':3} returns True today — the
+    superseded value sits on a non-final key, which a last-key-only implementation still misses'
+  cases:
+  - case_multi_valued_omd_compares_last_value_per_key
+- id: R6
+  text: The value comparison must be a plain `==` on the values, so it must work for unhashable values
+    and must not be confused by falsy values or None.
+  kind: behavioral
+  evidence:
+  - values in an OMD are arbitrary objects; boltons/dictutils.py:329 stores them in a list without any
+    hashability requirement, so a `set(self.items()) == set(other.items())` shortcut would raise
+    TypeError on list values
+  - a truthiness-based check (`if not other[k]`) would wrongly report inequality for matching falsy
+    values, so both directions are pinned here
+  - 'observed: OMD([(''a'',1)]) == {''a'': None} returns True today'
+  cases:
+  - case_mismatch_with_unhashable_values
+  - case_mismatch_with_falsy_and_none_values
+- id: R7
+  text: The fix must live in the generic `hasattr(other, 'keys')` branch and therefore apply to every
+    class that reaches it — dictutils.OrderedMultiDict, FastIterOrderedMultiDict, the independently
+    vendored urlutils.OrderedMultiDict, QueryParamDict — and to non-dict mappings, not only to dicts.
+  kind: behavioral
+  evidence:
+  - boltons/dictutils.py:649 — `class FastIterOrderedMultiDict(OrderedMultiDict)` does not override
+    __eq__
+  - boltons/urlutils.py:1267 — byte-identical `other[selfk] == self[selfk]`; boltons/urlutils.py:992
+    defines its own OrderedMultiDict rather than importing the dictutils one, so fixing dictutils alone
+    leaves this path broken
+  - boltons/urlutils.py:1560 — QueryParamDict subclasses it without overriding __eq__
+  - boltons/dictutils.py:358 — the branch is entered for anything with `.keys()`, so a dict-only
+    shortcut such as `dict.__eq__(self, other)` or `self.todict() == other` changes behavior for
+    non-dict mappings
+  - 'verified: all behavioral sweeps run over all four classes and fail on the checkout for each;
+    the dict.__eq__ shortcut variant fails case_urlutils_omd_eq_dict_last_value_wins'
+  cases:
+  - case_value_mismatch_at_every_position
+  - case_reflected_value_mismatch_at_every_position
+  - case_single_matching_value_is_not_enough
+  - case_all_values_differ_is_unequal
+  - case_non_dict_mapping_value_mismatch
+  - case_urlutils_omd_eq_dict_last_value_wins
+- id: R8
+  text: An OrderedMultiDict must still compare EQUAL to a mapping holding its flattened
+    last-value-wins items, including when it holds duplicate keys, and including non-dict mappings.
+  kind: regression
+  evidence:
+  - tests/test_dictutils.py:58-59 — `d = dict(_ITEMSETS[3]); assert d == omd`, where
+    `_ITEMSETS[3] == [('Z',-1),('Y',-2),('Y',-2)]` holds a duplicate key, so the OMD has 3 items but
+    len 2; this rules out "a multi-valued OMD never equals a plain dict"
+  - tests/test_dictutils.py:24 — `assert omd == d` in test_dict_init
+  - tests policy is immutable, so this semantic cannot be renegotiated
+  - 'observed: OMD equals a non-dict mapping with identical items today; a dict-only rewrite would
+    silently change that to False'
+  cases:
+  - case_omd_eq_dict_pinned_by_tests
+  - case_omd_eq_matching_dict
+  - case_omd_eq_todict_roundtrip
+  - case_non_dict_mapping_equality_preserved
+  - case_urlutils_omd_eq_dict_last_value_wins
+- id: R9
+  text: Existing unequal-detection paths must keep working — missing key, differing length, non-mapping
+    and unsized operands, and mappings whose lookup raises KeyError all remain False; empty compares
+    equal to empty.
+  kind: boundary
+  evidence:
+  - boltons/dictutils.py:342-345 — length guard, with TypeError on unsized operands
+  - boltons/dictutils.py:362-363 — KeyError is the existing miss signal and must not be swallowed by
+    the new value check (a bare `except Exception` or a `.get()` rewrite would break it)
+  - 'observed today: missing key False, length mismatch False, vs list False, vs 5 False,
+    KeyError-raising mapping False, OMD() == {} True'
+  cases:
+  - case_omd_ne_dict_missing_key
+  - case_omd_ne_dict_different_length
+  - case_omd_ne_non_mapping
+  - case_mapping_raising_keyerror_is_unequal
+  - case_empty_omd_eq_empty_dict
+- id: R10
+  text: OMD-to-OMD equality must be untouched — still multi-aware, order-sensitive, value-sensitive,
+    and reflexive.
+  kind: regression
+  evidence:
+  - boltons/dictutils.py:346-357 — the isinstance branch is correct today and is not implicated
+  - tests/test_dictutils.py:48-61 — test_eq asserts omd == omd2 and omd != omd3
+  - tests/test_dictutils.py:64-72 — test_copy asserts omd == omd.copy() and inequality after a pop
+  cases:
+  - case_omd_eq_omd_preserved
+scope:
+- path: boltons/dictutils.py
+  reason: Contains the discarded value comparison at line 361 in OrderedMultiDict.__eq__; also fixes
+    FastIterOrderedMultiDict by inheritance.
+  new: false
+- path: boltons/urlutils.py
+  reason: Contains the vendored duplicate of the same defect at line 1267; QueryParamDict inherits it.
+  new: false
+forbidden:
+- tests/test_dictutils.py
+- tests/test_urlutils.py
+constraints:
+- text: Equality against a non-OMD mapping is `all(other[k] == self[k] for k in self)` after the length
+    guard — universally quantified over keys. No implementation may report the verdict of a single key
+    (first, last, or any).
+  requirement: R1
+- text: dict(_ITEMSETS[3]) == OrderedMultiDict(_ITEMSETS[3]) stays True even though the OMD holds three
+    items under two keys — equality against a plain mapping is last-value-wins, not multi-aware.
+  requirement: R8
+- text: The value check must not swallow the KeyError signal; a key present in the OMD but absent from
+    the other mapping still yields False via that path.
+  requirement: R9
+- text: The fix stays inside the `hasattr(other, 'keys')` branch and uses `==` on values; no set/hash,
+    truthiness, or dict-only shortcut.
+  requirement: R6
+- text: The isinstance(other, OrderedMultiDict) branch keeps comparing full multi-item sequences in
+    order.
+  requirement: R10
+tests_policy: immutable
+tests_editable: []
+regression:
+- cmd: python3 -m pytest --doctest-modules boltons tests -q
+  reason: tox.ini [testenv] commands declares `pytest --doctest-modules {envsitepackagesdir}/boltons
+    {toxinidir}/tests`; verified green on the current checkout (584 passed).
+questions: []
+notes: |
+  The defect is a one-token slip — `other[selfk] == self[selfk]` computes a boolean and throws it away —
+  duplicated verbatim in the vendored urlutils copy, so the fix spans four classes (dictutils OMD,
+  FastIterOrderedMultiDict, urlutils OMD, QueryParamDict).
+
+  The previous spec fell to an implementation that captured the comparison into a flag reassigned each
+  iteration, reporting only the last key. The strengthening is quantifier-driven rather than
+  example-driven: instead of naming one mismatching position, the probe sweeps every index of every
+  length 1..5 across all four classes, in both operand orders, and adds the dual quantifier check
+  (exactly one key matching must still be unequal) plus insertion-order independence. That kills the
+  whole family of "one key decides" implementations, not just the one counterexample.
+
+  Verified mechanically on this checkout:
+    - current code: 11 behavioral cases fail, 10 regression/boundary cases pass;
+    - corrected __eq__ (all-keys conjunction in the mapping branch): 21/21 pass;
+    - last-key-flag variant (the defeating one): 11/21;
+    - first-key-early-return variant: 11/21;
+    - any-match disjunction variant: 10/21;
+    - dict.__eq__ shortcut variant: 13/21 (fails the last-value-wins regression).
+  The counter-probe was adopted verbatim as case_omd_ne_dict_with_earlier_key_mismatch and generalized
+  by the sweeps.
+
+  Correction to the previous spec's evidence: tests/test_dictutils.py:58-59 uses _ITEMSETS[3], which is
+  [('Z',-1),('Y',-2),('Y',-2)] (duplicate key, identical values), not the [('a',1),('b',2),('a',3),
+  ('c',4)] itemset. It still pins that a multi-item OMD can equal a plain dict; last-value-wins for the
+  superseded case follows from __getitem__ at boltons/dictutils.py:331. That is the only design freedom
+  here and it is settled, so no question.
+probe_file: |
+  """Probe: OrderedMultiDict.__eq__ must actually compare every value against a plain dict."""
+  import sys
+  sys.path.insert(0, '.')
+
+  from boltons.dictutils import OrderedMultiDict as OMD, FastIterOrderedMultiDict as FIOMD
+  from boltons.urlutils import OrderedMultiDict as UrlOMD, QueryParamDict
+
+  # every class that reaches the defective mapping branch
+  _CLASSES = [('dictutils.OrderedMultiDict', OMD),
+              ('dictutils.FastIterOrderedMultiDict', FIOMD),
+              ('urlutils.OrderedMultiDict', UrlOMD),
+              ('urlutils.QueryParamDict', QueryParamDict)]
+
+  _DUP_ITEMSET = [('Z', -1), ('Y', -2), ('Y', -2)]      # tests/test_dictutils.py::test_eq
+  _MULTI_ITEMSET = [('a', 1), ('b', 2), ('a', 3), ('c', 4)]
+  _OTHER = 'MISMATCH'
+
+
+  def _items(n):
+      return [('k%d' % i, 'v%d' % i) for i in range(n)]
+
+
+  class _SimpleMapping:
+      """A non-dict mapping: reaches the same hasattr(other, 'keys') branch."""
+
+      def __init__(self, data):
+          self._d = dict(data)
+
+      def keys(self):
+          return self._d.keys()
+
+      def __getitem__(self, k):
+          return self._d[k]
+
+      def __len__(self):
+          return len(self._d)
+
+
+  # ---------------------------------------------------------------- behavioral
+
+  def case_value_mismatch_at_every_position():
+      """One differing value must make the comparison False no matter WHERE it is."""
+      for label, cls in _CLASSES:
+          for n in range(1, 6):
+              items = _items(n)
+              for i in range(n):
+                  d = dict(items)
+                  d[items[i][0]] = _OTHER
+                  omd = cls(items)
+                  assert (omd == d) is False, \
+                      "%s(%d keys) == dict differing only at index %d must be False" % (label, n, i)
+                  assert (omd != d) is True, \
+                      "%s(%d keys) != dict differing only at index %d must be True" % (label, n, i)
+
+
+  def case_reflected_value_mismatch_at_every_position():
+      """The same sweep through the reflected `dict == omd` operand order."""
+      for label, cls in _CLASSES:
+          for n in range(1, 6):
+              items = _items(n)
+              for i in range(n):
+                  d = dict(items)
+                  d[items[i][0]] = _OTHER
+                  omd = cls(items)
+                  assert (d == omd) is False, \
+                      "dict == %s(%d keys) differing only at index %d must be False" % (label, n, i)
+                  assert (d != omd) is True, \
+                      "dict != %s(%d keys) differing only at index %d must be True" % (label, n, i)
+
+
+  def case_mismatch_detection_independent_of_insertion_order():
+      """Detection must not depend on which key happens to be iterated last."""
+      items = _items(4)
+      for order in (items, list(reversed(items)), [items[2], items[0], items[3], items[1]]):
+          for i in range(4):
+              d = dict(items)
+              d[items[i][0]] = _OTHER
+              omd = OMD(order)
+              assert (omd == d) is False, \
+                  "OMD built in order %r must be unequal to a dict differing at %r" \
+                  % ([k for k, _ in order], items[i][0])
+
+
+  def case_omd_ne_dict_with_earlier_key_mismatch():
+      """Adopted counter-probe: a non-final key mismatch must be caught."""
+      omd = OMD([('a', 1), ('b', 2), ('c', 3)])
+      assert not (omd == {'a': 99, 'b': 2, 'c': 3}), \
+          "OMD == dict must be False when the FIRST key's value differs"
+      assert omd != {'a': 1, 'b': 99, 'c': 3}, \
+          "OMD != dict must be True when a MIDDLE key's value differs"
+      assert not ({'a': 99, 'b': 2, 'c': 3} == omd), \
+          "reflected dict == OMD must be False when an earlier value differs"
+
+      uomd = UrlOMD([('a', 1), ('b', 2), ('c', 3)])
+      assert not (uomd == {'a': 99, 'b': 2, 'c': 3}), \
+          "urlutils OMD == dict must be False when the first key's value differs"
+
+
+  def case_all_values_differ_is_unequal():
+      for label, cls in _CLASSES:
+          omd = cls([('a', 1), ('b', 2), ('c', 3)])
+          assert (omd == {'a': 91, 'b': 92, 'c': 93}) is False, \
+              "%s == dict must be False when every value differs" % label
+
+
+  def case_single_matching_value_is_not_enough():
+      """Equality must be a conjunction over all keys, not a disjunction."""
+      for label, cls in _CLASSES:
+          items = _items(4)
+          for i in range(4):
+              d = {k: (v if j == i else _OTHER) for j, (k, v) in enumerate(items)}
+              omd = cls(items)
+              assert (omd == d) is False, \
+                  "%s == dict must be False when only key %d matches" % (label, i)
+
+
+  def case_multi_valued_omd_compares_last_value_per_key():
+      """Last-value-wins applies to EVERY key, including non-final ones."""
+      omd = OMD([('a', 1), ('a', 2), ('b', 3)])
+      assert (omd == {'a': 2, 'b': 3}) is True, \
+          "multi-valued OMD must equal the dict of its last values"
+      assert (omd == {'a': 1, 'b': 3}) is False, \
+          "multi-valued OMD must not equal a dict holding a superseded value on a non-final key"
+      assert (omd == {'a': 2, 'b': 99}) is False, \
+          "multi-valued OMD must catch a mismatch on the trailing key too"
+
+      tail = OMD([('a', 1), ('b', 2), ('b', 3)])
+      assert (tail == {'a': 1, 'b': 3}) is True, "last-value-wins on the trailing key"
+      assert (tail == {'a': 1, 'b': 2}) is False, \
+          "superseded value on the trailing key must be unequal"
+
+
+  def case_mismatch_with_unhashable_values():
+      """Values need not be hashable, so a set-based shortcut is not acceptable."""
+      omd = OMD([('a', [1]), ('b', [2])])
+      assert (omd == {'a': [1], 'b': [2]}) is True, "equal list values must compare equal"
+      assert (omd == {'a': [9], 'b': [2]}) is False, "first list value differs -> unequal"
+      assert (omd == {'a': [1], 'b': [9]}) is False, "second list value differs -> unequal"
+
+
+  def case_mismatch_with_falsy_and_none_values():
+      omd = OMD([('a', 0), ('b', ''), ('c', 1)])
+      assert (omd == {'a': 0, 'b': '', 'c': 1}) is True, \
+          "falsy values that match must still compare equal"
+      assert (omd == {'a': None, 'b': '', 'c': 1}) is False, \
+          "None in place of 0 must compare unequal"
+      assert (omd == {'a': 0, 'b': 'x', 'c': 1}) is False, \
+          "'' vs 'x' must compare unequal"
+      assert (OMD([('a', 1)]) == {'a': None}) is False, \
+          "OMD == dict must be False when the dict value is None"
+
+
+  def case_non_dict_mapping_value_mismatch():
+      """The fix must live in the generic mapping branch, not be dict-specific."""
+      for label, cls in _CLASSES:
+          omd = cls([('a', 1), ('b', 2)])
+          assert (omd == _SimpleMapping({'a': 99, 'b': 2})) is False, \
+              "%s == non-dict mapping with a differing value must be False" % label
+          assert (omd == _SimpleMapping({'a': 1, 'b': 99})) is False, \
+              "%s == non-dict mapping with a differing trailing value must be False" % label
+
+
+  # ---------------------------------------------------- regression / boundary
+
+  def case_non_dict_mapping_equality_preserved():
+      omd = OMD([('a', 1), ('b', 2)])
+      assert (omd == _SimpleMapping({'a': 1, 'b': 2})) is True, \
+          "OMD must still equal a non-dict mapping with identical items"
+
+
+  def case_omd_eq_dict_pinned_by_tests():
+      # tests/test_dictutils.py:58-59 -- a multi-item OMD equals its plain dict
+      omd = OMD(_DUP_ITEMSET)
+      d = dict(_DUP_ITEMSET)
+      assert d == omd, "dict == OMD must be True for the itemset pinned by test_eq"
+      assert omd == d, "OMD == dict must be True for the itemset pinned by test_eq"
+      assert not (omd != d), "__ne__ must agree with __eq__"
+
+
+  def case_omd_eq_matching_dict():
+      for label, cls in _CLASSES:
+          omd = cls([('a', 1), ('b', 2)])
+          assert (omd == {'a': 1, 'b': 2}) is True, \
+              "%s must equal a dict with identical items" % label
+          assert ({'a': 1, 'b': 2} == omd) is True, "reflected equality must hold"
+
+
+  def case_omd_eq_todict_roundtrip():
+      for label, cls in _CLASSES:
+          for itemset in ([], [('a', 1)], [('A', 'One'), ('A', 'One')],
+                          _DUP_ITEMSET, _MULTI_ITEMSET):
+              omd = cls(itemset)
+              assert omd == omd.todict(), \
+                  "%s must equal its own todict() for itemset %r" % (label, itemset)
+              assert omd.todict() == omd, "reflected todict() comparison must hold"
+
+
+  def case_omd_ne_dict_missing_key():
+      omd = OMD([('a', 1), ('b', 2)])
+      assert not (omd == {'a': 1, 'c': 2}), \
+          "OMD == dict must be False when a key is missing from the dict"
+      assert not ({'a': 1, 'c': 2} == omd), "reflected must be False too"
+
+
+  def case_omd_ne_dict_different_length():
+      omd = OMD([('a', 1), ('b', 2)])
+      assert not (omd == {'a': 1}), "OMD == shorter dict must be False"
+      assert not (omd == {'a': 1, 'b': 2, 'c': 3}), "OMD == longer dict must be False"
+
+
+  def case_omd_eq_omd_preserved():
+      omd = OMD(_MULTI_ITEMSET)
+      assert omd == omd, "OMD must equal itself"
+      assert omd == OMD(_MULTI_ITEMSET), "equal OMDs must compare equal"
+      assert not (omd != OMD(_MULTI_ITEMSET)), "__ne__ must agree"
+      assert omd != OMD(dict(_MULTI_ITEMSET)), \
+          "OMD with duplicate keys must not equal the de-duplicated OMD"
+      assert OMD([('a', 1), ('a', 2)]) != OMD([('a', 2), ('a', 1)]), \
+          "OMD equality must remain order sensitive"
+      assert OMD([('a', 1), ('b', 2)]) != OMD([('a', 1), ('b', 99)]), \
+          "OMD-to-OMD value mismatch stays unequal"
+      # pinned by tests/test_dictutils.py:60-61
+      assert OMD(_DUP_ITEMSET) != OMD(dict(_DUP_ITEMSET)), "multi-aware OMD comparison"
+
+
+  def case_omd_ne_non_mapping():
+      omd = OMD([('a', 1)])
+      assert not (omd == [('a', 1)]), "OMD must not equal a non-mapping"
+      assert not (omd == 5), "OMD must not equal a non-sized object"
+      assert not (omd == None), "OMD must not equal None"
+
+
+  def case_empty_omd_eq_empty_dict():
+      for label, cls in _CLASSES:
+          assert (cls() == {}) is True, "%s() must equal an empty dict" % label
+          assert not (cls() != {}), "__ne__ must agree for empties"
+
+
+  def case_mapping_raising_keyerror_is_unequal():
+      class Mapping:
+          def keys(self):
+              return ['a']
+
+          def __getitem__(self, k):
+              raise KeyError(k)
+
+          def __len__(self):
+              return 1
+
+      assert not (OMD([('a', 1)]) == Mapping()), \
+          "a mapping whose lookup raises KeyError must compare unequal"
+
+
+  def case_urlutils_omd_eq_dict_last_value_wins():
+      uomd = UrlOMD(_MULTI_ITEMSET)
+      assert uomd == dict(_MULTI_ITEMSET), \
+          "urlutils OMD must still equal its last-value-wins dict"
+      qpd = QueryParamDict([('a', '1'), ('b', '2')])
+      assert qpd == {'a': '1', 'b': '2'}, "QueryParamDict must equal a matching dict"
+      assert not (qpd == {'a': '99', 'b': '2'}), \
+          "QueryParamDict must be unequal when the first value differs"
+
+
+  # --------------------------------------------------------------------- main
+
+  def _cases():
+      return {n: f for n, f in sorted(globals().items())
+              if n.startswith('case_') and callable(f)}
+
+
+  def main(argv):
+      cases = _cases()
+      if len(argv) > 1:
+          name = argv[1]
+          if name not in cases:
+              print('no such case: %s' % name)
+              return 1
+          selected = [(name, cases[name])]
+      else:
+          selected = list(cases.items())
+
+      failed = 0
+      for name, func in selected:
+          try:
+              func()
+          except AssertionError as ae:
+              failed += 1
+              print('FAIL %s: %s' % (name, ae))
+          except Exception as e:
+              failed += 1
+              print('ERROR %s: %s: %s' % (name, type(e).__name__, e))
+          else:
+              print('ok   %s' % name)
+      print('%d/%d passed' % (len(selected) - failed, len(selected)))
+      return 1 if failed else 0
+
+
+  if __name__ == '__main__':
+      sys.exit(main(sys.argv))
+```

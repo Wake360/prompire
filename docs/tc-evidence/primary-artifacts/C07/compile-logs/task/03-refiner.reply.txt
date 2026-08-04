@@ -1,0 +1,455 @@
+All checks pass. I verified the hardening mechanically: the new probe kills the integer-first alternation (`(?:\d+|\d*\.\d+)`) plus five other same-class wrong impls (`\d+` only, unparenthesized alternation, `\d+(?:\.\d+)?`, `\d*\.?\d*`, `[\d.]+`), while both honest fixes (`\d*\.?\d+` and fraction-first `\d*\.\d+|\d+`) go fully green and keep `pytest` at 99 passed / 1 skipped.
+
+```yaml
+requirements:
+- id: R1
+  text: A `f` field with precision zero (e.g. `{:.0f}`) must match an integer-looking number and convert
+    it to a float.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:729-731 — type 'f' always compiles to `\d*\.\d+`, which requires a literal decimal
+    point regardless of precision
+  - parse/__init__.py:385-394 — precision is parsed only to avoid ValueError ('Precision isn't needed
+    but we need to capture it'), never fed to the regex
+  - 'observed: parse.parse(''{:.0f}'', ''42'') is None on the current checkout, while format(42.0, ''.0f'')
+    == ''42'''
+  cases:
+  - case_f_precision_zero_matches_integer
+  - case_precision_zero_format_roundtrip
+- id: R2
+  text: The precision-zero `f` field must accept the leading sign/space forms the numeric prefix already
+    allows ('-42', '+42', ' 42', '-0').
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:699 — is_numeric includes 'f', so line 834 prefixes the pattern with `[-+ ]?`
+  - 'observed: parse.parse(''{:.0f}'', ''-42'') is None today; a naive `\d*\.\d+|\d+` alternation would
+    bind `[-+ ]?` to only the first branch and still fail'
+  cases:
+  - case_f_precision_zero_signs
+- id: R3
+  text: The `F` (Decimal) field with precision zero must match an integer-looking number and convert it
+    to a Decimal.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:732-734 — type 'F' shares the identical `\d*\.\d+` pattern with 'f'
+  - 'observed: parse.parse(''{:.0F}'', ''7'') is None today, while parse.parse(''{:.0F}'', ''7.0'') yields
+    Decimal(''7.0'')'
+  cases:
+  - case_F_precision_zero_matches_integer
+- id: R4
+  text: The `e` field with precision zero must match a mantissa with no fractional part (e.g. '1e+00',
+    '-1e+00', '+2E5').
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:735-737 — type 'e' pattern begins `\d*\.\d+[eE][-+]?\d+`, so the mantissa's decimal
+    point is mandatory
+  - 'observed: format(1.0, ''.0e'') == ''1e+00'' but parse.parse(''{:.0e}'', ''1e+00'') is None today'
+  cases:
+  - case_e_precision_zero_matches_integer_mantissa
+- id: R5
+  text: The widened patterns must not introduce capturing groups without a matching `self._group_index`
+    increment, so fixed-field ordering and named fields stay correct — under parse() and under search()
+    alike.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:709-741 — every branch that adds a group also bumps self._group_index (e.g. 'n'
+    +1, 'g' +2); the 'f'/'F'/'e' branches add none and bump none
+  - parse/__init__.py:685-687,841-843 — self._group_index drives which regex groups map to fixed/named
+    results
+  - 'observed: an unparenthesized `\d+|\d*\.\d+` also breaks alternation scoping for ''e'' (the exponent
+    binds to only the second branch), so group/alternation scoping must be checked, not assumed'
+  cases:
+  - case_f_precision_zero_group_indexes_intact
+  - case_F_precision_zero_matches_integer
+  - case_e_precision_zero_matches_integer_mantissa
+- id: R6
+  text: Precision zero combined with a width (`{:8.0f}`, `{:08.0f}`) must still match padded integer-looking
+    input.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:845-862 — width forces default '>' alignment and wraps the pattern in fill padding,
+    independent of the type pattern
+  - 'observed: parse.parse(''{:8.0f}'', ''       3'') is None today'
+  cases:
+  - case_precision_zero_with_width
+- id: R7
+  text: At any given start position the widened precision-zero pattern must consume the whole number,
+    never just its integer prefix. Unanchored matching — parse.search() and parse.findall() — on '1.5',
+    '0.5', '123.456', 'abc42.5', 'x -2.25', '7.25' ({:.0F}) must yield the full fractional value, and
+    findall over '1.5 2.75' / '3 4.5 6' / '-1.25 +2.5' must yield exactly one match per number.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:511-525,534,928 — search()/findall() run `self._search_re.search(...)` with no `$`
+    anchor, so unlike parse() (line 502, `_match_re.match` with a trailing anchor) nothing forces backtracking
+    into a longer alternative
+  - 'observed: with `(?:\d+|\d*\.\d+)` the anchored parse cases all pass, but parse.search(''{:.0f}'',
+    ''1.5'') returns 1.0 and parse.findall(''{:.0f}'', ''1.5 2.75'') yields four matches [1.0, 0.5, 2.0,
+    0.75] instead of two'
+  - 'observed: this holds today for every other numeric type — parse.search(''{:.0g}'', ''x 1.5 y'') ==
+    1.5 — so integer-prefix truncation would be a new inconsistency, not a pre-existing one'
+  - 'verified: `\d*\.?\d+` and the fraction-first alternation `\d*\.\d+|\d+` both satisfy this; any construction
+    that offers the bare-integer branch first does not'
+  cases:
+  - case_precision_zero_search_consumes_whole_number
+  - case_precision_zero_findall_boundaries
+  - case_f_precision_zero_group_indexes_intact
+- id: R8
+  text: Under anchored parse(), an adjacent open field or literal must not absorb the fractional tail of
+    a number the precision-zero float field should have taken whole — parse('{:.0f}{}', '1.5 kg') ==
+    (1.5, ' kg'), parse('{:.0f} {}', '1.5 kg') == (1.5, 'kg'), and the same for a named `{a:.0F}{b}`.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:497-509 — parse() anchors the whole expression, but a following `.+?` field satisfies
+    the anchor after only the integer prefix, so anchoring alone does not force the longer match
+  - 'observed: `(?:\d+|\d*\.\d+)` gives parse(''{:.0f}{}'', ''1.5 kg'') == (1.0, ''.5 kg'') — the truncation
+    class reaches anchored parse() too whenever a neighbouring field can eat the remainder'
+  - 'observed: on the current checkout parse(''{:.0f}{}'', ''1.5 kg'') already == (1.5, '' kg''), so this
+    is a preserved behaviour, not a new demand'
+  cases:
+  - case_precision_zero_neighbouring_field_gets_no_fraction
+- id: R9
+  text: Precision zero must keep matching input that does carry a fractional part ('1.0', '.5', '-2.25'
+    for `.0f`; '1.0e+00' for `.0e`; '7.0' for `.0F`), i.e. the change only widens the accepted set.
+  kind: regression
+  evidence:
+  - 'observed: parse.parse(''{:.0f}'', ''1.0'') already returns 1.0 and parse.parse(''{:.0f}'', ''.5'')
+    returns 0.5 on the current checkout'
+  - 'observed: a leading-digit-required form like `\d+(?:\.\d+)?` loses ''.5''; an integer-only `\d+` loses
+    all of them'
+  - README.rst:248-250 — precision is documented as a maximum on matched text size, never as an exact-digit
+    constraint on numbers
+  cases:
+  - case_precision_zero_still_matches_fractional
+- id: R10
+  text: Float fields with no precision (`{:f}`, `{:F}`, `{:e}`) or with non-zero precision (`{:.2f}`,
+    `{:.7f}`, `{:.2F}`, `{:.2e}`) must keep requiring a decimal point and must keep parsing and searching
+    their current inputs.
+  kind: regression
+  evidence:
+  - 'observed: parse.parse(''{:f}'', ''1'') and parse.parse(''{:.2f}'', ''1'') are both None today'
+  - 'observed: parse.search(''{:f}'', ''x 1.5 y'') == 1.5 today and must stay so — the fix must not leak
+    into the un-widened branch'
+  - tests/test_parse.py:110-120 — test_precision pins {:.7f} and {:8.5f} behaviour on fractional input
+  cases:
+  - case_nonzero_precision_and_bare_float_unchanged
+- id: R11
+  text: Precision-zero float fields must still reject non-numeric and malformed input ('abc', '', '1.2.3',
+    '.', '1.', '-', and an `e` field with no exponent), by returning None from parse()/search() and an
+    empty findall() — never by raising.
+  kind: boundary
+  evidence:
+  - 'observed: all of these return None today and must continue to'
+  - 'observed: over-permissive widenings fail loudly, not quietly — `\d*\.?\d*` makes parse(''{:.0f}'',
+    '''') raise ValueError from float(''''), and `[\d.]+` makes parse(''{:.0f}'', ''1.2.3'') raise ValueError;
+    the contract is None, so the check must distinguish returning-None from raising'
+  - parse/__init__.py:730 — widening to an optional fraction must not degrade into an all-permissive pattern
+  cases:
+  - case_precision_zero_rejects_non_numeric
+- id: R12
+  text: Precision zero on the other numeric types (`{:.0d}`, `{:.0n}`, `{:.0%}`, `{:.0g}`) must keep its
+    current behaviour, including unanchored search/findall on `{:.0g}`.
+  kind: regression
+  evidence:
+  - parse/__init__.py:709-751 — 'n', '%', 'g', 'd' patterns already make any fractional part optional
+    or absent
+  - 'observed: parse.parse(''{:.0g}'', ''1'') == 1.0, parse.parse(''{:.0%}'', ''50%'') == 0.5, parse.search(''{:.0g}'',
+    ''x 1.5 y'') == 1.5 and parse.findall(''{:.0g}'', ''1.5 2.75'') == [1.5, 2.75] today'
+  cases:
+  - case_other_precision_zero_types_unchanged
+scope:
+- path: parse/__init__.py
+  reason: _handle_field builds the 'f'/'F'/'e' regexes (lines 729-737) and extract_format captures precision
+    (lines 385-394); this is the only place the fix can live.
+  new: false
+- path: README.rst
+  reason: Repo convention logs fixes in the version-history list (README.rst:446-489); README is doctested
+    by pytest so any edit must stay executable.
+  new: false
+forbidden: []
+constraints:
+- text: The widened precision-zero pattern must prefer the longest number at each start position. Concretely,
+    an alternation that offers the bare-integer branch first (`(?:\d+|\d*\.\d+)`) is not acceptable even
+    though anchored parse() hides the defect via backtracking — express the fraction as optional (`\d*\.?\d+`)
+    or put the fractional branch first (`\d*\.\d+|\d+`).
+  requirement: R7
+- text: parse.parse('{:.0f}', '1.0') keeps returning 1.0 — precision must remain a non-constraint that
+    only widens what is accepted, never a new exact-digit requirement.
+  requirement: R9
+- text: parse.parse('{:f}', '1') stays None — the widening is gated on precision being zero, not applied
+    to float fields generally.
+  requirement: R10
+- text: parse.parse('{:F}', '-1.5') stays None — 'F' is absent from is_numeric at parse/__init__.py:699,
+    and that pre-existing sign gap is out of scope here.
+  requirement: R10
+- text: Malformed input must be rejected by returning None, not by raising out of the converter — an over-wide
+    pattern that matches '' or '1.2.3' and then explodes in float() is a failure, not a pass.
+  requirement: R11
+tests_policy: immutable
+tests_editable: []
+regression:
+- cmd: pytest
+  reason: '.github/workflows/test.yml runs `pytest` in every matrix job; pyproject.toml [tool.pytest.ini_options]
+    adds --doctest-modules and --doctest-glob=README.rst. Baseline on this checkout: 99 passed, 1 skipped.
+    Note this suite does NOT discriminate the truncation bug — the integer-first alternation also scores
+    99 passed / 1 skipped, so R7/R8 rest entirely on the probe.'
+probe_file: |
+  import sys
+
+  sys.path.insert(0, '.')
+
+  from decimal import Decimal
+
+  import parse
+
+
+  def _fixed(fmt, string):
+      r = parse.parse(fmt, string)
+      assert r is not None, "parse(%r, %r) returned None" % (fmt, string)
+      return r.fixed
+
+
+  def _searched(fmt, string):
+      r = parse.search(fmt, string)
+      assert r is not None, "search(%r, %r) found nothing" % (fmt, string)
+      return r.fixed
+
+
+  def _no_match(fmt, string):
+      try:
+          r = parse.parse(fmt, string)
+      except Exception as exc:
+          raise AssertionError(
+              "parse(%r, %r) raised %r instead of returning None" % (fmt, string, exc)
+          )
+      assert r is None, "%s unexpectedly matched %r -> %r" % (fmt, string, r)
+
+
+  def case_f_precision_zero_matches_integer():
+      for text, want in [("42", 42.0), ("0", 0.0), ("1234567", 1234567.0)]:
+          got = _fixed("{:.0f}", text)[0]
+          assert got == want, "{:.0f} on %r gave %r" % (text, got)
+          assert isinstance(got, float), "{:.0f} on %r gave %r" % (text, type(got))
+      got = _fixed("Count = {:.0f}", "Count = 42")[0]
+      assert got == 42.0, "literal-surrounded field gave %r" % (got,)
+
+
+  def case_f_precision_zero_signs():
+      for text, want in [("-42", -42.0), ("+42", 42.0), (" 42", 42.0), ("-0", 0.0)]:
+          got = _fixed("{:.0f}", text)[0]
+          assert got == want, "{:.0f} on %r gave %r" % (text, got)
+
+
+  def case_f_precision_zero_group_indexes_intact():
+      got = _fixed("{:.0f} {:.0f} {:d}", "1 2 3")
+      assert got == (1.0, 2.0, 3), "fixed fields gave %r" % (got,)
+      r = parse.parse("{a:.0f} {b:.0f} {c:d}", "-1 2 3")
+      assert r is not None, "named precision-0 float fields did not match"
+      assert r.named == {"a": -1.0, "b": 2.0, "c": 3}, "named gave %r" % (r.named,)
+      r = parse.search("{a:.0f} {b:.0f}", "junk 1.5 2.25 junk")
+      assert r is not None, "search on named precision-0 fields found nothing"
+      assert r.named == {"a": 1.5, "b": 2.25}, "search named gave %r" % (r.named,)
+
+
+  def case_F_precision_zero_matches_integer():
+      for text, want in [("7", Decimal("7")), ("0", Decimal("0"))]:
+          got = _fixed("{:.0F}", text)[0]
+          assert got == want, "{:.0F} on %r gave %r" % (text, got)
+          assert isinstance(got, Decimal), "{:.0F} on %r gave %r" % (text, type(got))
+      got = _fixed("{:.0F} {:d}", "7 3")
+      assert got == (Decimal("7"), 3), "{:.0F} {:d} gave %r" % (got,)
+
+
+  def case_e_precision_zero_matches_integer_mantissa():
+      for text, want in [("1e+00", 1.0), ("-1e+00", -1.0), ("+2E5", 200000.0)]:
+          got = _fixed("{:.0e}", text)[0]
+          assert got == want, "{:.0e} on %r gave %r" % (text, got)
+      got = _fixed("{:.0e} {:d}", "1e+00 5")
+      assert got == (1.0, 5), "{:.0e} {:d} gave %r" % (got,)
+
+
+  def case_precision_zero_with_width():
+      got = _fixed("{:8.0f}", "       3")[0]
+      assert got == 3.0, "{:8.0f} on padded input gave %r" % (got,)
+      got = _fixed("{:08.0f}", "00000003")[0]
+      assert got == 3.0, "{:08.0f} on zero-padded input gave %r" % (got,)
+
+
+  def case_precision_zero_format_roundtrip():
+      for value in [1.0, -1.0, 0.0, 12345.0]:
+          for spec in [".0f", ".0e"]:
+              text = format(value, spec)
+              want = float(text)
+              got = _fixed("{:%s}" % spec, text)[0]
+              assert got == want, "roundtrip %r of %r via %r gave %r" % (
+                  spec, value, text, got,
+              )
+      text = format(Decimal("7"), ".0f")
+      got = _fixed("{:.0F}", text)[0]
+      assert got == Decimal("7"), "roundtrip .0F via %r gave %r" % (text, got)
+
+
+  def case_precision_zero_still_matches_fractional():
+      for fmt, text, want in [
+          ("{:.0f}", "1.0", 1.0),
+          ("{:.0f}", ".5", 0.5),
+          ("{:.0f}", "-2.25", -2.25),
+          ("{:.0e}", "1.0e+00", 1.0),
+      ]:
+          got = _fixed(fmt, text)[0]
+          assert got == want, "%s on %r gave %r" % (fmt, text, got)
+      got = _fixed("{:.0F}", "7.0")[0]
+      assert got == Decimal("7.0"), "{:.0F} on '7.0' gave %r" % (got,)
+
+
+  def case_precision_zero_search_consumes_whole_number():
+      """Unanchored matching must not stop at the integer prefix of a number
+      that does carry a fractional part."""
+      for fmt, text, want in [
+          ("{:.0f}", "1.5", 1.5),
+          ("{:.0f}", "0.5", 0.5),
+          ("{:.0f}", "123.456", 123.456),
+          ("{:.0f}", "abc42.5", 42.5),
+          ("{:.0f}", "x -2.25", -2.25),
+          ("{:.0e}", "x 1.5e+02 y", 150.0),
+      ]:
+          got = _searched(fmt, text)[0]
+          assert got == want, "search(%r, %r) gave %r" % (fmt, text, got)
+      got = _searched("value = {:.0f}", "value = -2.25 end")[0]
+      assert got == -2.25, "search with literal prefix gave %r" % (got,)
+      got = _searched("{:.0F}", "7.25")[0]
+      assert got == Decimal("7.25"), "search({:.0F}, '7.25') gave %r" % (got,)
+      got = _searched("{:.0F}", "id 3.125 kg")[0]
+      assert got == Decimal("3.125"), "search({:.0F}, embedded) gave %r" % (got,)
+
+
+  def case_precision_zero_findall_boundaries():
+      """Each number in the subject must yield exactly one match, whole."""
+      for fmt, text, want in [
+          ("{:.0f}", "1.5 2.75", [1.5, 2.75]),
+          ("{:.0f}", "3 4.5 6", [3.0, 4.5, 6.0]),
+          ("{:.0f}", "-1.25 +2.5", [-1.25, 2.5]),
+          ("{:.0e}", "1.5e+02 2e+00", [150.0, 2.0]),
+      ]:
+          got = [m.fixed[0] for m in parse.findall(fmt, text)]
+          assert got == want, "findall(%r, %r) gave %r" % (fmt, text, got)
+      got = [m.fixed[0] for m in parse.findall("{:.0F}", "1.25 8")]
+      assert got == [Decimal("1.25"), Decimal("8")], "findall {:.0F} gave %r" % (got,)
+
+
+  def case_precision_zero_neighbouring_field_gets_no_fraction():
+      """An adjacent open field must not absorb the fractional tail of a number
+      the precision-0 float field should have taken whole."""
+      got = _fixed("{:.0f}{}", "1.5 kg")
+      assert got == (1.5, " kg"), "{:.0f}{} on '1.5 kg' gave %r" % (got,)
+      got = _fixed("{:.0f} {}", "1.5 kg")
+      assert got == (1.5, "kg"), "{:.0f} {} on '1.5 kg' gave %r" % (got,)
+      r = parse.parse("{a:.0F}{b}", "7.25 kg")
+      assert r is not None, "{a:.0F}{b} on '7.25 kg' did not match"
+      assert r.named == {"a": Decimal("7.25"), "b": " kg"}, "named gave %r" % (r.named,)
+
+
+  def case_nonzero_precision_and_bare_float_unchanged():
+      for fmt, text in [
+          ("{:f}", "1"),
+          ("{:F}", "1"),
+          ("{:e}", "1e+00"),
+          ("{:.2f}", "1"),
+          ("{:.7f}", "3"),
+          ("{:.2F}", "1"),
+          ("{:.2e}", "1e+00"),
+      ]:
+          _no_match(fmt, text)
+      assert _fixed("{:f}", "1.5")[0] == 1.5, "{:f} broke on '1.5'"
+      assert _fixed("{:.2f}", "1.23")[0] == 1.23, "{:.2f} broke on '1.23'"
+      assert _fixed("Pi = {:.7f}", "Pi = 3.1415926")[0] == 3.1415926, "{:.7f} broke"
+      assert _fixed("{:e}", "1.0e+00")[0] == 1.0, "{:e} broke on '1.0e+00'"
+      assert _searched("{:f}", "x 1.5 y")[0] == 1.5, "search {:f} broke"
+      assert _searched("{:.2f}", "x 1.25 y")[0] == 1.25, "search {:.2f} broke"
+
+
+  def case_precision_zero_rejects_non_numeric():
+      for fmt, text in [
+          ("{:.0f}", "abc"),
+          ("{:.0f}", ""),
+          ("{:.0f}", "1.2.3"),
+          ("{:.0f}", "."),
+          ("{:.0f}", "1."),
+          ("{:.0f}", "-"),
+          ("{:.0F}", "abc"),
+          ("{:.0F}", "1.2.3"),
+          ("{:.0e}", "1"),
+          ("{:.0e}", "e+00"),
+      ]:
+          _no_match(fmt, text)
+      r = parse.search("{:.0f}", "abc")
+      assert r is None, "search({:.0f}, 'abc') matched %r" % (r,)
+      got = [m.fixed[0] for m in parse.findall("{:.0f}", "abc")]
+      assert got == [], "findall({:.0f}, 'abc') gave %r" % (got,)
+
+
+  def case_other_precision_zero_types_unchanged():
+      for fmt, text, want in [
+          ("{:.0d}", "1", 1),
+          ("{:.0n}", "1", 1),
+          ("{:.0%}", "50%", 0.5),
+          ("{:.0g}", "1", 1.0),
+          ("{:.0g}", "1.5e+02", 150.0),
+      ]:
+          got = _fixed(fmt, text)[0]
+          assert got == want, "%s on %r gave %r" % (fmt, text, got)
+      assert _searched("{:.0g}", "x 1.5 y")[0] == 1.5, "search {:.0g} on '1.5' broke"
+      got = [m.fixed[0] for m in parse.findall("{:.0g}", "1.5 2.75")]
+      assert got == [1.5, 2.75], "findall {:.0g} gave %r" % (got,)
+
+
+  CASES = [(n, o) for n, o in sorted(globals().items()) if n.startswith("case_")]
+
+
+  def main(argv):
+      if len(argv) > 1:
+          selected = [(n, o) for n, o in CASES if n == argv[1]]
+          if not selected:
+              print("unknown case: %s" % argv[1])
+              return 1
+      else:
+          selected = CASES
+      failed = 0
+      for name, fn in selected:
+          try:
+              fn()
+          except AssertionError as exc:
+              failed += 1
+              print("FAIL %s: %s" % (name, exc))
+          except Exception as exc:
+              failed += 1
+              print("ERROR %s: %r" % (name, exc))
+          else:
+              print("ok   %s" % name)
+      return 1 if failed else 0
+
+
+  if __name__ == "__main__":
+      sys.exit(main(sys.argv))
+questions: []
+notes: >
+  The bug is that extract_format captures precision purely to avoid a ValueError, so the 'f', 'F' and
+  'e' patterns hard-require a decimal point that format(x, '.0f') never emits; the fix is to make the
+  fractional part optional exactly when precision is zero, for all three types.
+
+  The previous spec was defeated because it only exercised anchored parse(), where Python's backtracking
+  masks a badly-ordered alternation. This revision adds R7 (unanchored search/findall must consume the
+  whole number) and R8 (a neighbouring field must not absorb the fraction under anchored parse either),
+  which pin the real invariant: the widening must be longest-match at each start position, not merely
+  "matches more strings".
+
+  Mechanically verified on this checkout. Two honest fixes — `\d*\.?\d+` and the fraction-first
+  alternation `\d*\.\d+|\d+` — pass all 13 probe cases and keep pytest at 99 passed / 1 skipped. Six
+  wrong implementations in the defeating class now fail: `(?:\d+|\d*\.\d+)` (the exact defeater; fails 4
+  cases), unparenthesized `\d+|\d*\.\d+` (7), `\d+` only (5), `\d+(?:\.\d+)?` (1, loses '.5'),
+  `\d*\.?\d*` (3, raises on ''), `[\d.]+` (1, raises on '1.2.3'). Unpatched baseline fails 8 of 13 and
+  passes the 5 regression/boundary cases, as it should. Note pytest alone is blind here: the defeating
+  implementation also scores 99 passed / 1 skipped.
+
+  Out of scope and left failing: `{:F}` never accepts a sign at all because 'F' is missing from
+  is_numeric (parse/__init__.py:699) — a separate pre-existing bug unrelated to precision.
+```

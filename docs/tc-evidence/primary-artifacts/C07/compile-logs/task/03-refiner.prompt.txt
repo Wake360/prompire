@@ -1,0 +1,276 @@
+You are the Resolver stage of a task compiler, continuing after an
+adversarial round. Your previous candidate specification for the request
+below was defeated: a wrong implementation passed every acceptance check.
+
+Request: A float field with zero decimal places never matches an integer-looking number.
+
+Your previous specification:
+requirements:
+- id: R1
+  text: A `f` field with precision zero (e.g. `{:.0f}`) must match an integer-looking number and convert
+    it to a float.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:729-731 — type 'f' always compiles to `\d*\.\d+`, which requires a literal decimal
+    point regardless of precision
+  - parse/__init__.py:385-394 — precision is parsed only to avoid ValueError ('Precision isn't needed
+    but we need to capture it'), never fed to the regex
+  - 'observed: parse.parse(''{:.0f}'', ''42'') is None on the current checkout, while format(42.0, ''.0f'')
+    == ''42'''
+  cases:
+  - case_f_precision_zero_matches_integer
+  - case_precision_zero_format_roundtrip
+- id: R2
+  text: The precision-zero `f` field must accept the leading sign/space forms the numeric prefix already
+    allows ('-42', '+42', ' 42', '-0').
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:699 — is_numeric includes 'f', so line 834 prefixes the pattern with `[-+ ]?`
+  - 'observed: parse.parse(''{:.0f}'', ''-42'') is None today; a naive `\d*\.\d+|\d+` alternation would
+    bind `[-+ ]?` to only the first branch and still fail'
+  cases:
+  - case_f_precision_zero_signs
+- id: R3
+  text: The `F` (Decimal) field with precision zero must match an integer-looking number and convert it
+    to a Decimal.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:732-734 — type 'F' shares the identical `\d*\.\d+` pattern with 'f'
+  - 'observed: parse.parse(''{:.0F}'', ''7'') is None today, while parse.parse(''{:.0F}'', ''7.0'') yields
+    Decimal(''7.0'')'
+  cases:
+  - case_F_precision_zero_matches_integer
+- id: R4
+  text: The `e` field with precision zero must match a mantissa with no fractional part (e.g. '1e+00',
+    '-1e+00', '+2E5').
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:735-737 — type 'e' pattern begins `\d*\.\d+[eE][-+]?\d+`, so the mantissa's decimal
+    point is mandatory
+  - 'observed: format(1.0, ''.0e'') == ''1e+00'' but parse.parse(''{:.0e}'', ''1e+00'') is None today'
+  cases:
+  - case_e_precision_zero_matches_integer_mantissa
+- id: R5
+  text: The widened patterns must not introduce capturing groups without a matching `self._group_index`
+    increment, so fixed-field ordering and named fields stay correct alongside other typed fields.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:709-741 — every branch that adds a group also bumps self._group_index (e.g. 'n'
+    +1, 'g' +2); the 'f'/'F'/'e' branches add none and bump none
+  - parse/__init__.py:685-687,841-843 — self._group_index drives which regex groups map to fixed/named
+    results
+  cases:
+  - case_f_precision_zero_group_indexes_intact
+  - case_F_precision_zero_matches_integer
+  - case_e_precision_zero_matches_integer_mantissa
+- id: R6
+  text: Precision zero combined with a width (`{:8.0f}`, `{:08.0f}`) must still match padded integer-looking
+    input.
+  kind: behavioral
+  evidence:
+  - parse/__init__.py:845-862 — width forces default '>' alignment and wraps the pattern in fill padding,
+    independent of the type pattern
+  - 'observed: parse.parse(''{:8.0f}'', ''       3'') is None today'
+  cases:
+  - case_precision_zero_with_width
+- id: R7
+  text: Precision zero must keep matching input that does carry a fractional part ('1.0', '.5', '-2.25'
+    for `.0f`; '1.0e+00' for `.0e`; '7.0' for `.0F`), i.e. the change only widens the accepted set.
+  kind: regression
+  evidence:
+  - 'observed: parse.parse(''{:.0f}'', ''1.0'') already returns 1.0 and parse.parse(''{:.0f}'', ''.5'')
+    returns 0.5 on the current checkout'
+  - README.rst:248-250 — precision is documented as a maximum on matched text size, never as an exact-digit
+    constraint on numbers
+  cases:
+  - case_precision_zero_still_matches_fractional
+- id: R8
+  text: Float fields with no precision (`{:f}`, `{:F}`, `{:e}`) or with non-zero precision (`{:.2f}`,
+    `{:.7f}`, `{:.2F}`, `{:.2e}`) must keep requiring a decimal point and must keep parsing their current
+    inputs.
+  kind: regression
+  evidence:
+  - 'observed: parse.parse(''{:f}'', ''1'') and parse.parse(''{:.2f}'', ''1'') are both None today'
+  - tests/test_parse.py:110-120 — test_precision pins {:.7f} and {:8.5f} behaviour on fractional input
+  cases:
+  - case_nonzero_precision_and_bare_float_unchanged
+- id: R9
+  text: Precision-zero float fields must still reject non-numeric and malformed input ('abc', '', '1.2.3',
+    '.', and an `e` field with no exponent).
+  kind: boundary
+  evidence:
+  - 'observed: all of these return None today and must continue to'
+  - parse/__init__.py:730 — widening to an optional fraction must not degrade into an all-permissive pattern
+  cases:
+  - case_precision_zero_rejects_non_numeric
+- id: R10
+  text: Precision zero on the other numeric types (`{:.0d}`, `{:.0n}`, `{:.0%}`, `{:.0g}`) must keep its
+    current behaviour.
+  kind: regression
+  evidence:
+  - parse/__init__.py:709-751 — 'n', '%', 'g', 'd' patterns already make any fractional part optional
+    or absent
+  - 'observed: parse.parse(''{:.0g}'', ''1'') == 1.0 and parse.parse(''{:.0%}'', ''50%'') == 0.5 today'
+  cases:
+  - case_other_precision_zero_types_unchanged
+scope:
+- path: parse/__init__.py
+  reason: _handle_field builds the 'f'/'F'/'e' regexes (lines 729-737) and extract_format captures precision
+    (lines 385-394); this is the only place the fix can live.
+  new: false
+- path: README.rst
+  reason: Repo convention logs fixes in the version-history list (README.rst:446-489); README is doctested
+    by pytest so any edit must stay executable.
+  new: false
+forbidden: []
+constraints:
+- text: parse.parse('{:.0f}', '1.0') keeps returning 1.0 — precision must remain a non-constraint that
+    only widens what is accepted, never a new exact-digit requirement.
+  requirement: R7
+- text: parse.parse('{:f}', '1') stays None — the widening is gated on precision being zero, not applied
+    to float fields generally.
+  requirement: R8
+- text: parse.parse('{:F}', '-1.5') stays None — 'F' is absent from is_numeric at parse/__init__.py:699,
+    and that pre-existing sign gap is out of scope here.
+  requirement: R8
+tests_policy: immutable
+tests_editable: []
+regression:
+- cmd: pytest
+  reason: '.github/workflows/test.yml runs `pytest` in every matrix job; pyproject.toml [tool.pytest.ini_options]
+    adds --doctest-modules and --doctest-glob=README.rst. Baseline on this checkout: 99 passed, 1 skipped.'
+questions: []
+notes: 'The bug is that extract_format captures precision purely to avoid a ValueError, so the ''f'',
+  ''F'' and ''e'' patterns hard-require a decimal point that format(x, ''.0f'') never emits; the fix is
+  to make the fractional part optional exactly when precision is zero, for all three types. I verified
+  a candidate patch (`\d*\.?\d+` gated on precision == "0", with the alternation kept inside the sign
+  prefix) turns all seven failing probe cases green while `pytest` stays at 99 passed / 1 skipped. Out
+  of scope and left failing: `{:F}` never accepts a sign at all because ''F'' is missing from is_numeric
+  (parse/__init__.py:699) — a separate pre-existing bug unrelated to precision.'
+probe_file: "import sys\n\nsys.path.insert(0, '.')\n\nfrom decimal import Decimal\n\nimport parse\n\n\n\
+  def _fixed(fmt, string):\n    r = parse.parse(fmt, string)\n    assert r is not None, \"parse(%r, %r)\
+  \ returned None\" % (fmt, string)\n    return r.fixed\n\n\ndef case_f_precision_zero_matches_integer():\n\
+  \    for text, want in [(\"42\", 42.0), (\"0\", 0.0), (\"1234567\", 1234567.0)]:\n        got = _fixed(\"\
+  {:.0f}\", text)[0]\n        assert got == want, \"{:.0f} on %r gave %r\" % (text, got)\n        assert\
+  \ isinstance(got, float), \"{:.0f} on %r gave %r\" % (text, type(got))\n    got = _fixed(\"Count = {:.0f}\"\
+  , \"Count = 42\")[0]\n    assert got == 42.0, \"literal-surrounded field gave %r\" % (got,)\n\n\ndef\
+  \ case_f_precision_zero_signs():\n    for text, want in [(\"-42\", -42.0), (\"+42\", 42.0), (\" 42\"\
+  , 42.0), (\"-0\", 0.0)]:\n        got = _fixed(\"{:.0f}\", text)[0]\n        assert got == want, \"\
+  {:.0f} on %r gave %r\" % (text, got)\n\n\ndef case_f_precision_zero_group_indexes_intact():\n    got\
+  \ = _fixed(\"{:.0f} {:.0f} {:d}\", \"1 2 3\")\n    assert got == (1.0, 2.0, 3), \"fixed fields gave\
+  \ %r\" % (got,)\n    r = parse.parse(\"{a:.0f} {b:.0f} {c:d}\", \"-1 2 3\")\n    assert r is not None,\
+  \ \"named precision-0 float fields did not match\"\n    assert r.named == {\"a\": -1.0, \"b\": 2.0,\
+  \ \"c\": 3}, \"named gave %r\" % (r.named,)\n\n\ndef case_F_precision_zero_matches_integer():\n    for\
+  \ text, want in [(\"7\", Decimal(\"7\")), (\"0\", Decimal(\"0\"))]:\n        got = _fixed(\"{:.0F}\"\
+  , text)[0]\n        assert got == want, \"{:.0F} on %r gave %r\" % (text, got)\n        assert isinstance(got,\
+  \ Decimal), \"{:.0F} on %r gave %r\" % (text, type(got))\n    got = _fixed(\"{:.0F} {:d}\", \"7 3\"\
+  )\n    assert got == (Decimal(\"7\"), 3), \"{:.0F} {:d} gave %r\" % (got,)\n\n\ndef case_e_precision_zero_matches_integer_mantissa():\n\
+  \    for text, want in [(\"1e+00\", 1.0), (\"-1e+00\", -1.0), (\"+2E5\", 200000.0)]:\n        got =\
+  \ _fixed(\"{:.0e}\", text)[0]\n        assert got == want, \"{:.0e} on %r gave %r\" % (text, got)\n\
+  \    got = _fixed(\"{:.0e} {:d}\", \"1e+00 5\")\n    assert got == (1.0, 5), \"{:.0e} {:d} gave %r\"\
+  \ % (got,)\n\n\ndef case_precision_zero_with_width():\n    got = _fixed(\"{:8.0f}\", \"       3\")[0]\n\
+  \    assert got == 3.0, \"{:8.0f} on padded input gave %r\" % (got,)\n    got = _fixed(\"{:08.0f}\"\
+  , \"00000003\")[0]\n    assert got == 3.0, \"{:08.0f} on zero-padded input gave %r\" % (got,)\n\n\n\
+  def case_precision_zero_format_roundtrip():\n    for value in [1.0, -1.0, 0.0, 12345.0]:\n        for\
+  \ spec in [\".0f\", \".0e\"]:\n            text = format(value, spec)\n            want = float(text)\n\
+  \            got = _fixed(\"{:%s}\" % spec, text)[0]\n            assert got == want, \"roundtrip %r\
+  \ of %r via %r gave %r\" % (\n                spec, value, text, got,\n            )\n    text = format(Decimal(\"\
+  7\"), \".0f\")\n    got = _fixed(\"{:.0F}\", text)[0]\n    assert got == Decimal(\"7\"), \"roundtrip\
+  \ .0F via %r gave %r\" % (text, got)\n\n\ndef case_precision_zero_still_matches_fractional():\n    for\
+  \ fmt, text, want in [\n        (\"{:.0f}\", \"1.0\", 1.0),\n        (\"{:.0f}\", \".5\", 0.5),\n  \
+  \      (\"{:.0f}\", \"-2.25\", -2.25),\n        (\"{:.0e}\", \"1.0e+00\", 1.0),\n    ]:\n        got\
+  \ = _fixed(fmt, text)[0]\n        assert got == want, \"%s on %r gave %r\" % (fmt, text, got)\n    got\
+  \ = _fixed(\"{:.0F}\", \"7.0\")[0]\n    assert got == Decimal(\"7.0\"), \"{:.0F} on '7.0' gave %r\"\
+  \ % (got,)\n\n\ndef case_nonzero_precision_and_bare_float_unchanged():\n    for fmt, text in [\n   \
+  \     (\"{:f}\", \"1\"),\n        (\"{:F}\", \"1\"),\n        (\"{:e}\", \"1e+00\"),\n        (\"{:.2f}\"\
+  , \"1\"),\n        (\"{:.7f}\", \"3\"),\n        (\"{:.2F}\", \"1\"),\n        (\"{:.2e}\", \"1e+00\"\
+  ),\n    ]:\n        r = parse.parse(fmt, text)\n        assert r is None, \"%s unexpectedly matched\
+  \ %r -> %r\" % (fmt, text, r)\n    assert _fixed(\"{:f}\", \"1.5\")[0] == 1.5, \"{:f} broke on '1.5'\"\
+  \n    assert _fixed(\"{:.2f}\", \"1.23\")[0] == 1.23, \"{:.2f} broke on '1.23'\"\n    assert _fixed(\"\
+  Pi = {:.7f}\", \"Pi = 3.1415926\")[0] == 3.1415926, \"{:.7f} broke\"\n    assert _fixed(\"{:e}\", \"\
+  1.0e+00\")[0] == 1.0, \"{:e} broke on '1.0e+00'\"\n\n\ndef case_precision_zero_rejects_non_numeric():\n\
+  \    for fmt, text in [\n        (\"{:.0f}\", \"abc\"),\n        (\"{:.0f}\", \"\"),\n        (\"{:.0f}\"\
+  , \"1.2.3\"),\n        (\"{:.0f}\", \".\"),\n        (\"{:.0F}\", \"abc\"),\n        (\"{:.0e}\", \"\
+  1\"),\n        (\"{:.0e}\", \"e+00\"),\n    ]:\n        r = parse.parse(fmt, text)\n        assert r\
+  \ is None, \"%s unexpectedly matched %r -> %r\" % (fmt, text, r)\n\n\ndef case_other_precision_zero_types_unchanged():\n\
+  \    for fmt, text, want in [\n        (\"{:.0d}\", \"1\", 1),\n        (\"{:.0n}\", \"1\", 1),\n  \
+  \      (\"{:.0%}\", \"50%\", 0.5),\n        (\"{:.0g}\", \"1\", 1.0),\n        (\"{:.0g}\", \"1.5e+02\"\
+  , 150.0),\n    ]:\n        got = _fixed(fmt, text)[0]\n        assert got == want, \"%s on %r gave %r\"\
+  \ % (fmt, text, got)\n\n\nCASES = [(n, o) for n, o in sorted(globals().items()) if n.startswith(\"case_\"\
+  )]\n\n\ndef main(argv):\n    if len(argv) > 1:\n        selected = [(n, o) for n, o in CASES if n ==\
+  \ argv[1]]\n        if not selected:\n            print(\"unknown case: %s\" % argv[1])\n          \
+  \  return 1\n    else:\n        selected = CASES\n    failed = 0\n    for name, fn in selected:\n  \
+  \      try:\n            fn()\n        except AssertionError as exc:\n            failed += 1\n    \
+  \        print(\"FAIL %s: %s\" % (name, exc))\n        except Exception as exc:\n            failed\
+  \ += 1\n            print(\"ERROR %s: %r\" % (name, exc))\n        else:\n            print(\"ok   %s\"\
+  \ % name)\n    return 1 if failed else 0\n\n\nif __name__ == \"__main__\":\n    sys.exit(main(sys.argv))\n"
+
+
+Confirmed weakness (the orchestrator verified this mechanically):
+a wrong implementation passed every check: Precision-zero `f`/`F`/`e` patterns are widened with the integer branch listed first — `(?:\d+|\d*\.\d+)` — which anchored `parse()` hides via backtracking but which makes `parse.search()`/`parse.findall()` stop at the integer prefix of a fractional number ('1.5' → 1.0, and findall yields 1.0 and 0.5 as two separate matches).
+
+Counter-probe that demonstrated the violation:
+import sys
+
+sys.path.insert(0, '.')
+
+from decimal import Decimal
+
+import parse
+
+
+def case_precision_zero_search_prefers_full_number():
+    """Widening .0f/.0F must only widen: an unanchored match must not stop at
+    the integer prefix of a number that does have a fractional part."""
+    r = parse.search("{:.0f}", "1.5")
+    assert r is not None, "search('{:.0f}', '1.5') found nothing"
+    assert r.fixed[0] == 1.5, "search('{:.0f}', '1.5') gave %r" % (r.fixed[0],)
+
+    r = parse.search("value = {:.0f}", "value = -2.25 end")
+    assert r is not None, "search with literal prefix found nothing"
+    assert r.fixed[0] == -2.25, "search('value = {:.0f}') gave %r" % (r.fixed[0],)
+
+    r = parse.search("{:.0F}", "7.25")
+    assert r is not None, "search('{:.0F}', '7.25') found nothing"
+    assert r.fixed[0] == Decimal("7.25"), "search('{:.0F}') gave %r" % (r.fixed[0],)
+
+    got = [m.fixed[0] for m in parse.findall("{:.0f}", "1.5 2.75")]
+    assert got == [1.5, 2.75], "findall('{:.0f}', '1.5 2.75') gave %r" % (got,)
+
+
+CASES = [(n, o) for n, o in sorted(globals().items()) if n.startswith("case_")]
+
+
+def main(argv):
+    if len(argv) > 1:
+        selected = [(n, o) for n, o in CASES if n == argv[1]]
+        if not selected:
+            print("unknown case: %s" % argv[1])
+            return 1
+    else:
+        selected = CASES
+    failed = 0
+    for name, fn in selected:
+        try:
+            fn()
+        except AssertionError as exc:
+            failed += 1
+            print("FAIL %s: %s" % (name, exc))
+        except Exception as exc:
+            failed += 1
+            print("ERROR %s: %r" % (name, exc))
+        else:
+            print("ok   %s" % name)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+
+
+Strengthen the specification so this class of wrong implementation fails —
+generalize; do not only pin the single counterexample. Adopt or adapt the
+counter-probe case if it is honest. Keep everything that was already right.
+Re-answer with the SAME yaml document format as before (requirements, scope,
+forbidden, constraints, tests_policy, tests_editable, regression, probe_file,
+questions, notes) — the complete revised specification, not a delta.

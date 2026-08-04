@@ -1,0 +1,247 @@
+requirements:
+  - id: R1
+    text: Integer indexing an IndexedSet with an index below -len(self) must raise IndexError instead of wrapping around and returning an item.
+    kind: behavioral
+    evidence:
+      - "boltons/setutils.py:419 __getitem__ normalizes `index += len(self)` and then calls _get_real_index, which normalizes a still-negative index a second time (boltons/setutils.py:158-160)"
+      - "observed: IndexedSet(range(4))[-5] returns 3, [-6] returns 2, [-9] returns 3 instead of raising"
+      - "boltons/setutils.py:424-425 positive out-of-range already raises IndexError('IndexedSet index out of range')"
+    cases: [case_getitem_too_negative_raises]
+  - id: R2
+    text: The too-negative IndexError must also be raised when the set carries uncompacted dead slots, where the double normalization lands on a live item_list entry.
+    kind: behavioral
+    evidence:
+      - "boltons/setutils.py:161-168 _get_real_index shifts by dead intervals after its own negative normalization"
+      - "observed: s = IndexedSet(range(1000)); s.pop(10); s.pop(20) (dead_indices [[10,11],[21,22]]); s[-999] returns 999 and s[-1003] returns 995"
+    cases: [case_getitem_too_negative_with_dead_slots_raises]
+  - id: R3
+    text: The IndexError raised for a too-negative index must carry the same 'IndexedSet index out of range' message the positive out-of-range path already raises, not a leaked 'list index out of range'.
+    kind: behavioral
+    evidence:
+      - "boltons/setutils.py:422-425 translates the underlying list IndexError into a class-specific message"
+      - "observed: IndexedSet(range(4))[4] -> IndexError('IndexedSet index out of range'); [-5] raises nothing today"
+    cases: [case_getitem_negative_out_of_range_message]
+  - id: R4
+    text: IndexedSet.pop(index) with an index below -len(self) must raise IndexError and leave the set unmodified, instead of silently removing an arbitrary wrapped-around item.
+    kind: behavioral
+    evidence:
+      - "boltons/setutils.py:436 pop passes the raw index to _get_real_index, sharing the same normalization defect"
+      - "observed: IndexedSet(range(4)).pop(-5) returns 3 leaving [0,1,2]; .pop(-6) returns 2 leaving [0,1,3]"
+      - "observed with dead slots: 998-element set .pop(-999) returns 999 and shrinks the set"
+    cases: [case_pop_too_negative_raises_and_leaves_set_intact, case_pop_too_negative_with_dead_slots_raises]
+  - id: R5
+    text: In-range negative indexing (-1 down to -len(self)) must keep returning the same items as list(self)[i], both on compact sets and on sets holding dead slots.
+    kind: regression
+    evidence:
+      - "tests/test_setutils.py:16 asserts x[-1] == 10"
+      - "observed today: s[-1]==999, s[-len(s)]==0, s[-15]==985 on the dead-slot fixture"
+    cases: [case_getitem_valid_negative_still_works, case_getitem_valid_indices_with_dead_slots]
+  - id: R6
+    text: Positive out-of-range indexing, indexing an empty IndexedSet, in-range negative pop, and positive out-of-range pop must keep their current behavior (IndexError, correct item, set untouched on failure).
+    kind: boundary
+    evidence:
+      - "boltons/setutils.py:428-442 pop's index is None / -1 / len-1 fast path must stay intact"
+      - "tests/test_setutils.py:33-34 relies on pop() and pop(499)"
+      - "observed today: all four behaviors already hold (probe cases pass on the current checkout)"
+    cases: [case_getitem_positive_out_of_range_still_raises, case_getitem_empty_set_raises, case_pop_valid_negative_still_works, case_pop_positive_out_of_range_raises_intact]
+  - id: R7
+    text: Slicing must remain unaffected — out-of-range negative slice bounds clamp like list slicing rather than raising, including the negative-step and post-removal cases.
+    kind: regression
+    evidence:
+      - "boltons/setutils.py:392-408 iter_slice clamps negative bounds with max(len+x, 0) and never indexes item_list"
+      - "tests/test_setutils.py:20-21 and tests/test_setutils.py:208-217 pin slice semantics"
+      - "observed today: s[-100:] == IndexedSet([0,1,2,3]), s[:-100] == IndexedSet([])"
+    cases: [case_slicing_out_of_range_bounds_unchanged]
+scope:
+  - path: boltons/setutils.py
+    reason: Contains IndexedSet.__getitem__, IndexedSet.pop and the shared _get_real_index normalization that produces the wrap-around.
+    new: false
+forbidden: []
+constraints:
+  - text: IndexedSet.__getitem__ with a slice never raises IndexError for out-of-range bounds.
+    requirement: R7
+  - text: A pop() that raises leaves item_list, item_index_map and dead_indices consistent (len(self) unchanged, iteration order unchanged).
+    requirement: R4
+tests_policy: immutable
+tests_editable: []
+regression:
+  - cmd: python3 -m pytest tests/test_setutils.py -q
+    reason: tox.ini [testenv] runs `pytest {tox_root}/tests`; this is the setutils slice of that suite (7 passed on the current checkout).
+  - cmd: python3 -m pytest --doctest-modules boltons/setutils.py tests -q
+    reason: tox.ini [testenv] commands run pytest with --doctest-modules over the boltons package plus tests.
+probe_file: |
+  import sys
+
+  sys.path.insert(0, '.')
+
+  from boltons.setutils import IndexedSet
+
+
+  def _with_dead_slots():
+      """An IndexedSet retaining uncompacted dead_indices."""
+      s = IndexedSet(range(1000))
+      s.pop(10)
+      s.pop(20)
+      assert s.dead_indices, 'fixture failed to retain dead indices'
+      return s
+
+
+  def _expect_index_error(fn, what):
+      try:
+          val = fn()
+      except IndexError as ie:
+          return ie
+      raise AssertionError(f'{what}: expected IndexError, got {val!r}')
+
+
+  def case_getitem_too_negative_raises():
+      s = IndexedSet(range(4))
+      for i in (-5, -6, -8, -9, -100):
+          _expect_index_error(lambda: s[i], f'IndexedSet(range(4))[{i}]')
+
+
+  def case_getitem_too_negative_with_dead_slots_raises():
+      s = _with_dead_slots()
+      n = len(s)
+      for i in (-n - 1, -n - 5, -2 * n, -2 * n - 3):
+          _expect_index_error(lambda: s[i], f'dead-slot set[{i}]')
+
+
+  def case_getitem_negative_out_of_range_message():
+      s = IndexedSet(range(4))
+      pos = _expect_index_error(lambda: s[4], 'set[4]')
+      neg = _expect_index_error(lambda: s[-5], 'set[-5]')
+      if str(neg) != str(pos):
+          raise AssertionError(
+              f'negative out-of-range message {str(neg)!r} differs from '
+              f'positive out-of-range message {str(pos)!r}')
+
+
+  def case_pop_too_negative_raises_and_leaves_set_intact():
+      for i in (-5, -6, -9, -100):
+          s = IndexedSet(range(4))
+          before = list(s)
+          _expect_index_error(lambda: s.pop(i), f'IndexedSet(range(4)).pop({i})')
+          if list(s) != before:
+              raise AssertionError(f'pop({i}) mutated the set: {list(s)!r}')
+
+
+  def case_pop_too_negative_with_dead_slots_raises():
+      for delta in (1, 2, 5):
+          s = _with_dead_slots()
+          n = len(s)
+          before = list(s)
+          _expect_index_error(lambda: s.pop(-n - delta),
+                              f'dead-slot set.pop({-n - delta})')
+          if list(s) != before:
+              raise AssertionError(f'pop({-n - delta}) mutated the set')
+
+
+  # ---- regression / boundary: pass today, must keep passing ----
+
+  def case_getitem_valid_negative_still_works():
+      s = IndexedSet(range(4))
+      ref = list(s)
+      for i in range(-len(ref), 0):
+          if s[i] != ref[i]:
+              raise AssertionError(f'set[{i}] == {s[i]!r}, expected {ref[i]!r}')
+
+
+  def case_getitem_valid_indices_with_dead_slots():
+      s = _with_dead_slots()
+      ref = list(s)
+      for i in [0, 1, 9, 10, 11, 25, len(ref) - 1, -1, -2, -15, -len(ref),
+                -len(ref) + 1]:
+          if s[i] != ref[i]:
+              raise AssertionError(f'set[{i}] == {s[i]!r}, expected {ref[i]!r}')
+
+
+  def case_getitem_positive_out_of_range_still_raises():
+      s = IndexedSet(range(4))
+      for i in (4, 5, 100):
+          _expect_index_error(lambda: s[i], f'set[{i}]')
+      d = _with_dead_slots()
+      for i in (len(d), len(d) + 1, 10 ** 6):
+          _expect_index_error(lambda: d[i], f'dead-slot set[{i}]')
+
+
+  def case_getitem_empty_set_raises():
+      e = IndexedSet()
+      for i in (0, 1, -1, -5):
+          _expect_index_error(lambda: e[i], f'IndexedSet()[{i}]')
+
+
+  def case_pop_valid_negative_still_works():
+      s = IndexedSet(range(5))
+      if s.pop(-1) != 4:
+          raise AssertionError('pop(-1) should return the last item')
+      if s.pop(-2) != 2:
+          raise AssertionError('pop(-2) should return 2 after popping 4')
+      if list(s) != [0, 1, 3]:
+          raise AssertionError(f'unexpected remainder {list(s)!r}')
+      d = _with_dead_slots()
+      ref = list(d)
+      if d.pop(-1) != ref[-1]:
+          raise AssertionError('pop(-1) wrong on dead-slot set')
+      if d.pop(-3) != ref[-4]:
+          raise AssertionError('pop(-3) wrong on dead-slot set')
+
+
+  def case_pop_positive_out_of_range_raises_intact():
+      s = IndexedSet(range(4))
+      before = list(s)
+      for i in (4, 100):
+          _expect_index_error(lambda: s.pop(i), f'pop({i})')
+      if list(s) != before:
+          raise AssertionError('out-of-range pop mutated the set')
+
+
+  def case_slicing_out_of_range_bounds_unchanged():
+      s = IndexedSet(range(4))
+      ref = list(s)
+      for sl in (slice(-100, None), slice(None, -100), slice(-100, -90),
+                 slice(-100, 100)):
+          got = list(s[sl])
+          want = ref[sl]
+          if got != want:
+              raise AssertionError(f'set[{sl}] == {got!r}, expected {want!r}')
+      if list(s[2:4:-1]) != list(reversed(ref))[2:4]:
+          raise AssertionError('negative-step slice regressed')
+      x = IndexedSet(range(10))
+      x.pop(2)
+      if list(x[-3:]) != [7, 8, 9] or list(x[1:4]) != [1, 3, 4]:
+          raise AssertionError('slice after removal regressed')
+
+
+  CASES = {k: v for k, v in sorted(globals().items()) if k.startswith('case_')}
+
+
+  def main(argv):
+      names = argv[1:] or list(CASES)
+      failed = 0
+      for name in names:
+          fn = CASES.get(name)
+          if fn is None:
+              print(f'UNKNOWN {name}')
+              failed += 1
+              continue
+          try:
+              fn()
+          except AssertionError as ae:
+              print(f'FAIL {name}: {ae}')
+              failed += 1
+          else:
+              print(f'PASS {name}')
+      return 1 if failed else 0
+
+
+  if __name__ == '__main__':
+      sys.exit(main(sys.argv))
+questions: []
+notes: >-
+  Root cause is a double negative-index normalization: __getitem__ adds len(self) at
+  setutils.py:419 and _get_real_index adds it again at :159, so an index below -len wraps
+  into item_list; pop() hits the same helper and silently removes the wrong item, so the
+  spec covers both call sites plus the dead-slot mapping. Probe verified on this checkout:
+  the five behavioral cases fail today, the seven boundary/regression cases pass, and
+  `pytest tests/test_setutils.py` is green (7 passed).

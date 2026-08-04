@@ -279,6 +279,26 @@ def _(repo, c):
          "the backticked item survived intact")
 
 
+@case("a reply that leads with prose and fences its document still parses")
+def _(repo, c):
+    # The shape five of eight evaluated compiles died on: one sentence of
+    # preamble, then the whole document inside a ```yaml fence.
+    document = ("requirements:\n  - id: R1\n    text: t\n    kind: behavioral\n"
+                "    cases: [case_a]\nscope: [{path: a.py}]\n"
+                "probe_file: |\n  def case_a():\n      pass\nquestions: []\n")
+    fenced = ("Verified against the checkout before answering: 11 cases fail.\n\n"
+              "```yaml\n" + document + "```\n")
+    spec, err = compile_prompts.parse_resolver_reply(fenced)
+    c.ok(spec is not None, f"fenced-after-prose resolver reply parses: {err}")
+    c.equal(spec["requirements"][0]["id"] if spec else None, "R1",
+            "the document survived intact")
+    breaker = ("Here is my analysis.\n\n```yaml\nverdict: no_counterexample\n"
+               "attempted:\n  - special-case the example\n```\n")
+    result, err = compile_prompts.parse_breaker_reply(breaker)
+    c.ok(result is not None and result["verdict"] == "no_counterexample",
+         f"fenced-after-prose breaker reply parses: {err}")
+
+
 def main():
     failures = 0
     with tempfile.TemporaryDirectory() as directory:

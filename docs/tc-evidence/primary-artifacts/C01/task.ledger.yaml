@@ -1,0 +1,308 @@
+request: Numbers in github-format tables are not right-aligned when the markdown is rendered.
+state: READY
+breaker_exercised: true
+decisions:
+- id: R1
+  claim: The `github` table format must emit GitHub-Flavored-Markdown alignment colons in the delimiter row beneath the header,
+    derived from each column's resolved alignment (`---:` for right/decimal, `:---` for left, `:---:` for center), so numeric
+    columns render right-aligned.
+  kind: behavioral
+  class: derived
+  evidence:
+  - tabulate/__init__.py:527 — `github` uses `linebelowheader=Line("|", "-", "|", "|")`, which emits `|-----------|-----------|`
+    with no alignment information
+  - tabulate/__init__.py:133-153 — `_pipe_segment_with_colons`/`_pipe_line_with_colons` already implement exactly this mapping
+    for the sibling `pipe` format
+  - 'observed: `tabulate([[''spam'',41.9999],[''eggs'',''451.0'']], [''strings'',''numbers''], tablefmt=''github'')` yields
+    delimiter `|-----------|-----------|`; `pipe` yields `|:----------|----------:|`'
+  - CHANGELOG:1-4 — the unreleased 0.11.0 entry declares "Improve output of `github` and `asciidoc` formats"; `asciidoc` already
+    emits per-column alignment specifiers (tabulate/__init__.py:257-267) while `github` does not
+  cases:
+  - case_numeric_column_delimiter_is_right_aligned
+  - case_string_column_delimiter_is_left_aligned
+  - case_explicit_right_alignment_colons
+  - case_center_alignment_colons
+  - case_negative_and_decimal_numbers_right_aligned
+  - case_numbers_as_text_stay_left
+  status: compiler-established
+  breaker_survived_rounds: &id001 []
+- id: R2
+  claim: Every horizontal rule the `github` format emits must carry the colons — the `lineabove` rule used for headerless
+    tables and the rule rendered for `SEPARATING_LINE` rows — so that github output is byte-identical to `pipe` output for
+    the same input.
+  kind: behavioral
+  class: derived
+  evidence:
+  - tabulate/__init__.py:525-534 vs 535-544 — after the fix `github` and `pipe` differ in no TableFormat field; both already
+    share headerrow, datarow, padding and `with_header_hide=['lineabove']`
+  - test/test_output.py:370-379 — `tabulate(_test_table_with_sep_line, tablefmt='github')` is an exercised headerless github
+    path whose first line is currently `|------|----------|`
+  - 'observed: headerless `pipe` emits `|:-----|---------:|` as its first line, headerless `github` emits `|------|----------|`;
+    GFM therefore left-aligns the numbers'
+  cases:
+  - case_headerless_delimiter_has_colons
+  - case_separating_line_has_colons
+  - case_github_delimiter_matches_pipe
+  status: compiler-established
+  breaker_survived_rounds: *id001
+- id: R3
+  claim: The multiline github path (`github` is registered in `multiline_formats`) must also emit the colon delimiter row.
+  kind: behavioral
+  class: derived
+  evidence:
+  - 'tabulate/__init__.py:746 — `"github": "github"` in `multiline_formats`, so multiline input reuses the same TableFormat'
+  - test/test_output.py:501-517 — `test_github_multiline` currently expects `|-------------|-------------|`
+  - observed under the candidate fix the row becomes `|------------:|:------------|` (numeric column right, text column left)
+  cases:
+  - case_multiline_delimiter_has_colons
+  status: compiler-established
+  breaker_survived_rounds: *id001
+- id: R4
+  claim: The visual alignment and padding of github header and data cells must not change — unlike `colon_grid`, github must
+    keep aligning the cell text itself in addition to declaring alignment with colons.
+  kind: regression
+  class: derived
+  evidence:
+  - tabulate/__init__.py:2311-2317 and 2398-2401 — `colon_grid` deliberately forces `colglobalalign='left'`/`aligns_copy=['left']*n`;
+    no such special-case exists or is wanted for `github`
+  - 'observed: github data rows are `| spam      |   41.9999 |` / `| eggs      |  451      |` both before and after the candidate
+    fix'
+  cases:
+  - case_data_rows_still_visually_aligned
+  status: compiler-established
+  breaker_survived_rounds: *id001
+- id: R5
+  claim: Colons must replace dashes rather than be added, so the delimiter row keeps the same width as the header and data
+    rows and the table stays rectangular.
+  kind: boundary
+  class: derived
+  evidence:
+  - tabulate/__init__.py:136-144 — `_pipe_segment_with_colons` builds each segment to exactly `colwidth` characters
+  - 'observed: header row and delimiter row are both 25 characters wide before and after the candidate fix'
+  cases:
+  - case_delimiter_width_unchanged
+  status: compiler-established
+  breaker_survived_rounds: *id001
+- id: R6
+  claim: When there are no data columns to infer alignment from, the github delimiter row must stay colon-free (the empty-DataFrame
+    path), and a fully empty table must still render as the empty string.
+  kind: boundary
+  class: derived
+  evidence:
+  - 'tabulate/__init__.py:150-151 — `if not colaligns: colaligns = [""] * len(colwidths)` guards github issue #15'
+  - 'test/test_regression.py:424 — "allow empty pipe tables with columns, like empty dataframes (github issue #15)"'
+  - 'observed: `tabulate([], [''a'',''b''], tablefmt=''github'')` == `tabulate([], [''a'',''b''], tablefmt=''pipe'')` == `''|
+    a   | b   |\n|-----|-----|''` today and after the fix'
+  cases:
+  - case_empty_data_keeps_plain_delimiter
+  - case_empty_table_still_empty
+  status: compiler-established
+  breaker_survived_rounds: *id001
+- id: R7
+  claim: The sibling markdown-ish formats `pipe`, `orgtbl` and `colon_grid` must be left byte-for-byte unchanged; in particular
+    `orgtbl` must stay colon-free.
+  kind: regression
+  class: derived
+  evidence:
+  - tabulate/__init__.py:545-554 — `orgtbl` is documented as `pipe` "without colons" and must not be swept up by a shared-helper
+    change
+  - tabulate/__init__.py:2093-2096 — module docstring states orgtbl differs from pipe "by not using colons to define column
+    alignment"
+  - 'observed: baseline suite is green (357 passed, 1 skipped) and stays green for these formats under the candidate fix'
+  cases:
+  - case_pipe_format_unchanged
+  - case_orgtbl_format_unchanged
+  - case_colon_grid_format_unchanged
+  status: compiler-established
+  breaker_survived_rounds: *id001
+measurement:
+  flip_cases:
+  - case_center_alignment_colons
+  - case_explicit_right_alignment_colons
+  - case_github_delimiter_matches_pipe
+  - case_headerless_delimiter_has_colons
+  - case_multiline_delimiter_has_colons
+  - case_negative_and_decimal_numbers_right_aligned
+  - case_numbers_as_text_stay_left
+  - case_numeric_column_delimiter_is_right_aligned
+  - case_separating_line_has_colons
+  - case_string_column_delimiter_is_left_aligned
+  hold_cases:
+  - case_colon_grid_format_unchanged
+  - case_data_rows_still_visually_aligned
+  - case_delimiter_width_unchanged
+  - case_empty_data_keeps_plain_delimiter
+  - case_empty_table_still_empty
+  - case_orgtbl_format_unchanged
+  - case_pipe_format_unchanged
+  regression_ok:
+  - pytest -v --doctest-modules --ignore benchmark --doctest-glob="README.md"
+  - ruff check
+  - ruff format --check
+  cases:
+    case_numeric_column_delimiter_is_right_aligned:
+      case: case_numeric_column_delimiter_is_right_aligned
+      status: fail
+      exit: 1
+      tail: 'FAIL case_numeric_column_delimiter_is_right_aligned: numeric column delimiter should be ''---:'', got ''-----------''
+        in ''|-----------|-----------|'''
+    case_string_column_delimiter_is_left_aligned:
+      case: case_string_column_delimiter_is_left_aligned
+      status: fail
+      exit: 1
+      tail: 'FAIL case_string_column_delimiter_is_left_aligned: string column delimiter should be '':---'', got ''-----------''
+        in ''|-----------|-----------|'''
+    case_github_delimiter_matches_pipe:
+      case: case_github_delimiter_matches_pipe
+      status: fail
+      exit: 1
+      tail: '''| strings   |   numbers |\n|:----------|----------:|\n| spam      |   41.9999 |\n| eggs      |  451      |'''
+    case_headerless_delimiter_has_colons:
+      case: case_headerless_delimiter_has_colons
+      status: fail
+      exit: 1
+      tail: 'FAIL case_headerless_delimiter_has_colons: headerless github delimiter row: ''|------|----------|'''
+    case_separating_line_has_colons:
+      case: case_separating_line_has_colons
+      status: fail
+      exit: 1
+      tail: '''| strings   |   numbers |\n|:----------|----------:|\n| spam      |   41.9999 |\n|:----------|----------:|\n|
+        eggs      |  451      |'''
+    case_center_alignment_colons:
+      case: case_center_alignment_colons
+      status: fail
+      exit: 1
+      tail: 'FAIL case_center_alignment_colons: center column: ''-----'''
+    case_explicit_right_alignment_colons:
+      case: case_explicit_right_alignment_colons
+      status: fail
+      exit: 1
+      tail: 'FAIL case_explicit_right_alignment_colons: right column: ''-----'''
+    case_negative_and_decimal_numbers_right_aligned:
+      case: case_negative_and_decimal_numbers_right_aligned
+      status: fail
+      exit: 1
+      tail: 'FAIL case_negative_and_decimal_numbers_right_aligned: decimal-aligned negative numbers need ''---:'', got ''--------'''
+    case_numbers_as_text_stay_left:
+      case: case_numbers_as_text_stay_left
+      status: fail
+      exit: 1
+      tail: 'FAIL case_numbers_as_text_stay_left: non-numeric column must stay left-marked, got ''------'''
+    case_multiline_delimiter_has_colons:
+      case: case_multiline_delimiter_has_colons
+      status: fail
+      exit: 1
+      tail: 'FAIL case_multiline_delimiter_has_colons: multiline github delimiter row: ''|-------------|-------------|'''
+    case_delimiter_width_unchanged:
+      case: case_delimiter_width_unchanged
+      status: pass
+      exit: 0
+      tail: ok   case_delimiter_width_unchanged
+    case_data_rows_still_visually_aligned:
+      case: case_data_rows_still_visually_aligned
+      status: pass
+      exit: 0
+      tail: ok   case_data_rows_still_visually_aligned
+    case_empty_data_keeps_plain_delimiter:
+      case: case_empty_data_keeps_plain_delimiter
+      status: pass
+      exit: 0
+      tail: ok   case_empty_data_keeps_plain_delimiter
+    case_empty_table_still_empty:
+      case: case_empty_table_still_empty
+      status: pass
+      exit: 0
+      tail: ok   case_empty_table_still_empty
+    case_pipe_format_unchanged:
+      case: case_pipe_format_unchanged
+      status: pass
+      exit: 0
+      tail: ok   case_pipe_format_unchanged
+    case_colon_grid_format_unchanged:
+      case: case_colon_grid_format_unchanged
+      status: pass
+      exit: 0
+      tail: ok   case_colon_grid_format_unchanged
+    case_orgtbl_format_unchanged:
+      case: case_orgtbl_format_unchanged
+      status: pass
+      exit: 0
+      tail: ok   case_orgtbl_format_unchanged
+breaker_rounds:
+- round: 1
+  attempted:
+  - Fix only linebelowheader and leave lineabove/SEPARATING_LINE plain — caught by case_headerless_delimiter_has_colons /
+    case_separating_line_has_colons
+  - Copy the colon_grid approach (declare colons, force left-align the cell text) — caught by case_data_rows_still_visually_aligned
+  - Emit colons only for right/decimal columns, plain dashes elsewhere — caught by case_string_column_delimiter_is_left_aligned
+  - Derive colons from column type (int/float) instead of resolved alignment — caught by case_center_alignment_colons / case_explicit_right_alignment_colons
+  - Append ':' instead of replacing a dash (widens the delimiter row) — caught by case_delimiter_width_unchanged
+  - Alias github to the pipe TableFormat outright — byte-identical everywhere, so not a violation
+  - Fold the "no alignment" case into the left-aligned branch, with a special-cased early return for the empty-DataFrame path
+    — NOT caught (chosen)
+  verdict: counterexample
+  confirmed: false
+  detail: 'oracle caught it: case_center_alignment_colons, case_explicit_right_alignment_colons, case_github_delimiter_matches_pipe,
+    case_headerless_delimiter_has_colons'
+cost:
+  model_calls: 2
+  tokens_in: 2120816
+  tokens_out: 46523
+  cost_usd: 3.1882
+  probe_runs: 41
+  wall_seconds: 667.2
+  sessions:
+  - role: resolver
+    seconds: 318.2
+    exit: 0
+    usage:
+      input_tokens: 39
+      cache_creation_input_tokens: 49075
+      cache_read_input_tokens: 987634
+      output_tokens: 24768
+      server_tool_use:
+        web_search_requests: 0
+        web_fetch_requests: 0
+      service_tier: standard
+      cache_creation:
+        ephemeral_1h_input_tokens: 49075
+        ephemeral_5m_input_tokens: 0
+      inference_geo: not_available
+      iterations:
+      - input_tokens: 2
+        output_tokens: 7295
+        cache_read_input_tokens: 65909
+        cache_creation_input_tokens: 221
+        cache_creation:
+          ephemeral_5m_input_tokens: 0
+          ephemeral_1h_input_tokens: 221
+        type: message
+      speed: standard
+    cost: 1.6055419999999998
+  - role: breaker
+    seconds: 327.3
+    exit: 0
+    usage:
+      input_tokens: 3012
+      cache_creation_input_tokens: 50675
+      cache_read_input_tokens: 1030381
+      output_tokens: 21755
+      server_tool_use:
+        web_search_requests: 0
+        web_fetch_requests: 0
+      service_tier: standard
+      cache_creation:
+        ephemeral_1h_input_tokens: 50675
+        ephemeral_5m_input_tokens: 0
+      inference_geo: not_available
+      iterations:
+      - input_tokens: 2
+        output_tokens: 2813
+        cache_read_input_tokens: 65097
+        cache_creation_input_tokens: 2633
+        cache_creation:
+          ephemeral_5m_input_tokens: 0
+          ephemeral_1h_input_tokens: 2633
+        type: message
+      speed: standard
+    cost: 1.5826215000000001

@@ -1,0 +1,271 @@
+You are the Resolver stage of a task compiler, continuing after an
+adversarial round. Your previous candidate specification for the request
+below was defeated: a wrong implementation passed every acceptance check.
+
+Request: SortedKeyList.update puts new tied-key values before the existing ones; add puts them after.
+
+Your previous specification:
+requirements:
+- id: R1
+  text: SortedKeyList.update must place incoming values after already-present values that share the same
+    key, matching the placement SortedKeyList.add produces.
+  kind: behavioral
+  evidence:
+  - sortedcontainers/sortedlist.py:1881 — update's bulk-rebuild branch appends the existing values *after*
+    the freshly sorted incoming values, so the stable `values.sort(key=self._key)` on line 1882 leaves
+    new tied values first
+  - sortedcontainers/sortedlist.py:1808 — add uses bisect_right on the sublist keys, placing a new value
+    after all equal-keyed values
+  - 'observed: SortedKeyList([10], key=lambda v: v % 10).update([0]) yields [0, 10]; the same value via
+    .add(0) yields [10, 0]'
+  cases:
+  - case_skl_update_tie_after_existing
+  - case_skl_update_multiple_ties_after_existing
+  - case_skl_update_big_branch_at_scale
+- id: R2
+  text: Updating with a batch of values must produce the same final ordering as adding those same values
+    one at a time in key-sorted order, including when several incoming values tie with each other and
+    with existing values.
+  kind: behavioral
+  evidence:
+  - sortedcontainers/sortedlist.py:1885-1888 — update's small-batch branch already delegates to self.add
+    per value, so the two branches of the same method currently disagree on tie placement
+  - 'observed: update([0,10,20,1,11]) on SortedKeyList([100,110,101], key=mod) gives [0,10,20,100,110,1,11,101]
+    while the per-value add path gives [100,110,0,10,20,101,1,11]'
+  cases:
+  - case_skl_update_matches_add
+- id: R3
+  text: The in-place concatenation operator must inherit the corrected tie placement, since SortedKeyList.__iadd__
+    routes through _update.
+  kind: behavioral
+  evidence:
+  - sortedcontainers/sortedlist.py:1498 — __iadd__ calls self._update(other)
+  - sortedcontainers/sortedlist.py:1898 — _update is bound to update, so every caller of the alias inherits
+    the defect
+  - 'observed: skl = SortedKeyList([100], key=mod); skl += [0] yields [0, 100]'
+  cases:
+  - case_skl_iadd_tie_after_existing
+- id: R4
+  text: SortedList.update must apply the same correction, placing incoming values after existing values
+    that compare equal, so the base class agrees with SortedList.add.
+  kind: behavioral
+  evidence:
+  - sortedcontainers/sortedlist.py:342 — SortedList.update has the identical extend-then-stable-sort shape
+    as the SortedKeyList version
+  - sortedcontainers/sortedlist.py:279 — SortedList.add uses insort (insort_right), placing a new value
+    after equal ones
+  - 'observed: with a class ordered on one field only, SortedList([old]).update([new]) yields [new, old]
+    while .add(new) yields [old, new]'
+  cases:
+  - case_sl_update_tie_after_existing
+  - case_sl_update_matches_add
+- id: R5
+  text: When the receiver is empty (including construction from an iterable), update must keep the incoming
+    iterable's own relative order for tied keys, i.e. remain a stable sort of the input.
+  kind: boundary
+  evidence:
+  - sortedcontainers/sortedlist.py:1877 — values = sorted(iterable, key=self._key) is stable and the _maxes-empty
+    path skips the rebuild branch entirely
+  - sortedcontainers/sortedlist.py:1749 — __init__ populates via self._update(iterable)
+  - 'observed today: SortedKeyList(key=mod); update([10, 0, 20]) yields [10, 0, 20]'
+  cases:
+  - case_skl_update_on_empty_preserves_input_order
+  - case_skl_init_preserves_input_order
+- id: R6
+  text: The small-batch branch of update (taken when len(values) * 4 < self._len) must keep its current
+    per-value add behavior and tie placement.
+  kind: regression
+  evidence:
+  - sortedcontainers/sortedlist.py:1880 — branch guard len(values) * 4 >= self._len selects the rebuild
+    path; smaller batches fall through to add
+  - 'observed today: 100 existing values with key 0 plus update([0]) already places 0 last'
+  cases:
+  - case_skl_update_small_branch_unchanged
+- id: R7
+  text: After update the sorted-key list must remain internally consistent — _check() passes, len is correct,
+    keys are non-decreasing, and _reset (which rebuilds through _update) must not reorder existing values.
+  kind: regression
+  evidence:
+  - sortedcontainers/sortedlist.py:232-236 — _reset flattens _lists then calls _update on the cleared
+    list, so any rebuild change must preserve order
+  - sortedcontainers/sortedlist.py:1890-1896 — the rebuild branch repopulates _lists, _keys, _maxes and
+    _len together; _keys is derived from _lists and must stay aligned
+  - 'observed: existing suite (361 tests) passes on the current checkout and calls slt._check() after
+    update'
+  cases:
+  - case_skl_reset_preserves_order
+  - case_skl_update_keeps_invariants
+- id: R8
+  text: SortedKeyList.add must keep its existing after-the-ties placement; the discrepancy is resolved
+    by changing update, not by changing add to bisect_left.
+  kind: regression
+  evidence:
+  - sortedcontainers/sortedlist.py:1808 — bisect_right is the documented insertion point for add
+  - sortedcontainers/sortedlist.py:2517-2518 — __add__ builds existing-then-other and relies on a stable
+    sort, i.e. the repository already treats existing-before-new as the intended tie order
+  - 'observed today: SortedKeyList([100, 110], key=mod).add(0) yields [100, 110, 0]'
+  cases:
+  - case_skl_add_puts_tie_after_existing
+  - case_skl_add_order_stable_for_sorted_input
+scope:
+- path: sortedcontainers/sortedlist.py
+  reason: Contains both SortedKeyList.update (line 1860) and SortedList.update (line 323), the only two
+    sites with the extend-then-stable-sort tie inversion.
+  new: false
+forbidden:
+- tests/test_coverage_sortedkeylist_negate.py
+- tests/test_coverage_sortedkeylist_modulo.py
+- tests/test_coverage_sortedlist.py
+- tests/test_stress_sortedkeylist.py
+- tests/test_stress_sortedlist.py
+constraints:
+- text: '`chain` must remain imported and functional if still referenced; it is used at sortedlist.py:929,
+    941, 1038-1067 independently of update.'
+  requirement: R7
+- text: The rebuild branch must still clear and repopulate _keys and _maxes consistently with _lists so
+    that _check() passes for a SortedKeyList.
+  requirement: R7
+- text: update must remain a stable ordering overall — among the incoming values themselves, key-tied
+    values keep their sorted-input order.
+  requirement: R5
+tests_policy: immutable
+tests_editable: []
+regression:
+- cmd: python -m pytest
+  reason: tox.ini [testenv] commands=python -m pytest, with addopts/testpaths declared in the [pytest]
+    section of tox.ini; 361 tests pass on the current checkout.
+- cmd: pylint sortedcontainers
+  reason: tox.ini [testenv:lint] commands=pylint sortedcontainers, run in CI via .travis.yml TOXENV=lint.
+questions: []
+notes: 'The defect is isolated to the bulk-rebuild branch of update, which appends existing values after
+  the incoming ones before a stable sort; the small-batch branch, add, __add__, and construction from
+  an iterable are already correct, which is what fixes the intended tie order as existing-before-new.
+  SortedList.update carries the identical inversion and is included because leaving the base class inconsistent
+  with its own add would keep the two paths disagreeing for values that compare equal but are distinguishable.
+  Verified on this checkout: 7 probe cases fail today and all 14 pass after the rebuild branch is reordered,
+  with the 361-test suite staying green.'
+probe_file: "\"\"\"Probe: tied-key ordering of SortedList/SortedKeyList update vs add.\"\"\"\nimport sys\n\
+  sys.path.insert(0, '.')\n\nfrom sortedcontainers import SortedList, SortedKeyList\n\n\ndef mod(val):\n\
+  \    \"\"\"Key with deliberate ties: 100, 110, 120 ... all have key 0.\"\"\"\n    return val % 10\n\n\
+  \nclass Eq(object):\n    \"\"\"Compares equal on `k`, but stays distinguishable through `tag`.\"\"\"\
+  \n\n    def __init__(self, k, tag):\n        self.k = k\n        self.tag = tag\n\n    def __lt__(self,\
+  \ other):\n        return self.k < other.k\n\n    def __le__(self, other):\n        return self.k <=\
+  \ other.k\n\n    def __gt__(self, other):\n        return self.k > other.k\n\n    def __ge__(self, other):\n\
+  \        return self.k >= other.k\n\n    def __eq__(self, other):\n        return self.k == other.k\n\
+  \n    def __ne__(self, other):\n        return self.k != other.k\n\n    def __hash__(self):\n      \
+  \  return hash(self.k)\n\n    def __repr__(self):\n        return self.tag\n\n\ndef tags(seq):\n   \
+  \ return [v.tag for v in seq]\n\n\n# --- behavioral: update must place tied values after the existing\
+  \ ones ------\n\ndef case_skl_update_tie_after_existing():\n    skl = SortedKeyList([10], key=mod)\n\
+  \    skl.update([0])\n    assert list(skl) == [10, 0], 'update tie: got %r, want [10, 0]' % (list(skl),)\n\
+  \n\ndef case_skl_update_multiple_ties_after_existing():\n    skl = SortedKeyList([100, 110, 120], key=mod)\n\
+  \    skl.update([0, 10])\n    want = [100, 110, 120, 0, 10]\n    assert list(skl) == want, 'update ties:\
+  \ got %r, want %r' % (list(skl), want)\n\n\ndef case_skl_update_matches_add():\n    incoming = [0, 10,\
+  \ 20, 1, 11]\n    by_update = SortedKeyList([100, 110, 101], key=mod)\n    by_update.update(incoming)\n\
+  \    by_add = SortedKeyList([100, 110, 101], key=mod)\n    for val in sorted(incoming, key=mod):\n \
+  \       by_add.add(val)\n    assert list(by_update) == list(by_add), \\\n        'update %r disagrees\
+  \ with add %r' % (list(by_update), list(by_add))\n\n\ndef case_skl_update_big_branch_at_scale():\n \
+  \   existing = [10 * i for i in range(1, 51)]\n    incoming = [10 * i for i in range(51, 101)]\n   \
+  \ skl = SortedKeyList(existing, key=mod)\n    skl._reset(4)\n    skl.update(incoming)\n    want = existing\
+  \ + incoming\n    assert list(skl) == want, 'scaled update: got %r, want %r' % (list(skl), want)\n \
+  \   skl._check()\n\n\ndef case_skl_iadd_tie_after_existing():\n    skl = SortedKeyList([100], key=mod)\n\
+  \    skl += [0]\n    assert list(skl) == [100, 0], 'iadd tie: got %r, want [100, 0]' % (list(skl),)\n\
+  \n\ndef case_sl_update_tie_after_existing():\n    sl = SortedList([Eq(1, 'old')])\n    sl.update([Eq(1,\
+  \ 'new')])\n    assert tags(sl) == ['old', 'new'], \\\n        'SortedList update tie: got %r, want\
+  \ [old, new]' % (tags(sl),)\n\n\ndef case_sl_update_matches_add():\n    def build():\n        return\
+  \ [Eq(1, 'old0'), Eq(1, 'old1'), Eq(2, 'old2')]\n\n    incoming = [('new0', 1), ('new1', 1), ('new2',\
+  \ 2)]\n    by_update = SortedList(build())\n    by_update.update([Eq(k, t) for t, k in incoming])\n\
+  \    by_add = SortedList(build())\n    for tag, k in incoming:\n        by_add.add(Eq(k, tag))\n   \
+  \ assert tags(by_update) == tags(by_add), \\\n        'SortedList update %r disagrees with add %r' %\
+  \ (tags(by_update), tags(by_add))\n\n\n# --- regression / boundary: already correct today, must stay\
+  \ correct --------\n\ndef case_skl_add_puts_tie_after_existing():\n    skl = SortedKeyList([100, 110],\
+  \ key=mod)\n    skl.add(0)\n    assert list(skl) == [100, 110, 0], \\\n        'add tie: got %r, want\
+  \ [100, 110, 0]' % (list(skl),)\n\n\ndef case_skl_update_on_empty_preserves_input_order():\n    skl\
+  \ = SortedKeyList(key=mod)\n    skl.update([10, 0, 20])\n    assert list(skl) == [10, 0, 20], \\\n \
+  \       'empty-receiver update: got %r, want [10, 0, 20]' % (list(skl),)\n\n\ndef case_skl_init_preserves_input_order():\n\
+  \    skl = SortedKeyList([30, 10, 20], key=mod)\n    assert list(skl) == [30, 10, 20], \\\n        'init\
+  \ order: got %r, want [30, 10, 20]' % (list(skl),)\n\n\ndef case_skl_update_small_branch_unchanged():\n\
+  \    existing = [10 * i for i in range(1, 101)]\n    skl = SortedKeyList(existing, key=mod)\n    skl.update([0])\n\
+  \    want = existing + [0]\n    assert list(skl) == want, 'small-branch update: got %r, want %r' % (list(skl),\
+  \ want)\n\n\ndef case_skl_reset_preserves_order():\n    skl = SortedKeyList([100, 110, 120, 5], key=mod)\n\
+  \    before = list(skl)\n    skl._reset(4)\n    assert list(skl) == before, 'reset reordered: %r ->\
+  \ %r' % (before, list(skl))\n    skl._check()\n\n\ndef case_skl_update_keeps_invariants():\n    skl\
+  \ = SortedKeyList([100, 110, 3], key=mod)\n    skl._reset(4)\n    skl.update([0, 10, 13, 7])\n    skl._check()\n\
+  \    assert len(skl) == 7, 'len: got %r, want 7' % (len(skl),)\n    keys = [mod(v) for v in skl]\n \
+  \   assert keys == sorted(keys), 'keys not ordered: %r' % (keys,)\n\n\ndef case_skl_add_order_stable_for_sorted_input():\n\
+  \    skl = SortedKeyList(key=mod)\n    for val in [100, 110, 120]:\n        skl.add(val)\n    assert\
+  \ list(skl) == [100, 110, 120], \\\n        'add insertion order: got %r' % (list(skl),)\n\n\nCASES\
+  \ = dict((name, obj) for name, obj in sorted(globals().items())\n             if name.startswith('case_')\
+  \ and callable(obj))\n\n\ndef main(argv):\n    names = argv[1:] if len(argv) > 1 else sorted(CASES)\n\
+  \    failed = 0\n    for name in names:\n        if name not in CASES:\n            print('UNKNOWN %s'\
+  \ % name)\n            failed += 1\n            continue\n        try:\n            CASES[name]()\n\
+  \        except AssertionError as exc:\n            print('FAIL %s: %s' % (name, exc))\n           \
+  \ failed += 1\n        else:\n            print('PASS %s' % name)\n    return 1 if failed else 0\n\n\
+  \nif __name__ == '__main__':\n    sys.exit(main(sys.argv))\n"
+
+
+Confirmed weakness (the orchestrator verified this mechanically):
+a wrong implementation passed every check: Both update methods rank existing values ahead of incoming ones via a decorate-sort-undecorate, but SortedKeyList's decoration carries the value as a third tuple element, so it becomes a hidden tiebreaker that re-sorts tied-key values by value instead of preserving their existing/insertion order (and raises TypeError for values that aren't mutually comparable).
+
+Counter-probe that demonstrated the violation:
+"""Counter-probe: update must not reorder tied values by value comparison."""
+import sys
+sys.path.insert(0, '.')
+
+from sortedcontainers import SortedKeyList
+
+
+def mod(val):
+    """Key with deliberate ties: 20, 30, 40, 50 all have key 0."""
+    return val % 10
+
+
+def case_skl_update_ties_keep_insertion_order():
+    # Existing tied values held in descending value order, and an incoming
+    # batch also given in descending value order.  Every value has key 0, so
+    # nothing may be reordered: existing keep their positions and incoming
+    # keep the iterable's own relative order, appended after them.
+    skl = SortedKeyList([30, 20], key=mod)
+    skl.update([50, 40])            # big branch: len(values) * 4 >= len(skl)
+    want = [30, 20, 50, 40]
+    assert list(skl) == want, \
+        'update reordered ties: got %r, want %r' % (list(skl), want)
+
+    by_add = SortedKeyList([30, 20], key=mod)
+    for val in [50, 40]:
+        by_add.add(val)
+    assert list(skl) == list(by_add), \
+        'update %r disagrees with add %r' % (list(skl), list(by_add))
+
+
+CASES = dict((name, obj) for name, obj in sorted(globals().items())
+             if name.startswith('case_') and callable(obj))
+
+
+def main(argv):
+    names = argv[1:] if len(argv) > 1 else sorted(CASES)
+    failed = 0
+    for name in names:
+        if name not in CASES:
+            print('UNKNOWN %s' % name)
+            failed += 1
+            continue
+        try:
+            CASES[name]()
+        except AssertionError as exc:
+            print('FAIL %s: %s' % (name, exc))
+            failed += 1
+        else:
+            print('PASS %s' % name)
+    return 1 if failed else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))
+
+
+Strengthen the specification so this class of wrong implementation fails —
+generalize; do not only pin the single counterexample. Adopt or adapt the
+counter-probe case if it is honest. Keep everything that was already right.
+Re-answer with the SAME yaml document format as before (requirements, scope,
+forbidden, constraints, tests_policy, tests_editable, regression, probe_file,
+questions, notes) — the complete revised specification, not a delta.

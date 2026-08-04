@@ -1,0 +1,161 @@
+verdict: counterexample
+attempted:
+  - Fix only linebelowheader and leave lineabove/SEPARATING_LINE plain — caught by case_headerless_delimiter_has_colons / case_separating_line_has_colons
+  - Copy the colon_grid approach (declare colons, force left-align the cell text) — caught by case_data_rows_still_visually_aligned
+  - Emit colons only for right/decimal columns, plain dashes elsewhere — caught by case_string_column_delimiter_is_left_aligned
+  - Derive colons from column type (int/float) instead of resolved alignment — caught by case_center_alignment_colons / case_explicit_right_alignment_colons
+  - Append ':' instead of replacing a dash (widens the delimiter row) — caught by case_delimiter_width_unchanged
+  - Alias github to the pipe TableFormat outright — byte-identical everywhere, so not a violation
+  - Fold the "no alignment" case into the left-aligned branch, with a special-cased early return for the empty-DataFrame path — NOT caught (chosen)
+counterexample:
+  description: The github delimiter row is built by a new hand-rolled segment function whose fallback branch treats every non-right/non-center alignment as left, with a special-cased early return only for the empty-`colaligns` (empty-DataFrame) path, so a column whose alignment was explicitly disabled with `numalign=None`/`stralign=None` is wrongly declared `:---` instead of staying colon-free like `pipe`.
+  writes:
+    counterexample.patch: |
+      Full unified diff of the write-set (apply with `git apply`). The three
+      touched files total ~266 KB, so they are given as a self-contained patch
+      rather than as full file bodies.
+
+      diff --git a/README.md b/README.md
+      --- a/README.md
+      +++ b/README.md
+      @@ -233,12 +233,12 @@ bacon       0
+       ```
+       
+       `github` follows the conventions of GitHub flavored Markdown. It
+      -corresponds to the `pipe` format without alignment colons:
+      +corresponds to the `pipe` format, including the alignment colons:
+       
+       ```pycon
+       >>> print(tabulate(table, headers, tablefmt="github"))
+       | item   |   qty |
+      -|--------|-------|
+      +|:-------|------:|
+       | spam   |    42 |
+       | eggs   |   451 |
+       | bacon  |     0 |
+      diff --git a/tabulate/__init__.py b/tabulate/__init__.py
+      --- a/tabulate/__init__.py
+      +++ b/tabulate/__init__.py
+      @@ -153,6 +153,28 @@ def _pipe_line_with_colons(colwidths, colaligns):
+           return f"|{segments}|"
+       
+       
+      +def _github_segment_with_colons(align, colwidth):
+      +    """Return a segment of a horizontal line with colons which indicate
+      +    column's alignment (as in GitHub Flavored Markdown)."""
+      +    w = colwidth
+      +    if align in ["right", "decimal"]:
+      +        return ("-" * (w - 1)) + ":"
+      +    elif align == "center":
+      +        return ":" + ("-" * (w - 2)) + ":"
+      +    else:  # GitHub Flavored Markdown aligns to the left by default
+      +        return ":" + ("-" * (w - 1))
+      +
+      +
+      +def _github_line_with_colons(colwidths, colaligns):
+      +    """Return a horizontal line with colons to indicate column's alignment
+      +    (as in GitHub Flavored Markdown)."""
+      +    if not colaligns:  # e.g. printing an empty data frame (github issue #15)
+      +        segments = "|".join("-" * w for w in colwidths)
+      +        return f"|{segments}|"
+      +    segments = "|".join(_github_segment_with_colons(a, w) for a, w in zip(colaligns, colwidths))
+      +    return f"|{segments}|"
+      +
+      +
+       def _grid_segment_with_colons(colwidth, align):
+           """Return a segment of a horizontal line with optional colons which indicate
+           column's alignment in a grid table."""
+      @@ -523,8 +545,8 @@ _table_formats = {
+               with_header_hide=None,
+           ),
+           "github": TableFormat(
+      -        lineabove=Line("|", "-", "|", "|"),
+      -        linebelowheader=Line("|", "-", "|", "|"),
+      +        lineabove=_github_line_with_colons,
+      +        linebelowheader=_github_line_with_colons,
+               linebetweenrows=None,
+               linebelow=None,
+               headerrow=DataRow("|", "|", "|"),
+      diff --git a/test/test_output.py b/test/test_output.py
+      --- a/test/test_output.py
+      +++ b/test/test_output.py
+      @@ -369,9 +369,9 @@ def test_simple_headerless_with_sep_line_with_padding_in_tablefmt():
+           "Output: simple without headers with sep line with padding in tablefmt"
+           expected = "\n".join(
+               [
+      -            "|------|----------|",
+      +            "|:-----|---------:|",
+                   "| spam |  41.9999 |",
+      -            "|------|----------|",
+      +            "|:-----|---------:|",
+                   "| eggs | 451      |",
+               ]
+           )
+      @@ -489,7 +489,7 @@ def test_github():
+           expected = "\n".join(
+               [
+                   "| strings   |   numbers |",
+      -            "|-----------|-----------|",
+      +            "|:----------|----------:|",
+                   "| spam      |   41.9999 |",
+                   "| eggs      |  451      |",
+               ]
+      @@ -506,7 +506,7 @@ def test_github_multiline():
+               [
+                   "|        more | more spam   |",
+                   "|   spam eggs | & eggs      |",
+      -            "|-------------|-------------|",
+      +            "|------------:|:------------|",
+                   "|           2 | foo         |",
+                   "|             | bar         |",
+               ]
+  counter_probe: |
+    import sys
+
+    sys.path.insert(0, ".")
+
+    from tabulate import tabulate  # noqa: E402
+
+    TABLE = [["spam", 41.9999], ["eggs", "451.0"]]
+    HEADERS = ["strings", "numbers"]
+
+
+    def case_disabled_alignment_stays_colon_free():
+        """A column whose alignment was explicitly disabled (numalign=None /
+        stralign=None) has no alignment to declare, so its github delimiter
+        segment must stay plain dashes -- exactly as `pipe` renders it."""
+        got = tabulate(TABLE, HEADERS, tablefmt="github", numalign=None, stralign=None)
+        want = tabulate(TABLE, HEADERS, tablefmt="pipe", numalign=None, stralign=None)
+        assert got == want, f"github must match pipe when alignment is disabled:\n{got!r}\n{want!r}"
+        delim = got.splitlines()[1]
+        for seg in delim.split("|")[1:-1]:
+            assert ":" not in seg, (
+                f"unaligned column must not be declared left-aligned, got {seg!r} in {delim!r}"
+            )
+
+
+    CASES = {name: obj for name, obj in sorted(globals().items()) if name.startswith("case_")}
+
+
+    def main(argv):
+        names = argv[1:] if len(argv) > 1 else list(CASES)
+        failed = 0
+        for name in names:
+            fn = CASES.get(name)
+            if fn is None:
+                print(f"UNKNOWN {name}")
+                failed += 1
+                continue
+            try:
+                fn()
+            except AssertionError as e:
+                print(f"FAIL {name}: {e}")
+                failed += 1
+            else:
+                print(f"ok   {name}")
+        return 1 if failed else 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main(sys.argv))
+  counter_case: case_disabled_alignment_stays_colon_free

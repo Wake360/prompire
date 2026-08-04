@@ -1,0 +1,269 @@
+You are the Resolver stage of a task compiler, continuing after an
+adversarial round. Your previous candidate specification for the request
+below was defeated: a wrong implementation passed every acceptance check.
+
+Request: Appending a value to a multiline array whose commas start each line produces unparseable TOML.
+
+Your previous specification:
+requirements:
+- id: R1
+  text: Appending to a multiline array whose commas begin each line and whose last group carries a trailing
+    comment must produce output that the parser accepts, instead of emitting a stray extra comma line
+    that reparse rejects with UnexpectedCharError.
+  kind: behavioral
+  evidence:
+  - 'observed: parse(''a = [\n    1\n    , 2\n    , # c\n]\n''); a.append(3); dumps -> ''a = [\n    1\n    ,
+    2\n    , # c 3\n    ,\n]\n'' -> UnexpectedCharError: Unexpected character: '','' at line 5 col 4'
+  - tomlkit/items.py:1630-1643 — Array.insert copies indent/comma from the previous group without accounting
+    for that group ending in a Comment
+  cases:
+  - case_append_leading_comma_dangling_comment
+- id: R2
+  text: A value appended to a multiline array must never be emitted on the same line as an existing trailing
+    comment, so the appended value survives a dumps/parse round trip for every value type.
+  kind: behavioral
+  evidence:
+  - 'observed: parse(''a = [\n    1\n    , 2  # two\n]\n''); a.append(3) -> ''a = [\n    1\n    , 2,  #
+    two 3\n]\n''; reparses to [1, 2] — the value is silently swallowed by the comment'
+  - 'observed: same swallow for string values, nested arrays, and every-line comments'
+  - tomlkit/items.py:1363-1368 — _ArrayItemGroup renders indent, value, comma, comment in that order,
+    so a following group's indent must start a new line when the previous group has a comment
+  - 'tests/test_items.py:424-439 — established convention: appending after a commented item moves the
+    comma before the comment and puts the new value on its own line'
+  cases:
+  - case_append_leading_comma_trailing_comment
+  - case_append_leading_comma_comment_every_line
+  - case_append_leading_comma_string_values
+  - case_append_leading_comma_nested_array
+- id: R3
+  text: Every list-mutation path that routes through Array.insert — append, extend, and += — must behave
+    identically on these arrays, since they all reach the same placement code.
+  kind: behavioral
+  evidence:
+  - tomlkit/items.py:1384 — Array defines neither append nor extend; they come from MutableSequence and
+    delegate to Array.insert
+  - tomlkit/_types.py — _CustomList.__iadd__ delegates to extend
+  - 'observed: extend([3, 4]) and += [3] both reparse to [1, 2] on ''a = [\n    1\n    , 2  # two\n]\n'''
+  cases:
+  - case_extend_leading_comma_trailing_comment
+  - case_iadd_leading_comma_trailing_comment
+- id: R4
+  text: Inserting at a position whose preceding group is a whitespace-only group that already carries
+    a comma in its indent (the leading-comma group stranded after a comment) must not add a second comma,
+    which today yields the unparseable sequence ",,".
+  kind: behavioral
+  evidence:
+  - 'observed: parse(''a = [\n    1  # one\n    , 2\n]\n''); a.insert(1, 99) -> ''a = [\n    1  # one\n    ,,
+    99, 2\n]\n'' -> UnexpectedCharError at line 3 col 5'
+  - tomlkit/items.py:1638-1640 — guard is `last_item.comma is None and not isinstance(last_item.value,
+    Null)`; a whitespace-only group has value None (not Null), so it passes the guard and gets a comma
+    it already has in its indent
+  - tomlkit/items.py:1677-1697 — Array.__delitem__ explicitly handles commas carried in a group's indent,
+    so comma-in-indent is a shape the codebase already supports
+  cases:
+  - case_insert_middle_leading_comma_after_comment
+  - case_insert_middle_leading_comma_after_own_line_comment
+- id: R5
+  text: The same fix must cover the sibling shape without leading commas — a last item that shares its
+    line with a preceding value (indent has no newline) and ends with a comment — since it fails through
+    the identical code path.
+  kind: behavioral
+  evidence:
+  - 'observed: parse(''a = [\n    1, 2  # two\n]\n''); a.append(3) -> ''a = [\n    1, 2,  # two 3\n]\n'';
+    reparses to [1, 2]'
+  - tomlkit/items.py:1630-1633 — indent is copied from the previous group unconditionally, and that indent
+    lacks a newline in both shapes
+  cases:
+  - case_append_after_inline_value_with_trailing_comment
+- id: R6
+  text: Existing exact-output behavior for arrays with comments must not change — appending after a commented
+    item on its own line, appending to an array switched to multiline mode, and Array.add_line on a leading-comma
+    array all keep working as they do today.
+  kind: regression
+  evidence:
+  - 'tests/test_items.py:402-439 — test_modify_array_with_comment asserts the exact string ''x = [\n    1,  #
+    comment\n    2\n]'''
+  - tests/test_items.py:442-471 — test_append_to_multiline_array_with_comment asserts exact multiline
+    output
+  - 'observed: add_line(3) on ''a = [\n    1\n    , 2  # two\n]\n'' already places the value on a new
+    line and round-trips to [1, 2, 3]'
+  cases:
+  - case_existing_comment_append_layout_preserved
+  - case_existing_multiline_flag_append_layout_preserved
+  - case_add_line_leading_comma_unchanged
+- id: R7
+  text: Leading-comma arrays that already round-trip correctly — no comments, a dangling trailing comma,
+    insertion at index 0, and element deletion — must keep round-tripping to the same values.
+  kind: boundary
+  evidence:
+  - 'observed on current checkout: append/insert(0)/del all round-trip correctly for ''a = [\n    1\n    ,
+    2\n    , 3\n]\n'' and its commented variant'
+  - tomlkit/items.py:1648-1720 — Array.__delitem__ has dedicated comma-in-indent handling that the fix
+    must not disturb
+  - tests/test_items.py:1174-1240 — existing array-removal formatting tests
+  cases:
+  - case_append_plain_leading_comma_roundtrip
+  - case_append_leading_comma_trailing_comma_roundtrip
+  - case_insert_front_leading_comma_roundtrip
+  - case_delete_from_leading_comma_array_roundtrip
+scope:
+- path: tomlkit/items.py
+  reason: Array.insert (lines 1600-1646) computes the new group's indent and comma; both defects (comment-line
+    swallow and doubled comma) live there, and append/extend/+= all delegate to it.
+  new: false
+- path: CHANGELOG.md
+  reason: Repo convention is a bullet under "### Fixed" in the [unreleased] section for serialization
+    fixes of this kind (see the
+  new: false
+forbidden: []
+constraints:
+- text: parse(src) followed by dumps() with no mutation stays byte-identical for leading-comma arrays.
+  requirement: R7
+- text: Array.__delitem__ output for leading-comma arrays with comments is unchanged.
+  requirement: R7
+- text: The comma for a commented item is emitted before its comment, never after it.
+  requirement: R2
+tests_policy: immutable
+tests_editable: []
+regression:
+- cmd: python3 -m pytest tests/ --ignore=tests/test_toml_tests.py -q
+  reason: tox.ini declares `poetry run pytest tests/`; pyproject.toml lists pytest as a dev dependency.
+    tests/test_toml_tests.py is excluded because it reads tests/toml-test/, a git submodule declared in
+    .gitmodules that is not checked out here, so collection errors before any test runs. Baseline on this
+    checkout - 297 passed.
+questions: []
+notes: Two defects share one method, Array.insert - a new group's indent is copied from the previous group
+  even when that group ends in a Comment (value emitted on the comment line, silently swallowed or, with
+  a dangling comma, unparseable), and a whitespace-only group holding a leading comma in its indent has
+  value None rather than Null, so the "add a separating comma" guard fires and emits ",,". Requirements
+  are stated as validity and value-preservation across a dumps/parse round trip rather than exact layout,
+  so the implementer may either continue the leading-comma style or fall back to a trailing-comma line;
+  probes deliberately do not pin that choice. Probe verified on this checkout - 10 behavioral cases fail,
+  6 boundary/regression cases pass, and the suite is green at 297 passed.
+probe_file: "\"\"\"Probe cases for appending/inserting into arrays whose commas start each line.\"\"\"\
+  \n\nimport sys\n\nsys.path.insert(0, \".\")\n\nimport tomlkit  # noqa: E402\n\n\ndef _roundtrip(src,\
+  \ mutate):\n    \"\"\"Parse src, mutate array 'a', dump, reparse -> (out, in_memory, reparsed).\"\"\"\
+  \n    doc = tomlkit.parse(src)\n    arr = doc[\"a\"]\n    mutate(arr)\n    out = tomlkit.dumps(doc)\n\
+  \    try:\n        reparsed = tomlkit.parse(out)[\"a\"].unwrap()\n    except Exception as e:  # noqa:\
+  \ BLE001\n        raise AssertionError(\n            f\"output is unparseable TOML ({type(e).__name__}:\
+  \ {e}); output={out!r}\"\n        ) from None\n    return out, arr.unwrap(), reparsed\n\n\ndef _check(src,\
+  \ mutate, expected):\n    out, in_mem, reparsed = _roundtrip(src, mutate)\n    assert in_mem == expected,\
+  \ f\"in-memory value is {in_mem!r}, expected {expected!r}\"\n    assert reparsed == expected, (\n  \
+  \      f\"round-trip lost/changed values: reparsed={reparsed!r}, \"\n        f\"expected={expected!r};\
+  \ output={out!r}\"\n    )\n\n\n# --- behavioral: broken on the current checkout ---------------------------\n\
+  \n\ndef case_append_leading_comma_dangling_comment():\n    # Literal report: append yields TOML the\
+  \ parser rejects (double trailing comma).\n    _check(\"a = [\\n    1\\n    , 2\\n    , # c\\n]\\n\"\
+  , lambda a: a.append(3), [1, 2, 3])\n\n\ndef case_append_leading_comma_trailing_comment():\n    # Appended\
+  \ value lands on the comment line and is silently swallowed.\n    _check(\"a = [\\n    1\\n    , 2 \
+  \ # two\\n]\\n\", lambda a: a.append(3), [1, 2, 3])\n\n\ndef case_append_leading_comma_comment_every_line():\n\
+  \    _check(\n        \"a = [\\n    1  # one\\n    , 2  # two\\n    , 3  # three\\n]\\n\",\n       \
+  \ lambda a: a.append(4),\n        [1, 2, 3, 4],\n    )\n\n\ndef case_append_leading_comma_string_values():\n\
+  \    _check(\n        'a = [\\n    \"x\"  # one\\n    , \"y\"  # two\\n]\\n',\n        lambda a: a.append(\"\
+  z\"),\n        [\"x\", \"y\", \"z\"],\n    )\n\n\ndef case_append_leading_comma_nested_array():\n  \
+  \  _check(\n        \"a = [\\n    [1]\\n    , [2]  # two\\n]\\n\",\n        lambda a: a.append([3]),\n\
+  \        [[1], [2], [3]],\n    )\n\n\ndef case_extend_leading_comma_trailing_comment():\n    _check(\"\
+  a = [\\n    1\\n    , 2  # two\\n]\\n\", lambda a: a.extend([3, 4]), [1, 2, 3, 4])\n\n\ndef case_iadd_leading_comma_trailing_comment():\n\
+  \    def mutate(a):\n        a += [3]\n\n    _check(\"a = [\\n    1\\n    , 2  # two\\n]\\n\", mutate,\
+  \ [1, 2, 3])\n\n\ndef case_insert_middle_leading_comma_after_comment():\n    # The stranded \"\\n  \
+  \  ,\" group gets a second comma -> \",,\" -> unparseable.\n    _check(\"a = [\\n    1  # one\\n   \
+  \ , 2\\n]\\n\", lambda a: a.insert(1, 99), [1, 99, 2])\n\n\ndef case_insert_middle_leading_comma_after_own_line_comment():\n\
+  \    _check(\"a = [\\n    1\\n    # note\\n    , 2\\n]\\n\", lambda a: a.insert(1, 99), [1, 99, 2])\n\
+  \n\ndef case_append_after_inline_value_with_trailing_comment():\n    # Same root cause without leading\
+  \ commas: the last value shares its line with a\n    # previous value, so its indent has no newline\
+  \ and the comment eats the append.\n    _check(\"a = [\\n    1, 2  # two\\n]\\n\", lambda a: a.append(3),\
+  \ [1, 2, 3])\n\n\n# --- boundary / regression: correct today, must stay correct ---------------\n\n\n\
+  def case_append_plain_leading_comma_roundtrip():\n    _check(\"a = [\\n    1\\n    , 2\\n    , 3\\n]\\\
+  n\", lambda a: a.append(4), [1, 2, 3, 4])\n\n\ndef case_append_leading_comma_trailing_comma_roundtrip():\n\
+  \    _check(\"a = [\\n    1\\n    , 2\\n    ,\\n]\\n\", lambda a: a.append(3), [1, 2, 3])\n\n\ndef case_insert_front_leading_comma_roundtrip():\n\
+  \    _check(\n        \"a = [\\n    1  # one\\n    , 2  # two\\n]\\n\", lambda a: a.insert(0, 0), [0,\
+  \ 1, 2]\n    )\n\n\ndef case_delete_from_leading_comma_array_roundtrip():\n    src = \"a = [\\n    1\
+  \  # one\\n    , 2  # two\\n    , 3  # three\\n]\\n\"\n    for index, expected in ((0, [2, 3]), (1,\
+  \ [1, 3]), (2, [1, 2])):\n        _check(src, lambda a, i=index: a.__delitem__(i), expected)\n\n\ndef\
+  \ case_add_line_leading_comma_unchanged():\n    doc = tomlkit.parse(\"a = [\\n    1\\n    , 2  # two\\\
+  n]\\n\")\n    doc[\"a\"].add_line(3)\n    out = tomlkit.dumps(doc)\n    try:\n        reparsed = tomlkit.parse(out)[\"\
+  a\"].unwrap()\n    except Exception as e:  # noqa: BLE001\n        raise AssertionError(f\"add_line\
+  \ output unparseable: {e}; {out!r}\") from None\n    assert reparsed == [1, 2, 3], f\"add_line round-trip\
+  \ broken: {reparsed!r} {out!r}\"\n\n\ndef case_existing_comment_append_layout_preserved():\n    # mirrors\
+  \ tests/test_items.py::test_modify_array_with_comment\n    doc = tomlkit.parse(\"x = [\\n    1  # comment\\\
+  n]\")\n    doc[\"x\"].append(2)\n    assert doc.as_string() == \"x = [\\n    1,  # comment\\n    2\\\
+  n]\", (\n        f\"layout changed: {doc.as_string()!r}\"\n    )\n\n\ndef case_existing_multiline_flag_append_layout_preserved():\n\
+  \    # mirrors tests/test_items.py::test_append_to_multiline_array_with_comment\n    doc = tomlkit.parse(\"\
+  x = [\\n    # Here is a comment\\n    1,\\n    2\\n]\\n\")\n    doc[\"x\"].multiline(True).append(3)\n\
+  \    assert (\n        doc.as_string() == \"x = [\\n    # Here is a comment\\n    1,\\n    2,\\n   \
+  \ 3,\\n]\\n\"\n    ), f\"layout changed: {doc.as_string()!r}\"\n\n\ndef main(argv):\n    cases = {k:\
+  \ v for k, v in sorted(globals().items()) if k.startswith(\"case_\")}\n    names = argv[1:] or list(cases)\n\
+  \    failed = 0\n    for name in names:\n        fn = cases.get(name)\n        if fn is None:\n    \
+  \        print(f\"FAIL {name}: no such case\")\n            failed += 1\n            continue\n    \
+  \    try:\n            fn()\n        except AssertionError as e:\n            failed += 1\n        \
+  \    print(f\"FAIL {name}: {e}\")\n        else:\n            print(f\"pass {name}\")\n    return 1\
+  \ if failed else 0\n\n\nif __name__ == \"__main__\":\n    sys.exit(main(sys.argv))\n"
+
+
+Confirmed weakness (the orchestrator verified this mechanically):
+a wrong implementation passed every check: Array.insert starts a new line when the previous group ends in a comment and suppresses the duplicate comma on a stranded whitespace group, but still reuses that stranded group's comma-bearing indent for the new item, so appending to a leading-comma array that has both a trailing comment and a dangling trailing comma emits ", ,99" and remains unparseable.
+
+Counter-probe that demonstrated the violation:
+"""Counter-probe: leading-comma array with a trailing comment AND a dangling comma."""
+
+import sys
+
+sys.path.insert(0, ".")
+
+import tomlkit  # noqa: E402
+
+
+def case_append_leading_comma_comment_then_dangling_comma():
+    # Multiline arrays whose commas start each line, whose last group carries a
+    # comment, and which keep the dangling trailing comma such arrays idiomatically
+    # end with. Each ingredient round-trips on its own; appending to the
+    # combination must also produce parseable TOML that keeps every value.
+    for src in (
+        "a = [\n    1\n    , 2  # two\n    ,\n]\n",
+        "a = [\n    1\n    , 2\n    # note\n    ,\n]\n",
+    ):
+        doc = tomlkit.parse(src)
+        doc["a"].append(3)
+        out = tomlkit.dumps(doc)
+        try:
+            reparsed = tomlkit.parse(out)["a"].unwrap()
+        except Exception as e:  # noqa: BLE001
+            raise AssertionError(
+                f"append to {src!r} produced unparseable TOML "
+                f"({type(e).__name__}: {e}); output={out!r}"
+            ) from None
+        assert reparsed == [1, 2, 3], (
+            f"round-trip lost/changed values for {src!r}: "
+            f"reparsed={reparsed!r}, expected=[1, 2, 3]; output={out!r}"
+        )
+
+
+def main(argv):
+    cases = {k: v for k, v in sorted(globals().items()) if k.startswith("case_")}
+    names = argv[1:] or list(cases)
+    failed = 0
+    for name in names:
+        fn = cases.get(name)
+        if fn is None:
+            print(f"FAIL {name}: no such case")
+            failed += 1
+            continue
+        try:
+            fn()
+        except AssertionError as e:
+            failed += 1
+            print(f"FAIL {name}: {e}")
+        else:
+            print(f"pass {name}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+
+
+Strengthen the specification so this class of wrong implementation fails —
+generalize; do not only pin the single counterexample. Adopt or adapt the
+counter-probe case if it is honest. Keep everything that was already right.
+Re-answer with the SAME yaml document format as before (requirements, scope,
+forbidden, constraints, tests_policy, tests_editable, regression, probe_file,
+questions, notes) — the complete revised specification, not a delta.

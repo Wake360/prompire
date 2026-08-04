@@ -1,0 +1,57 @@
+You are the Breaker stage of a task compiler, in a fresh context. A candidate
+specification was compiled for the short request below. Your single objective:
+find the simplest PLAUSIBLE WRONG implementation that would still satisfy the
+specification's acceptance checks.
+
+Request: IndexedSet indexing with a too-negative index wraps around instead of raising IndexError.
+
+Candidate requirements:
+- R1 (behavioral): Integer indexing an IndexedSet with an index below -len(self) must raise IndexError instead of wrapping around and returning an item. [cases: case_getitem_too_negative_raises]
+- R2 (behavioral): The too-negative IndexError must also be raised when the set carries uncompacted dead slots, where the double normalization lands on a live item_list entry. [cases: case_getitem_too_negative_with_dead_slots_raises]
+- R3 (behavioral): The IndexError raised for a too-negative index must carry the same 'IndexedSet index out of range' message the positive out-of-range path already raises, not a leaked 'list index out of range'. [cases: case_getitem_negative_out_of_range_message]
+- R4 (behavioral): IndexedSet.pop(index) with an index below -len(self) must raise IndexError and leave the set unmodified, instead of silently removing an arbitrary wrapped-around item. [cases: case_pop_too_negative_raises_and_leaves_set_intact, case_pop_too_negative_with_dead_slots_raises]
+- R5 (regression): In-range negative indexing (-1 down to -len(self)) must keep returning the same items as list(self)[i], both on compact sets and on sets holding dead slots. [cases: case_getitem_valid_negative_still_works, case_getitem_valid_indices_with_dead_slots]
+- R6 (boundary): Positive out-of-range indexing, indexing an empty IndexedSet, in-range negative pop, and positive out-of-range pop must keep their current behavior (IndexError, correct item, set untouched on failure). [cases: case_getitem_positive_out_of_range_still_raises, case_getitem_empty_set_raises, case_pop_valid_negative_still_works, case_pop_positive_out_of_range_raises_intact]
+- R7 (regression): Slicing must remain unaffected — out-of-range negative slice bounds clamp like list slicing rather than raising, including the negative-step and post-removal cases. [cases: case_slicing_out_of_range_bounds_unchanged]
+
+Acceptance oracle (every probe case below must pass, plus these commands):
+- python3 .prompire/probes/task.py  # all cases
+- python3 -m pytest tests/test_setutils.py -q
+- python3 -m pytest --doctest-modules boltons/setutils.py tests -q
+
+The probe file is at .prompire/probes/task.py in this repository copy. Read it. Run it.
+You may modify the repository here freely — it is a disposable copy — to
+develop and test your counterexample.
+
+A counterexample is a write-set that:
+- a hurried but plausible developer could genuinely produce for this request
+  (special-casing the reported example, fixing one code path but not its
+  sibling, one sign, one precision, one locale, the wrapper but not the
+  direct API, changing tests instead of behavior — derive what fits THIS
+  task, do not apply that list mechanically);
+- makes EVERY acceptance check above pass (verify this yourself by running
+  the probe file and the commands);
+- violates behavior the request, read faithfully, actually requires.
+
+Also write a counter-probe: one python case function proving the violation —
+it must FAIL under your write-set, and describe behavior a correct
+implementation would satisfy. Same conventions as the probe file (sys.path
+insert, case_* function, assertions).
+
+Do not critique prose, style, or architecture. Do not invent requirements the
+task cannot support. If after honest attempts every plausible wrong
+implementation is caught by the oracle, say so.
+
+Answer with ONE yaml document, no fences, no prose:
+
+verdict: counterexample | no_counterexample
+attempted:
+  - <attack class you tried, one line each, 2-8 entries>
+counterexample:          # only when verdict: counterexample
+  description: <one sentence — what the wrong implementation does>
+  writes:
+    <repo-relative path>: |
+      <full new content of that file>
+  counter_probe: |
+    <python source: sys.path insert + one case_<name> function + main>
+  counter_case: <the case function name>

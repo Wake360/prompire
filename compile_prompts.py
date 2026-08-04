@@ -178,6 +178,17 @@ questions, notes) — the complete revised specification, not a delta.
 """
 
 
+FENCE = re.compile(r"^\s*```[^\n]*\n(.*?)^\s*```\s*$", re.S | re.M)
+
+
+def _fenced_blocks(text):
+    """Every fenced block's body, outermost-first. A role that leads with a
+    sentence and then fences its whole document is the common shape — five of
+    eight evaluated compiles died on exactly that, because stripping only a
+    fence on line 1 left the opening fence inside the parsed text."""
+    return [match.group(1) for match in FENCE.finditer(str(text or ""))]
+
+
 def _strip_fences(text):
     lines = str(text or "").strip().splitlines()
     if lines and lines[0].startswith("```"):
@@ -209,9 +220,14 @@ def _load_yaml(text):
     raw = _strip_fences(text)
     trouble = "the reply is not YAML"
     data = None
-    # Models sometimes lead with a sentence, or start a list item with a
-    # reserved indicator; recover before giving up.
+    # Models lead with a sentence, fence the document, or start a list item
+    # with a reserved indicator. Each recovery is tried in turn; the reply is
+    # data, and none of these rewrites can add or change a value — they only
+    # find where the document begins and quote an indicator character.
     attempts = [raw, _quote_reserved_items(raw)]
+    for body in _fenced_blocks(text):
+        attempts.append(body)
+        attempts.append(_quote_reserved_items(body))
     match = re.search(r"^(requirements|verdict):", raw, re.M)
     if match:
         attempts.append(_quote_reserved_items(raw[match.start():]))

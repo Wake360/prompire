@@ -1,0 +1,516 @@
+Validated the revised probe mechanically: 6 boundary/regression cases pass on untouched HEAD, 16 behavioral cases fail on HEAD; the one-line `rstrip` fix makes all 22 pass, while 7 wrong implementations (header-skipped, `.rstrip(" |")`, per-cell rstrip, single-space regex, non-empty-last-cell-only, ANSI-stripping, `padding=0`) each fail 4–18 cases.
+
+```yaml
+requirements:
+- id: R1
+  text: In the `asciidoc` table format, every emitted data row line must have no trailing whitespace after
+    its last cell's content.
+  kind: behavioral
+  evidence:
+  - tabulate/__init__.py:293 — `data_line = "|" + "|".join(cell_values)` joins already-padded cells (padding=1)
+    and never rstrips, unlike `_build_simple_row` at tabulate/__init__.py:2515
+  - 'observed: tabulate([[''spam'',41.9999],[''eggs'',''451.0'']], tablefmt=''asciidoc'') yields ''| spam
+    |  41.9999 '' and ''| eggs | 451      '''
+  - tabulate/__init__.py:713 — datarow=partial(_asciidoc_row, False), a callable rowfmt that bypasses
+    the rstrip in _build_simple_row
+  - 'observed: asciidoc is the ONLY one of the 36 tablefmts that emits any line with trailing whitespace
+    (swept over all formats with the basic, empty-cell and multiline tables)'
+  cases:
+  - case_data_rows_no_trailing_whitespace
+  - case_headerless_rows_no_trailing_whitespace
+  - case_exact_output_headerless
+  - case_separating_line_rows
+- id: R2
+  text: The asciidoc header row, which is produced by the same code path as data rows, must equally have
+    no trailing whitespace.
+  kind: behavioral
+  evidence:
+  - tabulate/__init__.py:296 — header branch returns make_header_line(...) + '\n' + data_line, reusing
+    the identical unstripped data_line
+  - 'observed: header line is ''| strings   |   numbers '' with a trailing space'
+  - README.md:505-508 — all four trailing-whitespace lines in README.md are asciidoc rows, and the header
+    row '| item   |   qty ' is one of them
+  - .pre-commit-config.yaml — the repo runs the `trailing-whitespace` hook, which would strip exactly
+    these lines and break the README doctest
+  - 'a fix that rstrips only the datarow partial (headerrow=partial(..., True) left alone) still leaves
+    ''| strings   |   numbers '' — it must fail'
+  cases:
+  - case_header_row_no_trailing_whitespace
+  - case_exact_output_with_headers
+  - case_empty_body_header_only
+- id: R3
+  text: Trailing-whitespace removal must apply to all column alignments and must remove the whole run
+    of trailing whitespace — both the single pad space added by tabulate and the alignment padding baked
+    into the cell by right/decimal/center alignment.
+  kind: behavioral
+  evidence:
+  - 'observed: decimal-aligned row is ''| eggs      |  451      '' — six trailing spaces, not one'
+  - 'observed with colalign=(''center'',''center''): ''|  strings  |  numbers  '' — two trailing spaces'
+  - tabulate/__init__.py:2505-2507 — _pad_row adds exactly `padding` spaces; the rest comes from _align_column
+  - 'a fix of the shape re.sub(r" $", "", line) removes exactly one space and leaves ''| eggs      |  451
+    '' — it must fail'
+  cases:
+  - case_right_aligned_last_column_padding_removed
+  - case_colalign_center_no_trailing_whitespace
+  - case_corpus_no_trailing_whitespace
+- id: R4
+  text: Only whitespace may be removed. Cell separators must survive when the last column is empty or
+    whitespace-only, so a row keeps its column count ('| x   |' for a two-column row with an empty last
+    cell, and a bare '|' for a lone empty column).
+  kind: behavioral
+  evidence:
+  - 'observed: tabulate([[''x'',''''],['''',''y'']], headers=[''a'',''''], tablefmt=''asciidoc'') emits
+    ''| a   |    '', ''| x   |    '', ''|     | y  '''
+  - 'observed: tabulate([[''a''],['''']], tablefmt=''asciidoc'') emits ''| a '' and ''|   '''
+  - tabulate/__init__.py:2515 — the sibling _build_simple_row uses plain .rstrip(), which likewise never
+    removes non-whitespace delimiters
+  - 'a fix of the shape .rstrip(" |") turns ''| a   |    '' into ''| a'' and the lone empty column into
+    '''' — it must fail; a fix that rstrips only when the last cell has non-space content leaves ''| a
+    |    '' — it must fail too'
+  cases:
+  - case_empty_last_cell_row_stripped
+  - case_single_empty_column_row
+  - case_cell_separators_preserved
+- id: R5
+  text: Cell content and intra-row layout must be preserved — ANSI escape sequences, embedded-newline
+    (multiline) continuation lines, the leading '| ' pad and the inner ' | ' padding are unchanged; only
+    whitespace at end-of-line is removed.
+  kind: behavioral
+  evidence:
+  - 'observed: ''| \x1b[31mred\x1b[0m | \x1b[32mgrn\x1b[0m '' — the reset code precedes the trailing pad,
+    so a colour-aware "strip" that drops the escapes is detectable'
+  - 'observed: tabulate([[''a'',''x\ny'']], tablefmt=''asciidoc'') emits ''| a | x'' then a continuation
+    line ''y  '' — the trailing whitespace lands on the continuation line'
+  - tabulate/__init__.py:707-716 — asciidoc is absent from multiline_formats (tabulate/__init__.py:725),
+    so newlines stay embedded in one data_line and a whole-string rstrip reaches the continuation line
+  - 'a fix that rstrips each cell before the join yields ''| strings|   numbers'' (inner padding eaten)
+    — it must fail; a fix that sets padding=0 yields ''|strings  |  numbers'' — it must fail'
+  cases:
+  - case_ansi_last_cell_exact
+  - case_multiline_cell_last_column
+  - case_leading_and_inner_padding_preserved
+- id: R6
+  text: The asciidoc structural lines and the arity contract of `_asciidoc_row` are unchanged — the `[cols="..."]`
+    specifier (including its computed widths and alignment sigils), `options="header"`, the `|====` delimiters,
+    and the ValueError for a wrong number of arguments.
+  kind: regression
+  evidence:
+  - tabulate/__init__.py:281 — make_header_line returns '[{}]\n|====' with no trailing whitespace already
+  - tabulate/__init__.py:300-304 — ValueError branch for arg counts other than 2 or 3
+  - tabulate/__init__.py:711 — linebelow=Line('|====', '', '', '')
+  - 'the cols widths are derived from the padded widths, so a padding-level "fix" shifts them from [cols="<11,>11"]
+    to [cols="<9,>9"] — detectable without looking at the rows'
+  cases:
+  - case_delimiters_and_cols_specifier_unchanged
+  - case_asciidoc_row_bad_arity_raises
+- id: R7
+  text: No other table format's output may change; formats with callable row builders that already rstrip
+    (mediawiki, html) or end in a delimiter (textile, psql, github, grid) keep their current bytes.
+  kind: regression
+  evidence:
+  - tabulate/__init__.py:192 and tabulate/__init__.py:224 — mediawiki/html rows already end with .rstrip()
+  - tabulate/__init__.py:199 — textile rows end with a literal '|'
+  - 'observed: full suite is green today (339 passed, 1 skipped); a candidate .rstrip() on data_line broke
+    only test_asciidoc and test_asciidoc_headerless'
+  - psql shares the padded cell list with asciidoc, so pinning psql bytes also pins the padding/alignment
+    pipeline the fix must not touch
+  cases:
+  - case_other_formats_unchanged
+- id: R8
+  text: The change must be exactly "remove end-of-line whitespace from asciidoc row lines" for arbitrary
+    input — not a rewrite tuned to the two existing fixtures. Over a diverse corpus (CJK/wide characters,
+    None values, empty cells, explicit colalign, a SEPARATING_LINE, an empty body, a long last column)
+    each rendered line must equal today's line with its trailing whitespace removed, and each asciidoc
+    row must equal the corresponding psql row with its closing '|' removed and then rstripped.
+  kind: behavioral
+  evidence:
+  - psql rows are built from the same padded cells as asciidoc rows ('|' + '|'.join(cells) [+ '|']); verified
+    row-for-row across the corpus that asciidoc_row == psql_row[:-1].rstrip() holds today
+  - 'observed goldens (current output, rstripped) for the corpus are embedded in the probe; they pin widths,
+    alignment and content byte-for-byte while leaving trailing whitespace free'
+  - this is the check that a fixture-specific or overfit implementation cannot satisfy, since psql is
+    independently pinned byte-for-byte by R7
+  cases:
+  - case_corpus_exact_output
+  - case_rows_match_psql_cells
+  - case_row_content_unchanged_modulo_trailing_ws
+scope:
+- path: tabulate/__init__.py
+  reason: _asciidoc_row builds the unstripped data_line at line 293; this is the only producer of asciidoc
+    row text.
+  new: false
+- path: test/test_output.py
+  reason: test_asciidoc (line 2085) and test_asciidoc_headerless (line 2101) assert the current trailing
+    spaces verbatim and fail under the fix; their expected strings must be updated.
+  new: false
+- path: README.md
+  reason: 'The asciidoc example at README.md:497-509 is executed as a doctest (tox.ini: pytest --doctest-glob="README.md")
+    and fails under the fix; its four expected lines (README.md:505-508) carry trailing spaces.'
+  new: false
+forbidden: []
+constraints:
+- text: Row lines never lose a '|' separator; a row for an n-column table still contains exactly n occurrences
+    of '|'.
+  requirement: R4
+- text: Every asciidoc row line still begins with '| ' and keeps ' | '-style inner padding between non-empty
+    cells.
+  requirement: R5
+- text: tabulate(..., tablefmt='psql'/'textile'/'simple'/'github'/'grid') output is byte-identical to
+    the current checkout.
+  requirement: R7
+- text: For every table, the asciidoc output rstripped line-by-line is byte-identical before and after
+    the change — the fix may only delete end-of-line whitespace.
+  requirement: R8
+tests_policy: named
+tests_editable: []
+regression:
+- cmd: pytest -v --doctest-modules --ignore benchmark --doctest-glob="README.md"
+  reason: tox.ini [testenv] commands, used by every py3xx env and by .github/workflows pytest job
+- cmd: ruff check && ruff format --check
+  reason: tox.ini [testenv:lint], run by .github/workflows lint job
+questions: []
+notes: |
+  The defect is one line: asciidoc is the only format whose callable datarow joins pre-padded cells
+  without the .rstrip() that _build_simple_row and the mediawiki/html row builders apply, so the last
+  cell's padding leaks to end-of-line on header and data rows alike. A sweep over all 36 tablefmts
+  confirms asciidoc is the only format that emits any trailing whitespace at all.
+
+  Fix for the previous round's failure: four cases (empty last cell, lone empty column, ANSI row,
+  multiline continuation) were labelled boundary but asserted post-fix bytes, so they failed on the
+  untouched checkout and the probe could not be established — every implementation, including a
+  no-op, trivially "passed". They are now split honestly:
+    * behavioral (must fail on HEAD, pass after the fix, 16 cases): case_data_rows_no_trailing_whitespace,
+      case_header_row_no_trailing_whitespace, case_headerless_rows_no_trailing_whitespace,
+      case_exact_output_with_headers, case_exact_output_headerless,
+      case_right_aligned_last_column_padding_removed, case_colalign_center_no_trailing_whitespace,
+      case_empty_last_cell_row_stripped, case_single_empty_column_row, case_ansi_last_cell_exact,
+      case_multiline_cell_last_column, case_separating_line_rows, case_empty_body_header_only,
+      case_corpus_no_trailing_whitespace, case_corpus_exact_output, case_rows_match_psql_cells.
+    * boundary/regression (pass on HEAD and must keep passing, 6 cases): case_cell_separators_preserved,
+      case_row_content_unchanged_modulo_trailing_ws, case_leading_and_inner_padding_preserved,
+      case_delimiters_and_cols_specifier_unchanged, case_other_formats_unchanged,
+      case_asciidoc_row_bad_arity_raises. These are written rstrip-normalised (or as counts/prefixes),
+      which is exactly what makes them true on both sides of the fix while still forbidding any change
+      to non-whitespace content.
+
+  Mechanically verified on this checkout: HEAD -> 6/22 (only the six boundary cases pass);
+  data_line.rstrip() -> 22/22; .strip() (an equivalent variant, since rows start with '|') -> 22/22.
+  Wrong implementations and the cases that kill them:
+    rstrip data rows but not the header -> 8 fail; .rstrip(" |") -> 6 fail (separators/empty-cell cases);
+    rstrip each cell before joining -> 13 fail (inner padding); re.sub(r" $") one-space -> 14 fail;
+    rstrip only when the last cell is non-blank -> 5 fail; strip ANSI then rstrip -> 4 fail;
+    padding=0 -> 18 fail (cols specifier + padding).
+  R8 is the generalising anchor: psql is pinned byte-for-byte by R7 and shares the padded-cell pipeline,
+  so "asciidoc row == psql row minus closing '|', rstripped" pins asciidoc for arbitrary data and cannot
+  be satisfied by an implementation tailored to the fixtures.
+
+  Fixing this breaks three fixtures that encode the old bytes — test_asciidoc, test_asciidoc_headerless,
+  and the README asciidoc doctest — all three are in scope.
+probe_file: |
+  import sys
+
+  sys.path.insert(0, ".")
+
+  from tabulate import SEPARATING_LINE, _table_formats, tabulate  # noqa: E402
+
+  TABLE = [["spam", 41.9999], ["eggs", "451.0"]]
+  HEADERS = ["strings", "numbers"]
+
+  # A deliberately diverse corpus: widths, alignments, empty cells, None, wide
+  # (CJK) characters, ANSI colour, a separating line, an empty body. None of
+  # these tables contain embedded newlines (asciidoc is not a multiline format),
+  # so every table row renders as exactly one physical line.
+  CORPUS = [
+      ("basic", [["spam", 41.9999], ["eggs", "451.0"]], {"headers": ["strings", "numbers"]}),
+      ("empty_cells", [["x", ""], ["", "y"]], {"headers": ["a", ""]}),
+      ("single_col", [["a"], [""]], {}),
+      ("wide_chars", [["日本語", "ok"], ["b", "x"]], {"headers": ["名", "v"]}),
+      (
+          "colaligns",
+          [[1, 2, 3], [4, 5, 6]],
+          {"headers": ["a", "bb", "ccc"], "colalign": ("center", "right", "left")},
+      ),
+      ("none_values", [["a", None], [None, "b"]], {"headers": ["h1", "h2"]}),
+      ("ansi", [["\033[31mred\033[0m", "\033[32mgrn\033[0m"], ["x", "y"]], {}),
+      ("sepline", [["a", 1], SEPARATING_LINE, ["b", 2]], {}),
+      ("header_only", [], {"headers": ["a", "b"]}),
+      ("long_last", [["a", "short"], ["b", "a much longer value"]], {"headers": ["k", "v"]}),
+  ]
+
+  # Golden asciidoc output for CORPUS: today's output with trailing whitespace
+  # removed from every line and nothing else touched.
+  GOLDEN = {
+      "basic": [
+          '[cols="<11,>11",options="header"]',
+          "|====",
+          "| strings   |   numbers",
+          "| spam      |   41.9999",
+          "| eggs      |  451",
+          "|====",
+      ],
+      "empty_cells": [
+          '[cols="<5,<4",options="header"]',
+          "|====",
+          "| a   |",
+          "| x   |",
+          "|     | y",
+          "|====",
+      ],
+      "single_col": ['[cols="<3"]', "|====", "| a", "|", "|===="],
+      "wide_chars": [
+          '[cols="<8,<5",options="header"]',
+          "|====",
+          "| 名     | v",
+          "| 日本語 | ok",
+          "| b      | x",
+          "|====",
+      ],
+      "colaligns": [
+          '[cols="^5,>6,<7",options="header"]',
+          "|====",
+          "|  a  |   bb | ccc",
+          "|  1  |    2 | 3",
+          "|  4  |    5 | 6",
+          "|====",
+      ],
+      "none_values": [
+          '[cols="<6,<6",options="header"]',
+          "|====",
+          "| h1   | h2",
+          "| a    |",
+          "|      | b",
+          "|====",
+      ],
+      "ansi": [
+          '[cols="<5,<5"]',
+          "|====",
+          "| \033[31mred\033[0m | \033[32mgrn\033[0m",
+          "| x   | y",
+          "|====",
+      ],
+      "sepline": ['[cols="<3,>3"]', "|====", "| a | 1", "|====", "| b | 2", "|===="],
+      "header_only": ['[cols="<5,<5",options="header"]', "|====", "| a   | b", "|===="],
+      "long_last": [
+          '[cols="<5,<21",options="header"]',
+          "|====",
+          "| k   | v",
+          "| a   | short",
+          "| b   | a much longer value",
+          "|====",
+      ],
+  }
+
+
+  def _lines(*a, **kw):
+      return tabulate(*a, **kw).split("\n")
+
+
+  def _corpus_lines(name):
+      for entry, data, kw in CORPUS:
+          if entry == name:
+              return _lines(data, tablefmt="asciidoc", **kw)
+      raise KeyError(name)
+
+
+  def _assert_no_trailing_ws(lines, label):
+      bad = [(i, ln) for i, ln in enumerate(lines) if ln != ln.rstrip()]
+      assert not bad, f"{label}: trailing whitespace on lines {bad!r}"
+
+
+  def _asciidoc_rows(lines):
+      return [ln for ln in lines if ln.startswith("|") and not ln.startswith("|====")]
+
+
+  def _psql_rows(lines):
+      return [ln for ln in lines if ln.startswith("|") and set(ln) - set("|-+=")]
+
+
+  # ---- behavioral: these fail before the fix and must pass after it ----
+
+
+  def case_data_rows_no_trailing_whitespace():
+      _assert_no_trailing_ws(_lines(TABLE, HEADERS, tablefmt="asciidoc")[3:5], "data rows")
+
+
+  def case_header_row_no_trailing_whitespace():
+      _assert_no_trailing_ws([_lines(TABLE, HEADERS, tablefmt="asciidoc")[2]], "header row")
+
+
+  def case_headerless_rows_no_trailing_whitespace():
+      _assert_no_trailing_ws(_lines(TABLE, tablefmt="asciidoc"), "headerless table")
+
+
+  def case_exact_output_with_headers():
+      got = tabulate(TABLE, HEADERS, tablefmt="asciidoc")
+      assert got == "\n".join(GOLDEN["basic"]), f"with headers: {got!r}"
+
+
+  def case_exact_output_headerless():
+      expected = "\n".join(
+          ['[cols="<6,>10"]', "|====", "| spam |  41.9999", "| eggs | 451", "|===="]
+      )
+      got = tabulate(TABLE, tablefmt="asciidoc")
+      assert got == expected, f"headerless: {got!r}"
+
+
+  def case_right_aligned_last_column_padding_removed():
+      ln = _lines(TABLE, HEADERS, tablefmt="asciidoc")[4]
+      assert ln == "| eggs      |  451", f"decimal-aligned row: {ln!r}"
+
+
+  def case_colalign_center_no_trailing_whitespace():
+      lines = _lines(TABLE, HEADERS, tablefmt="asciidoc", colalign=("center", "center"))
+      _assert_no_trailing_ws(lines, "center-aligned table")
+      assert lines[0].startswith('[cols="^'), f"cols specifier: {lines[0]!r}"
+      assert lines[3] == "|   spam    |  41.9999", f"center row: {lines[3]!r}"
+
+
+  def case_empty_last_cell_row_stripped():
+      lines = _corpus_lines("empty_cells")
+      assert lines[2] == "| a   |", f"header with empty last col: {lines[2]!r}"
+      assert lines[3] == "| x   |", f"row with empty last col: {lines[3]!r}"
+      assert lines[4] == "|     | y", f"row with empty first col: {lines[4]!r}"
+
+
+  def case_single_empty_column_row():
+      lines = _corpus_lines("single_col")
+      assert lines[2] == "| a", f"single-col row: {lines[2]!r}"
+      assert lines[3] == "|", f"single-col empty row: {lines[3]!r}"
+
+
+  def case_ansi_last_cell_exact():
+      lines = _corpus_lines("ansi")
+      assert lines[2] == "| \033[31mred\033[0m | \033[32mgrn\033[0m", f"ansi row: {lines[2]!r}"
+      assert lines[3] == "| x   | y", f"plain row next to ansi row: {lines[3]!r}"
+
+
+  def case_multiline_cell_last_column():
+      lines = _lines([["a", "x\ny"]], tablefmt="asciidoc")
+      assert lines[2] == "| a | x", f"first physical line: {lines[2]!r}"
+      assert lines[3] == "y", f"continuation line: {lines[3]!r}"
+      _assert_no_trailing_ws(lines, "multiline cell table")
+
+
+  def case_separating_line_rows():
+      lines = _corpus_lines("sepline")
+      _assert_no_trailing_ws(lines, "table with separating line")
+      assert lines[2] == "| a | 1", f"row before separator: {lines[2]!r}"
+      assert lines[4] == "| b | 2", f"row after separator: {lines[4]!r}"
+
+
+  def case_empty_body_header_only():
+      lines = _corpus_lines("header_only")
+      assert lines[2] == "| a   | b", f"header-only table: {lines[2]!r}"
+
+
+  def case_corpus_no_trailing_whitespace():
+      for name, data, kw in CORPUS:
+          _assert_no_trailing_ws(_lines(data, tablefmt="asciidoc", **kw), f"corpus {name}")
+
+
+  def case_corpus_exact_output():
+      for name, data, kw in CORPUS:
+          got = _lines(data, tablefmt="asciidoc", **kw)
+          assert got == GOLDEN[name], f"corpus {name}: {got!r}"
+
+
+  def case_rows_match_psql_cells():
+      # asciidoc rows are the psql rows minus the closing '|' delimiter, with
+      # trailing whitespace removed. Anchors "only trailing whitespace changed"
+      # for arbitrary data without restating every byte.
+      for name, data, kw in CORPUS:
+          ad = _asciidoc_rows(_lines(data, tablefmt="asciidoc", **kw))
+          ps = _psql_rows(_lines(data, tablefmt="psql", **kw))
+          assert len(ad) == len(ps), f"corpus {name}: {len(ad)} rows vs psql {len(ps)}"
+          for a, p in zip(ad, ps):
+              assert a == p[:-1].rstrip(), f"corpus {name}: {a!r} vs psql {p!r}"
+
+
+  # ---- boundary / regression: these pass today and must keep passing ----
+
+
+  def case_cell_separators_preserved():
+      for name, data, kw in CORPUS:
+          widths = [len(r) for r in data if r is not SEPARATING_LINE]
+          ncols = max([len(kw.get("headers", []))] + widths)
+          for ln in _asciidoc_rows(_lines(data, tablefmt="asciidoc", **kw)):
+              assert ln.count("|") == ncols, f"corpus {name}: separator count: {ln!r}"
+
+
+  def case_row_content_unchanged_modulo_trailing_ws():
+      # True before and after the fix: nothing but trailing whitespace may differ.
+      for name, data, kw in CORPUS:
+          got = [ln.rstrip() for ln in _lines(data, tablefmt="asciidoc", **kw)]
+          assert got == GOLDEN[name], f"corpus {name} (rstrip-normalized): {got!r}"
+
+
+  def case_leading_and_inner_padding_preserved():
+      for ln in _asciidoc_rows(_lines(TABLE, HEADERS, tablefmt="asciidoc")):
+          assert ln.startswith("| "), f"leading padding lost: {ln!r}"
+          assert " |   " in ln or " |  " in ln, f"inner padding lost: {ln!r}"
+      for ln in _asciidoc_rows(_corpus_lines("long_last")):
+          assert ln.startswith("| ") and " | " in ln, f"padding lost: {ln!r}"
+
+
+  def case_delimiters_and_cols_specifier_unchanged():
+      lines = _lines(TABLE, HEADERS, tablefmt="asciidoc")
+      assert lines[0] == '[cols="<11,>11",options="header"]', repr(lines[0])
+      assert lines[1] == "|====", repr(lines[1])
+      assert lines[-1] == "|====", repr(lines[-1])
+      assert _lines(TABLE, tablefmt="asciidoc")[0] == '[cols="<6,>10"]'
+      for name, data, kw in CORPUS:
+          got = _lines(data, tablefmt="asciidoc", **kw)
+          assert got[0] == GOLDEN[name][0], f"corpus {name} cols: {got[0]!r}"
+          assert got[1] == "|====" and got[-1] == "|====", f"corpus {name}: {got!r}"
+
+
+  def case_other_formats_unchanged():
+      expected = {
+          "psql": "+-----------+-----------+\n| strings   |   numbers |\n|-----------+-----------|\n| spam      |   41.9999 |\n| eggs      |  451      |\n+-----------+-----------+",
+          "textile": "|_.  strings   |_.   numbers |\n|<. spam       |>.   41.9999 |\n|<. eggs       |>.  451      |",
+          "simple": "strings      numbers\n---------  ---------\nspam         41.9999\neggs        451",
+          "github": "| strings   |   numbers |\n|-----------|-----------|\n| spam      |   41.9999 |\n| eggs      |  451      |",
+          "grid": "+-----------+-----------+\n| strings   |   numbers |\n+===========+===========+\n| spam      |   41.9999 |\n+-----------+-----------+\n| eggs      |  451      |\n+-----------+-----------+",
+      }
+      for fmt, want in expected.items():
+          got = tabulate(TABLE, HEADERS, tablefmt=fmt)
+          assert got == want, f"{fmt} changed: {got!r}"
+      empty_psql = tabulate([["x", ""], ["", "y"]], headers=["a", ""], tablefmt="psql")
+      assert (
+          empty_psql
+          == "+-----+----+\n| a   |    |\n|-----+----|\n| x   |    |\n|     | y  |\n+-----+----+"
+      ), f"psql with empty cells changed: {empty_psql!r}"
+
+
+  def case_asciidoc_row_bad_arity_raises():
+      fmt = _table_formats["asciidoc"]
+      for builder in (fmt.datarow, fmt.headerrow):
+          for args in ((1,), (1, 2, 3, 4)):
+              try:
+                  builder(*args)
+              except ValueError:
+                  continue
+              raise AssertionError(f"expected ValueError for asciidoc row builder{args!r}")
+
+
+  CASES = {k: v for k, v in sorted(globals().items()) if k.startswith("case_")}
+
+
+  def _run(name):
+      try:
+          CASES[name]()
+      except AssertionError as e:
+          print(f"FAIL {name}: {e}")
+          return False
+      print(f"ok   {name}")
+      return True
+
+
+  if __name__ == "__main__":
+      names = sys.argv[1:] or list(CASES)
+      unknown = [n for n in names if n not in CASES]
+      if unknown:
+          print(f"unknown case(s): {unknown}")
+          sys.exit(1)
+      sys.exit(0 if all([_run(n) for n in names]) else 1)
+```

@@ -1,0 +1,41 @@
+goal: |
+  Numbers in github-format tables are not right-aligned when the markdown is rendered.
+scope:
+  - tabulate/__init__.py
+  - README.md
+  - test/test_output.py
+forbidden:
+  - test/test_regression.py
+  - test/test_internal.py
+  - test/test_api.py
+  - test/test_cli.py
+constraints:
+  - '`pytest --doctest-modules --ignore benchmark --doctest-glob="README.md"` reports no failures, i.e. the README github example and prose are updated in the same change'
+  - '`_pipe_line_with_colons` keeps handling an empty `colaligns` list by falling back to plain dashes'
+  - '`ruff check` and `ruff format --check` stay clean (line-length 99)'
+tests_policy: immutable
+acceptance:
+  - cmd: python3 -c "import hashlib,runpy,sys;p='.prompire/probes/task.py';d=hashlib.sha256(open(p,'rb').read()).hexdigest();assert d=='99c0ec3b497284a8d18cdee31036052c907a51f13b6fcd5766356985d234f8a1','probe-tampered';sys.argv=[p];runpy.run_path(p,run_name='__main__')"
+    expect: exit 0
+    transition: flip
+  - cmd: pytest -v --doctest-modules --ignore benchmark --doctest-glob="README.md"
+    expect: exit 0
+  - cmd: ruff check
+    expect: exit 0
+  - cmd: ruff format --check
+    expect: exit 0
+autonomy: ask
+base_rev: 7c70bf451bc0
+baseline:
+  - cmd: "python3 -c \"import hashlib,runpy,sys;p='.prompire/probes/task.py';d=hashlib.sha256(open(p,'rb').read()).hexdigest();assert d=='99c0ec3b497284a8d18cdee31036052c907a51f13b6fcd5766356985d234f8a1','probe-tampered';sys.argv=[p];runpy.run_path(p,run_name='__main__')\""
+    status: fail
+    evidence: "exit 1, 21 line(s) stdout, 0.2s"
+  - cmd: "pytest -v --doctest-modules --ignore benchmark --doctest-glob=\"README.md\""
+    status: pass
+    evidence: "exit 0, 368 line(s) stdout, 4.4s"
+  - cmd: ruff check
+    status: pass
+    evidence: "exit 0, 1 line(s) stdout, 0.0s"
+  - cmd: "ruff format --check"
+    status: pass
+    evidence: "exit 0, 1 line(s) stdout, 0.0s"
