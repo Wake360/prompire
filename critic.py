@@ -19,8 +19,8 @@ CRITIC_SCHEMA = {
 }
 
 CRITIC_QUESTION = (
-    "What is the most likely way a competent coding agent could satisfy this task "
-    "superficially while still missing the user's intent?"
+    "What is the most likely way a competent coding agent could follow this task "
+    "and still produce a superficially acceptable but materially wrong result?"
 )
 
 
@@ -28,9 +28,15 @@ class Critic:
     def __init__(self, model):
         self.model = model
 
-    def review(self, request, evidence, task_ir):
+    def review(self, request, evidence, task_ir, selection=None):
+        semantic = selection.to_dict() if selection is not None else {}
+        adopted = selection.adopted_policies() if selection is not None else []
         prompt = f"""{CRITIC_QUESTION}
-Return at most three material omissions or failure modes. Attack the interpretation only.
+Return at most three material findings. Attack repository-derived and stdlib-derived enrichment.
+Look for an important omission, incorrect assumption, irrelevant stdlib policy, generic advice,
+over-constraint, or prompt bloat. A useful finding may require removing information.
+Do not demand fixes for unrelated repository problems or expand the user's objective.
+Keep each finding under 180 characters and make it a complete sentence.
 Do not critique writing, propose an architecture, brainstorm, plan, or generate code.
 
 ORIGINAL REQUEST
@@ -41,6 +47,12 @@ SELECTED REPOSITORY EVIDENCE
 
 TASK IR V1
 {json.dumps(task_ir.to_dict(), ensure_ascii=False)}
+
+SEMANTIC SELECTION V1
+{json.dumps(semantic, ensure_ascii=False)}
+
+ADOPTED STDLIB POLICIES
+{json.dumps(adopted, ensure_ascii=False)}
 """
         response = self.model.complete(prompt, CRITIC_SCHEMA)
         data = response.data

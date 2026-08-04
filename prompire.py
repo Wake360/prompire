@@ -1272,8 +1272,11 @@ def compile_context(args, extra):
         return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
     try:
         from repo_context import context_repo_root
+        from task_compiler import append_experiment_record
         root = context_repo_root(pathlib.Path("."))
         result = compile_context_request(args.sentence, root)
+        if args.record:
+            append_experiment_record(args.record, result.record, root)
     except Exception as exc:
         return report_refusal(f"task compilation failed: {exc}", args.json)
     if args.json:
@@ -1283,6 +1286,7 @@ def compile_context(args, extra):
             "task_ir": result.task_ir.to_dict(),
             "prompt": result.prompt,
             "metrics": result.metrics,
+            "record": result.record,
         }, ensure_ascii=False))
     else:
         print(result.prompt, end="")
@@ -1290,6 +1294,8 @@ def compile_context(args, extra):
 
 
 def launch_codex(prompt, root, runner=subprocess.run):
+    from task_compiler import DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL
+
     argv = [
         "codex", "exec", "--strict-config", "--ignore-user-config",
         "--ignore-rules", "--sandbox", "workspace-write", "--ephemeral",
@@ -1303,6 +1309,10 @@ def launch_codex(prompt, root, runner=subprocess.run):
             "tool_call_mcp_elicitation", "tool_suggest"):
         argv.extend(["--disable", feature])
     argv.extend(["-c", 'web_search="disabled"', "-"])
+    argv[-1:-1] = [
+        "-m", DEFAULT_CODEX_MODEL,
+        "-c", f'model_reasoning_effort="{DEFAULT_CODEX_EFFORT}"',
+    ]
     try:
         result = runner(
             argv,
@@ -1327,6 +1337,9 @@ def run_context(args, extra):
         root = context_repo_root(pathlib.Path("."))
         print("Compiling task...")
         result = compile_context_request(args.sentence, root)
+        if args.record:
+            from task_compiler import append_experiment_record
+            append_experiment_record(args.record, result.record, root)
     except Exception as exc:
         return report_refusal(f"task compilation failed: {exc}")
     retrievals = result.metrics["retrieval_calls"]
@@ -1391,12 +1404,18 @@ def build_parser():
         "compile", help="experimental: compile one request into repository-aware task context")
     compiled.add_argument("sentence")
     compiled.add_argument("--json", action="store_true")
+    compiled.add_argument(
+        "--record", default=None,
+        help="append compiler metadata to local JSONL outside the target repository")
     compiled.set_defaults(handler=compile_context)
 
     run = commands.add_parser(
         "run", help="experimental: compile one request and launch one coding agent")
     run.add_argument("sentence")
     run.add_argument("--agent", default="codex")
+    run.add_argument(
+        "--record", default=None,
+        help="append compiler metadata to local JSONL outside the target repository")
     run.set_defaults(handler=run_context)
 
     demoed = commands.add_parser(

@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from repo_context import RepoContext, RepoContextError
 from task_compiler import (
+    append_experiment_record,
     CodexModel,
     CompilationResult,
     ModelExecutionError,
@@ -22,7 +23,8 @@ from task_compiler import (
 )
 from task_ir import TaskIR, TaskIRError
 from task_renderer import render_task
-from task_resolver import RETRIEVAL_SCHEMA
+from task_resolver import RETRIEVAL_SCHEMA, resolve_facets, resolve_specificity
+from prompt_stdlib import SemanticSelection, policy_catalog
 
 import prompire
 from critic import Critic
@@ -279,6 +281,96 @@ def guidance(**changes):
     return data
 
 
+def resolution(*, facets=None, specificity="LOW", policies=None, **changes):
+    return {
+        "task_ir": guidance(**changes),
+        "semantic_facets": facets or ["fix", "data", "existing_system"],
+        "specificity": specificity,
+        "adopted_policy_ids": policies or [],
+    }
+
+
+def revised_resolution(*, adopted_issues=None, **changes):
+    return {
+        **resolution(**changes),
+        "adopted_issue_numbers": adopted_issues or [],
+    }
+
+
+def test_semantic_facets_compose_and_filter_candidate_policies():
+    selected = SemanticSelection.from_reply(
+        ["migrate", "backend", "data", "compatibility", "reliability",
+         "existing_system"],
+        "LOW",
+        ["migration.persisted-data", "compatibility.observable-behavior"],
+    )
+    assert selected.facets == (
+        "migrate", "backend", "data", "compatibility", "reliability",
+        "existing_system",
+    )
+    assert "migration.persisted-data" in selected.candidate_policy_ids
+    assert "reliability.failure-policy" in selected.candidate_policy_ids
+    assert "compatibility.observable-behavior" in selected.adopted_policy_ids
+    assert "reliability.failure-policy" in selected.rejected_policy_ids
+
+    unknown = SemanticSelection.from_reply(
+        ["general", "existing_system"], "LOW", [])
+    assert unknown.facets == ("general", "existing_system")
+    assert unknown.specificity == "LOW"
+
+    try:
+        SemanticSelection.from_reply(
+            ["ui", "existing_system"], "MEDIUM", ["api.validation-error-shape"])
+    except TaskIRError as exc:
+        assert "selected facets" in str(exc)
+    else:
+        raise AssertionError("a policy outside the selected facets was adopted")
+
+    catalog = policy_catalog()
+    assert catalog["ui"]["kind"] == "surface"
+    assert catalog["performance"]["kind"] == "quality"
+    assert catalog["greenfield"]["kind"] == "project_state"
+    assert any(item["id"] == "reliability.bounded-retries"
+               for item in catalog["reliability"]["policies"])
+    assert any(item["id"] == "data.structured-roundtrip"
+               for item in catalog["data"]["policies"])
+    assert all("best practice" not in item["guidance"].lower()
+               for facet in catalog.values() for item in facet["policies"])
+
+
+def test_cross_domain_tasks_have_compositional_candidate_knowledge():
+    cases = (
+        ("add retries", ["add", "service", "reliability", "existing_system"],
+         "service.failure-contract"),
+        ("migrate users to UUIDs",
+         ["migrate", "database", "data_integrity", "compatibility",
+          "existing_system"], "migration.persisted-data"),
+        ("add JSON output", ["add", "cli", "compatibility", "existing_system"],
+         "cli.machine-readable-output"),
+        ("speed up startup",
+         ["optimize", "library", "performance", "compatibility",
+          "existing_system"], "optimize.measure-hot-path"),
+        ("clean up this module", ["refactor", "general", "existing_system"],
+         "refactor.observable-behavior"),
+        ("add deployment health checks",
+         ["add", "infrastructure", "observability", "reliability",
+          "existing_system"], "observability.existing-signals"),
+        ("fix CSV export", ["fix", "data", "compatibility", "existing_system"],
+         "bugfix.broader-invariant"),
+        ("make dashboard better on mobile",
+         ["modify", "ui", "ux", "accessibility", "existing_system"],
+         "ui.existing-primitives"),
+        ("build a small CLI for converting images",
+         ["create", "cli", "greenfield"], "greenfield.minimum-structure"),
+        ("rename Foo to Bar in README.md",
+         ["modify", "documentation", "existing_system"],
+         "documentation.reference-consistency"),
+    )
+    for request, facets, expected in cases:
+        selection = SemanticSelection.from_reply(facets, "LOW", [])
+        assert expected in selection.candidate_policy_ids, request
+
+
 def test_compiler_retrieves_then_uses_one_material_critic_pass():
     with tempfile.TemporaryDirectory(prefix="prompire-compiler-") as tmp:
         root = pathlib.Path(tmp)
@@ -293,21 +385,25 @@ def test_compiler_retrieves_then_uses_one_material_critic_pass():
                 {"op": "read_file", "path": "src/export/serializer.py", "start": 1, "end": 40},
                 {"op": "read_file", "path": "tests/export/test_csv.py", "start": 1, "end": 60},
             ]},
-            guidance(checks=[dangerous_check]),
-            {
-                "task_ir": guidance(
-                    likely_relevant=[
-                        "src/export/csv.py",
-                        "src/export/serializer.py",
-                        "tests/export/test_csv.py",
-                    ],
-                    watch_for=[
-                        "Direct export and wrapper export may use separate paths.",
-                    ],
-                    checks=[dangerous_check],
-                ),
-                "adopted_issue_numbers": [1],
-            },
+            resolution(
+                facets=["fix", "data", "compatibility", "existing_system"],
+                policies=["bugfix.broader-invariant"],
+                checks=[dangerous_check],
+            ),
+            revised_resolution(
+                facets=["fix", "data", "compatibility", "existing_system"],
+                policies=[],
+                adopted_issues=[1],
+                likely_relevant=[
+                    "src/export/csv.py",
+                    "src/export/serializer.py",
+                    "tests/export/test_csv.py",
+                ],
+                watch_for=[
+                    "Direct export and wrapper export may use separate paths.",
+                ],
+                checks=[dangerous_check],
+            ),
         ])
         critic = ScriptedModel([{
             "issues": [
@@ -324,11 +420,14 @@ def test_compiler_retrieves_then_uses_one_material_critic_pass():
 
         assert len(resolver.prompts) == 3
         assert len(critic.prompts) == 1
-        assert "objective" not in resolver.prompts[1][1]["properties"]
+        assert "objective" not in resolver.prompts[1][1]["properties"]["task_ir"]["properties"]
+        assert "semantic_facets" in resolver.prompts[1][1]["properties"]
+        assert "specificity" in resolver.prompts[1][1]["properties"]
         assert "src/export/csv.py" in resolver.prompts[0][0]
         assert "join(rows)" not in resolver.prompts[0][0]
         assert "join(rows)" in resolver.prompts[1][0]
-        assert "What is the most likely way a competent coding agent could satisfy this task superficially while still missing the user's intent?" in critic.prompts[0][0]
+        assert "What is the most likely way a competent coding agent could follow this task and still produce a superficially acceptable but materially wrong result?" in critic.prompts[0][0]
+        assert "Inspect callers and sibling paths" in critic.prompts[0][0]
         assert "src/export/serializer.py" in result.task_ir.likely_relevant
         assert result.task_ir.objective == request
         assert request in result.prompt
@@ -336,6 +435,7 @@ def test_compiler_retrieves_then_uses_one_material_critic_pass():
         assert "INFERRED REPOSITORY GUIDANCE (ADVISORY)" in result.prompt
         assert result.metrics["critic_found"] == 3
         assert result.metrics["critic_adopted"] == 1
+        assert result.metrics["critic_rejected"] == 2
         assert result.metrics["model_calls"] == 4
         assert result.metrics["model_input_tokens"] == 400
         assert result.metrics["model_output_tokens"] == 80
@@ -347,7 +447,183 @@ def test_compiler_retrieves_then_uses_one_material_critic_pass():
         assert result.metrics["prompt_words"] <= 250
         assert result.metrics["prompt_tokens"] > 0
         assert result.metrics["prompt_tokens_estimated"] is True
+        assert result.record["raw_request"] == request
+        assert result.record["selected_semantic_facets"] == [
+            "fix", "data", "compatibility", "existing_system"]
+        assert result.record["specificity"] == "LOW"
+        assert result.record["stdlib_version"] == "1"
+        assert result.record["candidate_stdlib_policies"]
+        assert result.record["adopted_stdlib_policies"] == []
+        assert "bugfix.broader-invariant" in result.record["rejected_stdlib_policies"]
+        assert len(result.record["critic_findings"]["issues_rejected"]) == 2
+        assert result.record["final_task_ir"]["objective"] == request
+        assert result.record["final_rendered_prompt"] == result.prompt
+        assert result.record["prompt_hash"]
+        assert result.record["repository_evidence_identifiers"]
+        assert "reasoning" not in json.dumps(result.record).lower()
         assert not sentinel.exists(), "compiler executed a check suggested by model output"
+
+
+def test_specificity_scales_enrichment_and_high_is_near_identity():
+    assert resolve_facets("add retries", ["add", "test", "reliability"]) == [
+        "add", "reliability"]
+    assert resolve_facets("add retry tests", ["add", "test", "reliability"]) == [
+        "add", "test", "reliability"]
+    assert resolve_specificity(
+        "build a small CLI for converting images", "HIGH") == "LOW"
+    assert resolve_specificity(
+        "rename Foo to Bar in README.md", "MEDIUM") == "HIGH"
+    assert resolve_specificity(
+        "rename Foo to Bar in README.md and update every API reference",
+        "HIGH") == "MEDIUM"
+    assert resolve_specificity(
+        "Please build a small CLI for converting images", "HIGH") == "LOW"
+    assert resolve_specificity(
+        "Can you build a small CLI for converting images?", "HIGH") == "LOW"
+    with tempfile.TemporaryDirectory(prefix="prompire-specificity-") as tmp:
+        root = pathlib.Path(tmp)
+        build_repo(root)
+        request = "rename Foo to Bar in README.md"
+        bloated = {
+            "likely_relevant": ["pyproject.toml", "src/export/csv.py"],
+            "context": ["The repository has several unrelated modules."],
+            "preserve": ["Preserve all public behavior."],
+            "watch_for": ["Avoid broad architectural changes."],
+            "checks": ["Inspect the renamed documentation reference.",
+                       "Run the full test suite."],
+        }
+        resolver = ScriptedModel([
+            {"queries": []},
+            resolution(
+                facets=["modify", "documentation", "existing_system"],
+                specificity="HIGH",
+                policies=["documentation.reference-consistency"],
+                **bloated,
+            ),
+            revised_resolution(
+                facets=["modify", "documentation", "existing_system"],
+                specificity="HIGH",
+                policies=["documentation.reference-consistency"],
+                **bloated,
+            ),
+        ])
+        critic = ScriptedModel([{"issues": []}])
+
+        result = TaskContextCompiler(root, resolver, critic).compile(request)
+
+        assert "The repository has several unrelated modules." in critic.prompts[0][0]
+        assert result.task_ir.objective == request
+        assert len(result.task_ir.likely_relevant) <= 1
+        guidance_items = (
+            len(result.task_ir.context) + len(result.task_ir.preserve)
+            + len(result.task_ir.watch_for) + len(result.task_ir.checks))
+        assert guidance_items <= 1
+        assert result.task_ir.checks == (
+            "Inspect the renamed documentation reference.",)
+        assert result.metrics["specificity"] == "HIGH"
+        assert result.metrics["prompt_words"] <= len(request.split()) + 30
+        assert result.prompt.startswith(f"TASK\n{request}\n")
+        low_prompt = render_task(TaskIR.from_dict({"objective": request, **bloated}), "LOW")
+        assert len(result.prompt.split()) < len(low_prompt.split())
+
+
+def test_adopted_stdlib_policy_survives_into_the_rendered_prompt():
+    with tempfile.TemporaryDirectory(prefix="prompire-policy-render-") as tmp:
+        root = pathlib.Path(tmp)
+        build_repo(root)
+        empty = {
+            "likely_relevant": [], "context": [], "preserve": [],
+            "watch_for": [], "checks": [],
+        }
+        resolver = ScriptedModel([
+            {"queries": []},
+            resolution(
+                facets=["add", "cli", "existing_system"],
+                policies=["cli.machine-readable-output"],
+                **empty,
+            ),
+            revised_resolution(
+                facets=["add", "cli", "existing_system"],
+                policies=["cli.machine-readable-output"],
+                **empty,
+            ),
+        ])
+        critic = ScriptedModel([{"issues": []}])
+
+        result = TaskContextCompiler(root, resolver, critic).compile("add JSON output")
+
+        assert "machine-readable output free of human diagnostics" in result.prompt
+        assert result.record["adopted_stdlib_policies"] == [
+            "cli.machine-readable-output"]
+
+
+def test_critic_is_subtractive_and_receives_stdlib_provenance():
+    ir = TaskIR.from_dict(task_ir())
+    model = ScriptedModel([{"issues": [
+        "Remove the API auth policy because this export path has no auth boundary.",
+    ]}])
+    selection = SemanticSelection.from_reply(
+        ["fix", "api", "existing_system"],
+        "MEDIUM",
+        ["api.validation-error-shape"],
+    )
+    issues, _ = Critic(model).review("fix CSV export", (), ir, selection)
+    assert len(issues) == 1
+    prompt = model.prompts[0][0]
+    assert "irrelevant stdlib policy" in prompt
+    assert "generic advice" in prompt
+    assert "over-constraint" in prompt
+    assert "prompt bloat" in prompt
+    assert "api.validation-error-shape" in prompt
+
+
+def test_experiment_records_persist_outside_target_repo_without_reasoning():
+    with tempfile.TemporaryDirectory(prefix="prompire-record-target-") as target_tmp, \
+            tempfile.TemporaryDirectory(prefix="prompire-record-out-") as out_tmp:
+        target = pathlib.Path(target_tmp)
+        build_repo(target)
+        before = git(target, "status", "--short").stdout
+        record = {
+            "raw_request": "add JSON output",
+            "critic_findings": {"issues_found": [], "issues_adopted": [],
+                                "issues_rejected": []},
+        }
+        out = pathlib.Path(out_tmp) / "compilations.jsonl"
+        append_experiment_record(out, record, target)
+        stored = json.loads(out.read_text(encoding="utf-8"))
+        assert stored == record
+        assert git(target, "status", "--short").stdout == before
+
+        try:
+            append_experiment_record(target / "record.jsonl", record, target)
+        except ValueError as exc:
+            assert "target repository" in str(exc)
+        else:
+            raise AssertionError("experiment metadata was written into the target repository")
+
+        linked = pathlib.Path(out_tmp) / "linked"
+        git(target, "worktree", "add", "-q", "-b", "metadata-test", str(linked))
+        try:
+            common_text = git(linked, "rev-parse", "--git-common-dir").stdout.strip()
+            common = pathlib.Path(common_text)
+            if not common.is_absolute():
+                common = (linked / common).resolve()
+            try:
+                append_experiment_record(common / "record.jsonl", record, linked)
+            except ValueError as exc:
+                assert "Git administration" in str(exc)
+            else:
+                raise AssertionError("experiment metadata was written into Git administration")
+
+            try:
+                append_experiment_record(
+                    out, {**record, "analysis": "private trace"}, linked)
+            except ValueError as exc:
+                assert "unknown experiment record fields" in str(exc)
+            else:
+                raise AssertionError("experiment metadata accepted an unknown trace field")
+        finally:
+            git(target, "worktree", "remove", "--force", str(linked))
 
 
 def test_renderer_keeps_paths_advisory_and_implementation_open():
@@ -371,6 +647,10 @@ def test_renderer_keeps_paths_advisory_and_implementation_open():
         checks=[" ".join(["check"] * 16)] * 3,
     ))
     assert len(render_task(maximum).split()) <= 250
+    medium = render_task(maximum, "MEDIUM")
+    low = render_task(maximum, "LOW")
+    assert len(medium.split()) <= 180
+    assert len(medium.split()) < len(low.split())
 
     dense = TaskIR.from_dict(task_ir(
         context=[" ".join(["x"] * 90)] * 2,
@@ -503,6 +783,8 @@ def test_downstream_codex_reports_operating_system_errors():
     assert "--ignore-user-config" in argv
     assert "--ignore-rules" in argv
     assert "--strict-config" in argv
+    assert ["-m", "gpt-5.6-sol"] == argv[argv.index("-m"):argv.index("-m") + 2]
+    assert 'model_reasoning_effort="medium"' in argv
     for feature in ("apps", "browser_use", "computer_use", "hooks", "plugins"):
         assert ["--disable", feature] == argv[
             argv.index(feature) - 1:argv.index(feature) + 1]
@@ -517,12 +799,13 @@ def test_compile_and_run_cli_share_the_compiled_prompt():
         build_repo(redirected)
         ir = TaskIR.from_dict(task_ir())
         prompt = render_task(ir)
+        experiment = {"raw_request": "fix CSV export with quoted newlines"}
         result = CompilationResult(ir, prompt, (), {
             "retrieval_calls": 4,
             "critic_found": 2,
             "critic_adopted": 2,
             "prompt_words": len(prompt.split()),
-        })
+        }, experiment)
         compiled = []
         launched = []
         original_compile = prompire.compile_context_request
@@ -539,6 +822,7 @@ def test_compile_and_run_cli_share_the_compiled_prompt():
         prompire.compile_context_request = fake_compile
         prompire.launch_codex = fake_launch
         previous = pathlib.Path.cwd()
+        record_path = root.parent / f"{root.name}-compilations.jsonl"
         old_git_dir = os.environ.get("GIT_DIR")
         old_git_tree = os.environ.get("GIT_WORK_TREE")
         try:
@@ -548,11 +832,14 @@ def test_compile_and_run_cli_share_the_compiled_prompt():
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 code = prompire.main([
-                    "compile", "fix CSV export with quoted newlines", "--json"])
+                    "compile", "fix CSV export with quoted newlines", "--json",
+                    "--record", str(record_path)])
             payload = json.loads(output.getvalue())
             assert code == 0
             assert payload["task_ir"] == ir.to_dict()
             assert payload["prompt"] == prompt
+            assert payload["record"] == experiment
+            assert json.loads(record_path.read_text(encoding="utf-8")) == experiment
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -575,6 +862,7 @@ def test_compile_and_run_cli_share_the_compiled_prompt():
                 os.environ["GIT_WORK_TREE"] = old_git_tree
             prompire.compile_context_request = original_compile
             prompire.launch_codex = original_launch
+            record_path.unlink(missing_ok=True)
         assert [item[0] for item in compiled] == [
             "fix CSV export with quoted newlines",
             "fix CSV export with quoted newlines",
@@ -586,7 +874,13 @@ def main():
     tests = (
         test_task_ir_is_small_and_typed,
         test_repo_context_exposes_only_bounded_read_operations,
+        test_semantic_facets_compose_and_filter_candidate_policies,
+        test_cross_domain_tasks_have_compositional_candidate_knowledge,
         test_compiler_retrieves_then_uses_one_material_critic_pass,
+        test_specificity_scales_enrichment_and_high_is_near_identity,
+        test_adopted_stdlib_policy_survives_into_the_rendered_prompt,
+        test_critic_is_subtractive_and_receives_stdlib_provenance,
+        test_experiment_records_persist_outside_target_repo_without_reasoning,
         test_renderer_keeps_paths_advisory_and_implementation_open,
         test_codex_model_disables_tools_and_reads_only_structured_output,
         test_downstream_codex_reports_operating_system_errors,

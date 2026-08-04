@@ -126,6 +126,18 @@ its first interpretation, and the renderer emits a prompt capped at 250 words. P
 paths are advisory. The coding agent chooses the implementation and may inspect or change
 other files when needed.
 
+The resolver also selects compositional operation, software-surface, quality, and
+project-state facets. Those facets make compact standard-library policies eligible; only
+policies the resolver adopts are inserted into Task IR. LOW-specificity requests may
+receive substantial enrichment, MEDIUM requests receive targeted enrichment, and HIGH
+requests keep at most one path and one material guidance item under a 30-word enrichment
+budget. Facets, specificity, and policy IDs remain compiler metadata and are not rendered.
+
+`compile --json` includes a normalized local experiment record. `--record <jsonl>` appends
+that record outside the target repository and its Git administration paths. It contains
+requests, hashes, evidence identifiers, policy and Critic decisions, Task IR, prompt,
+model usage, and empty downstream-outcome fields. It contains no private reasoning trace.
+
 The compilation phase does not modify the repository or execute model-authored commands,
 patches, checks, or generated code. `run` launches the coding agent only after compilation;
 that downstream agent receives normal workspace-write access. This experiment does not yet

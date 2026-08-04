@@ -22,6 +22,7 @@ SUITES = (
     "cli.py",
     "runner.py",
     "task_context.py",
+    "universal_benchmark.py",
     "package.py",
     "ci.py",
 )

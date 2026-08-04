@@ -32,6 +32,7 @@ prompire = "prompire:entrypoint"
 [tool.setuptools]
 py-modules = [
   "prompire",
+  "prompt_stdlib",
   "baseline",
   "brief_common",
   "check_scope",
