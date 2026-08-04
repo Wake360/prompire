@@ -1,0 +1,22 @@
+diff --git a/sortedcontainers/sortedlist.py b/sortedcontainers/sortedlist.py
+index 3b3cd07..e4b78c3 100644
+--- a/sortedcontainers/sortedlist.py
++++ b/sortedcontainers/sortedlist.py
+@@ -338,7 +338,7 @@ class SortedList(MutableSequence):
+         values = sorted(iterable)
+ 
+         if _maxes:
+-            if len(values) * 4 >= self._len:
++            if len(values) * 4 >= self._len and len(values) > self._load:
+                 values.extend(chain.from_iterable(_lists))
+                 values.sort()
+                 self._clear()
+@@ -1877,7 +1877,7 @@ class SortedKeyList(SortedList):
+         values = sorted(iterable, key=self._key)
+ 
+         if _maxes:
+-            if len(values) * 4 >= self._len:
++            if len(values) * 4 >= self._len and len(values) > self._load:
+                 values.extend(chain.from_iterable(_lists))
+                 values.sort(key=self._key)
+                 self._clear()

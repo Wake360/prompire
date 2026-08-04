@@ -1,0 +1,36 @@
+diff --git a/tabulate/__init__.py b/tabulate/__init__.py
+index 0d2d59d..31c92cf 100644
+--- a/tabulate/__init__.py
++++ b/tabulate/__init__.py
+@@ -153,6 +153,20 @@ def _pipe_line_with_colons(colwidths, colaligns):
+     return f"|{segments}|"
+ 
+ 
++def _github_line_with_colons(colwidths, colaligns):
++    """Return a horizontal line for the `github` format, marking numeric
++    columns as right-aligned."""
++    if not colaligns:
++        colaligns = [""] * len(colwidths)
++    segments = []
++    for a, w in zip(colaligns, colwidths):
++        if a in ("right", "decimal"):
++            segments.append(("-" * (w - 1)) + ":")
++        else:
++            segments.append("-" * w)
++    return "|" + "|".join(segments) + "|"
++
++
+ def _grid_segment_with_colons(colwidth, align):
+     """Return a segment of a horizontal line with optional colons which indicate
+     column's alignment in a grid table."""
+@@ -523,8 +537,8 @@ _table_formats = {
+         with_header_hide=None,
+     ),
+     "github": TableFormat(
+-        lineabove=Line("|", "-", "|", "|"),
+-        linebelowheader=Line("|", "-", "|", "|"),
++        lineabove=_github_line_with_colons,
++        linebelowheader=_github_line_with_colons,
+         linebetweenrows=None,
+         linebelow=None,
+         headerrow=DataRow("|", "|", "|"),

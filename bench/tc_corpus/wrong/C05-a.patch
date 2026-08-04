@@ -1,0 +1,20 @@
+diff --git a/tomlkit/items.py b/tomlkit/items.py
+index e76e61e..8141e53 100644
+--- a/tomlkit/items.py
++++ b/tomlkit/items.py
+@@ -1635,8 +1635,13 @@ class Array(Item, _CustomList):  # type: ignore[type-arg]
+                 # Copy the comma from the last item if 1) it contains a value and
+                 # 2) the array is multiline
+                 comma = last_item.comma
+-            if last_item.comma is None and not isinstance(last_item.value, Null):
+-                # Add comma to the last item to separate it from the following items.
++            if (
++                last_item.comma is None
++                and not isinstance(last_item.value, Null)
++                and not (indent is not None and "," in indent.s)
++            ):
++                # Add comma to the last item to separate it from the following items,
++                # unless the new item's indent already carries the separator.
+                 last_item.comma = Whitespace(",")
+         if indent is None and (idx > 0 or "\n" in default_indent):
+             # apply default indent if it isn't the first item or the array is multiline.

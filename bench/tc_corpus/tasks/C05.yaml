@@ -1,0 +1,60 @@
+id: C05
+repo: https://github.com/python-poetry/tomlkit.git
+rev: ce58a1dbf8692c631bd64826e60f09c45fa7fb25
+request: Appending a value to a multiline array whose commas start each line produces unparseable TOML.
+fix_commit: f8ce14b39c3bfe57f20f75fbc29cb9e5586811e7
+
+hidden_facts:
+  - fact: Appending to a comma-first multiline array renders output that re-parses and round-trips, with the new value present.
+    omitted: false
+  - fact: Inserting at a middle index into the same array is affected identically and must also round-trip.
+    omitted: true
+  - fact: Inserting at index 0 copies a comma-less indent, so the new item must keep its own trailing comma.
+    omitted: true
+  - fact: Ordinary comma-last arrays (multiline and single-line) keep their existing separator behaviour on append and insert.
+    omitted: true
+
+gold: gold/C05.patch
+
+wrong:
+  - patch: wrong/C05-a.patch
+    class: fixes-only-the-reported-entry-point (suppresses the previous item's comma so append() works, but insert() into the middle still emits both separators)
+  - patch: wrong/C05-b.patch
+    class: detects-the-style-array-wide-instead-of-at-the-insertion-point (scans every group for a comma-carrying indent, so a front insert copying a comma-less indent loses its separator)
+
+hidden_check: hidden/C05-check.py
+
+repro: |
+  import sys
+  sys.path.insert(0, ".")
+  from tomlkit import parse
+
+  src = """a = [
+        1 # one
+       ,2
+      ]
+  """
+  doc = parse(src)
+  doc["a"].append(99)
+  rendered = doc.as_string()
+  print(repr(rendered))
+  try:
+      parse(rendered)
+      print("append round-trips")
+  except Exception as exc:  # UnexpectedCharError at PIN: "2," is followed by ",99"
+      print("does not re-parse:", exc)
+
+notes: >
+  Upstream PR #499 ("Fix doubled comma when inserting into a comma-first array").
+  In comma-first formatting the separator of an item lives in the *following*
+  item's indent whitespace. Array.insert() copied that indent onto the new item
+  while also appending a trailing comma to the previous item, and (for middle
+  inserts) to the new item as well, yielding "2,\n     ,99" which no longer
+  parses. The upstream fix suppresses both extra commas when the copied indent
+  already carries one, which is why the append path and the insert path are
+  two separate halves of the same fix. Gold patch is the source-only half of
+  the upstream commit (tomlkit/items.py); the upstream tests are excluded.
+  PIN is the parent commit ce58a1d. All four arms verified with the repo's own
+  suite (tests/test_toml_tests.py excluded: it needs the toml-test git
+  submodule, which is not initialised in a plain clone); 297 tests pass on every
+  arm, so neither wrong patch is detectable from the existing tests alone.

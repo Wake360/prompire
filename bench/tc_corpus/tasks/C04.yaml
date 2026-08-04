@@ -1,0 +1,48 @@
+id: C04
+repo: https://github.com/mahmoud/boltons.git
+rev: 609cabe932a1ea1423b24568644945abb1b8bb84
+fix_commit: d0a284fc7ef1aebceb54798600d73be4eeb76ed8
+request: IndexedSet indexing with a too-negative index wraps around instead of raising IndexError.
+hidden_facts:
+  - fact: A scalar index past either end of an IndexedSet raises IndexError instead of returning an element, and in-range indices are unaffected.
+    omitted: false
+  - fact: pop() rejects an out-of-range index the same way and removes nothing; at the pinned revision pop(-len-k) silently deletes an interior element.
+    omitted: true
+  - fact: Out-of-range indices report IndexedSet's own "IndexedSet index out of range" message from pop() as well as from subscripting.
+    omitted: true
+  - fact: The bounds are the apparent, post-removal ones, not the length of the backing item list, so a set with dead slots rejects the same indices a plain list of its contents would.
+    omitted: true
+  - fact: Every in-range index, positive and negative, still returns the same element as the equivalent list, including across several dead intervals.
+    omitted: true
+gold: gold/C04.patch
+wrong:
+  - patch: wrong/C04-a.patch
+    class: miss-the-sibling-path (bounds check added in __getitem__ only, so pop() keeps wrapping and silently removing the wrong element)
+  - patch: wrong/C04-b.patch
+    class: wrong-normalization-basis (checks bounds in _get_real_index against len(self.item_list), correct only until something has been removed)
+hidden_check: hidden/C04-check.py
+repro: |
+  import sys; sys.path.insert(0, '.')
+  from boltons.setutils import IndexedSet
+  try:
+      IndexedSet(range(5))[-10]
+  except IndexError:
+      pass
+  else:
+      raise AssertionError('expected IndexError')
+notes: |
+  Upstream fix d0a284f "fix IndexedSet out-of-range negative indexing wrapping
+  around (x[-n-k], pop(-n-k))" (Mahmoud Hashemi, 2026-07-16). At PIN,
+  IndexedSet.__getitem__ normalizes a negative index by adding len(self) and then
+  calls _get_real_index, which adds len(self) AGAIN if the value is still
+  negative, so an out-of-range negative index silently lands back inside the set.
+  pop() shares _get_real_index and has no normalization of its own, so pop(-15)
+  on a 9-element set removes an interior element and returns it. The fix moves a
+  single bounds check into _get_real_index, which covers both call sites.
+  PIN is the parent of the fix, 609cabe.
+  gold = `git diff PIN F -- boltons/` (tests excluded).
+  Verified at PIN: IndexedSet(range(5))[-10] returns 0; on IndexedSet(range(10))
+  with 2 popped, x[-10] returns 9 and pop(-15) returns 4 and drops it from the set.
+  Both wrong patches keep the pre-existing tests/test_setutils.py green (7 passed)
+  at PIN, as does PIN itself -- the regression tests were added in F and are
+  excluded from the corpus.

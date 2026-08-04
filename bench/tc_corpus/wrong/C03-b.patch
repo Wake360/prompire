@@ -1,0 +1,28 @@
+diff --git a/boltons/dictutils.py b/boltons/dictutils.py
+index f913f29..ecfd5af 100644
+--- a/boltons/dictutils.py
++++ b/boltons/dictutils.py
+@@ -358,7 +358,8 @@ class OrderedMultiDict(dict):
+         elif hasattr(other, 'keys'):
+             for selfk in self:
+                 try:
+-                    other[selfk] == self[selfk]
++                    if other[selfk] is not self[selfk]:
++                        return False
+                 except KeyError:
+                     return False
+             return True
+diff --git a/boltons/urlutils.py b/boltons/urlutils.py
+index 45d3e73..55351e8 100644
+--- a/boltons/urlutils.py
++++ b/boltons/urlutils.py
+@@ -1264,7 +1264,8 @@ class OrderedMultiDict(dict):
+         elif hasattr(other, 'keys'):
+             for selfk in self:
+                 try:
+-                    other[selfk] == self[selfk]
++                    if other[selfk] is not self[selfk]:
++                        return False
+                 except KeyError:
+                     return False
+             return True

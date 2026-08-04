@@ -1,0 +1,24 @@
+diff --git a/boltons/setutils.py b/boltons/setutils.py
+index 187d230..f3bc1ad 100644
+--- a/boltons/setutils.py
++++ b/boltons/setutils.py
+@@ -157,7 +157,9 @@ class IndexedSet(MutableSet):
+ 
+     def _get_real_index(self, index):
+         if index < 0:
+-            index += len(self)
++            index += len(self.item_list)
++            if index < 0:
++                raise IndexError('IndexedSet index out of range')
+         if not self.dead_indices:
+             return index
+         real_index = index
+@@ -416,8 +418,6 @@ class IndexedSet(MutableSet):
+         else:
+             iter_slice = self.iter_slice(start, stop, step)
+             return self.from_iterable(iter_slice)
+-        if index < 0:
+-            index += len(self)
+         real_index = self._get_real_index(index)
+         try:
+             ret = self.item_list[real_index]

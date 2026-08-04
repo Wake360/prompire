@@ -1,0 +1,13 @@
+diff --git a/tabulate/__init__.py b/tabulate/__init__.py
+index b0810a9..9072c45 100644
+--- a/tabulate/__init__.py
++++ b/tabulate/__init__.py
+@@ -711,7 +711,7 @@ _table_formats = {
+         linebelow=Line("|====", "", "", ""),
+         headerrow=partial(_asciidoc_row, True),
+         datarow=partial(_asciidoc_row, False),
+-        padding=1,
++        padding=0,
+         with_header_hide=["lineabove"],
+     ),
+ }

@@ -1,0 +1,16 @@
+diff --git a/tomlkit/parser.py b/tomlkit/parser.py
+index b72ee73..5039dd3 100644
+--- a/tomlkit/parser.py
++++ b/tomlkit/parser.py
+@@ -1163,6 +1163,11 @@ class Parser:
+             else:
+                 extracted = self.extract()
+ 
++                if not is_long and extracted.strip("0123456789abcdefABCDEF"):
++                    # \uXXXX takes exactly four hex digits; int() would also
++                    # accept underscores, surrounding whitespace or a sign.
++                    return None, extracted
++
+                 try:
+                     codepoint = int(extracted, 16)
+                 except ValueError:

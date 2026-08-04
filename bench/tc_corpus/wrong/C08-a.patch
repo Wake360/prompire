@@ -1,0 +1,14 @@
+diff --git a/sortedcontainers/sortedlist.py b/sortedcontainers/sortedlist.py
+index 3b3cd07..f088d74 100644
+--- a/sortedcontainers/sortedlist.py
++++ b/sortedcontainers/sortedlist.py
+@@ -1878,7 +1878,8 @@ class SortedKeyList(SortedList):
+ 
+         if _maxes:
+             if len(values) * 4 >= self._len:
+-                values.extend(chain.from_iterable(_lists))
++                _lists.append(values)
++                values = reduce(iadd, _lists, [])
+                 values.sort(key=self._key)
+                 self._clear()
+             else:

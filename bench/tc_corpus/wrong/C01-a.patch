@@ -1,0 +1,13 @@
+diff --git a/tabulate/__init__.py b/tabulate/__init__.py
+index 0d2d59d..2e0ed25 100644
+--- a/tabulate/__init__.py
++++ b/tabulate/__init__.py
+@@ -524,7 +524,7 @@ _table_formats = {
+     ),
+     "github": TableFormat(
+         lineabove=Line("|", "-", "|", "|"),
+-        linebelowheader=Line("|", "-", "|", "|"),
++        linebelowheader=_pipe_line_with_colons,
+         linebetweenrows=None,
+         linebelow=None,
+         headerrow=DataRow("|", "|", "|"),

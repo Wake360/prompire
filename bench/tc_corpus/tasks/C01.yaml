@@ -1,0 +1,62 @@
+id: C01
+repo: https://github.com/astanin/python-tabulate.git
+rev: 7c70bf451bc00ba64c3d8587909fa08d16a958e0
+fix_commit: 8014ec66820c89307005b26f878119baa5bf6932
+request: >-
+  Numbers in github-format tables are not right-aligned when the markdown is rendered.
+hidden_facts:
+  - fact: >-
+      The github separator row marks a numeric column as right-aligned with a
+      trailing colon (------:).
+    omitted: false
+  - fact: >-
+      The github separator row marks a text column as left-aligned with a
+      leading colon (:-------); it is not left plain.
+    omitted: true
+  - fact: >-
+      Explicit colalign values are honoured in the github separator row:
+      center renders :---:, left renders :---, right renders ---:.
+    omitted: true
+  - fact: >-
+      When the table has no headers, the top border line (lineabove) carries the
+      same alignment colons, not a plain dashed rule.
+    omitted: true
+  - fact: >-
+      github output is byte-identical to pipe output for the same input; github
+      is GitHub-flavored Markdown, which is the pipe format including its
+      alignment colons.
+    omitted: true
+gold: gold/C01.patch
+wrong:
+  - patch: wrong/C01-a.patch
+    class: >-
+      miss the sibling path - only linebelowheader gets the colon-aware rule, so
+      a headerless table still emits a plain top border
+  - patch: wrong/C01-b.patch
+    class: >-
+      special-case the reported symptom - a hand-rolled separator emits the
+      right-align colon only, leaving left and center columns unmarked
+hidden_check: hidden/C01-check.py
+repro: |
+  import sys
+  sys.path.insert(0, ".")
+  from tabulate import tabulate
+
+  out = tabulate([["spam", 42], ["eggs", 451]], ["item", "qty"], tablefmt="github")
+  print(out.split("\n")[1])
+  # at PIN:      |--------|-------|
+  # after gold:  |:-------|------:|
+notes: >-
+  Upstream commit 8014ec6 "Fix alignments in `github` tables" (closes GH #53,
+  follow-up on #261) makes _table_formats["github"] an alias of
+  _table_formats["pipe"]. At PIN the github TableFormat used plain
+  Line("|","-","|","|") rules for both lineabove and linebelowheader, so the
+  rendered markdown carries no alignment information at all. The gold patch is
+  the commit's tabulate/__init__.py hunk only; the commit's README.md and
+  test/test_output.py changes are excluded per the source-only rule. Consequence:
+  at PIN the repo test suite is green (340 passed, 1 skipped, ~4s), and at
+  PIN+gold three upstream tests fail because they still encode the pre-fix
+  output - test_output.py::test_github, ::test_github_multiline and
+  ::test_simple_headerless_with_sep_line_with_padding_in_tablefmt. Those tests
+  were rewritten in the fix commit itself. Score this task with
+  hidden/C01-check.py, not with the repo suite. Requires wcwidth; no network.

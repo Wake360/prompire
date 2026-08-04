@@ -1,0 +1,62 @@
+id: C08
+repo: https://github.com/grantjenks/python-sortedcontainers
+rev: 13d30bc654eb9e6be092282ca502967fcb7f0113
+fix_commit: 7dc426c95a0c329d5514e6198d92080f1ffc1e5e
+
+request: "SortedKeyList.update puts new tied-key values before the existing ones; add puts them after."
+
+hidden_facts:
+  - fact: "SortedKeyList.update places new values whose key ties with existing values after those existing values, matching add()."
+    omitted: false
+  - fact: "SortedList.update does the same for values that merely compare equal to existing ones (e.g. 1 against 1.0)."
+    omitted: true
+  - fact: "In-place addition (sl += iterable) shares the internal update path and gets the same ordering."
+    omitted: true
+  - fact: "The ordering holds for large bulk updates, which take the rebuild path, not just for a handful of values."
+    omitted: true
+  - fact: "After any update path the container is still correctly sorted, the right length, and passes _check()."
+    omitted: true
+
+gold: gold/C08.patch
+
+wrong:
+  - patch: wrong/C08-a.patch
+    class: misses the sibling class (fixes SortedKeyList.update, leaves SortedList.update untouched)
+  - patch: wrong/C08-b.patch
+    class: special-cases small inputs (routes small batches to the correct incremental path, leaves the rebuild path buggy)
+
+hidden_check: hidden/C08-check.py
+
+repro: |
+  import sys
+  sys.path.insert(0, ".")
+  from sortedcontainers import SortedKeyList
+
+  skl = SortedKeyList([10, 20], key=lambda val: val % 10)
+  skl.update([30, 40])
+  # At PIN this prints [30, 40, 10, 20]; feeding the same values through add()
+  # one at a time gives [10, 20, 30, 40].
+  print(list(skl))
+
+notes: |
+  Upstream fix "Fix update() ordering to be more consistent with add() ordering"
+  (PR #159). When the incoming batch is large relative to the container,
+  update() rebuilds by concatenating and re-sorting. It put the incoming values
+  first, so the stable sort placed every new tied value ahead of the existing
+  ones, the opposite of add(), which bisects right. The fix concatenates the
+  existing sublists first and appends the new values.
+
+  The request states the symptom for SortedKeyList only. It omits the identical
+  bug in SortedList (visible whenever two values compare equal but are
+  distinguishable), the += entry point that shares the code path, and the fact
+  that the bug lives in the size-dependent rebuild branch.
+
+  Both wrong patches pass the full upstream pytest suite (294 passed) at PIN, so
+  the repo's own tests do not discriminate them -- only the hidden check does.
+  The upstream commit also added tests under tests/; those are excluded from the
+  gold patch, which touches sortedcontainers/sortedlist.py only.
+
+  wrong/C08-b.patch gates the rebuild branch on `len(values) > self._load`
+  (default load factor 1000), so batches under ~1000 values fall through to the
+  correct per-element path and every small reproduction looks fixed. The hidden
+  check's bulk cases (1200 and 1500 incoming values) still hit the buggy branch.

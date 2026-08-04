@@ -1,0 +1,40 @@
+id: C03
+repo: https://github.com/mahmoud/boltons.git
+rev: 766b5547392fe8d54c1e000098499dc556bb5cb7
+fix_commit: c463d1633a075c398d6ffad7d8653064a615b696
+request: An OrderedMultiDict compares equal to a plain dict that holds different values.
+hidden_facts:
+  - fact: Comparing an OrderedMultiDict with a plain mapping whose value under a shared key differs returns False.
+    omitted: false
+  - fact: A plain mapping with all equal values still compares equal, including values that are equal without being the same object.
+    omitted: true
+  - fact: A key absent from the other mapping (or a length mismatch) still compares unequal.
+    omitted: true
+  - fact: "`!=` agrees with `==` in both directions after the change."
+    omitted: true
+  - fact: The OrderedMultiDict bundled inside boltons/urlutils.py for single-file vendoring carries the same defect and must be corrected identically, which also fixes QueryParamDict comparisons in the standalone build.
+    omitted: true
+gold: gold/C03.patch
+wrong:
+  - patch: wrong/C03-a.patch
+    class: miss-the-sibling-copy (fixes dictutils only, leaves the OrderedMultiDict bundled in urlutils.py untouched)
+  - patch: wrong/C03-b.patch
+    class: identity-instead-of-equality (uses `is not` so equal-but-distinct value objects compare unequal)
+hidden_check: hidden/C03-check.py
+repro: |
+  import sys; sys.path.insert(0, '.')
+  from boltons.dictutils import OrderedMultiDict as OMD
+  assert (OMD([('a', 1)]) == {'a': 2}) is False
+notes: |
+  Upstream fix c463d16 "Fix OrderedMultiDict equality to compare values against
+  plain mappings" (Minh Le, 2026-06-17). At PIN, OrderedMultiDict.__eq__ evaluates
+  `other[selfk] == self[selfk]` in the plain-mapping branch and discards the
+  result, so only key presence is checked and any dict with matching keys of the
+  same length compares equal. The upstream fix touches two files: boltons/dictutils.py
+  and the vendored OrderedMultiDict copy in boltons/urlutils.py (reached when
+  urlutils.py is used as a standalone single file, which is what its guarded
+  relative imports exist for). PIN is the parent of the fix, 766b554.
+  gold = `git diff PIN F -- boltons/` (tests excluded).
+  Both wrong patches keep the entire upstream tests/test_dictutils.py and
+  tests/test_urlutils.py suites green (151 passed) at PIN, as does PIN itself --
+  the regression tests were added in F and are excluded from the corpus.

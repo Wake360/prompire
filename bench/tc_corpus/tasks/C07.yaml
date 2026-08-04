@@ -1,0 +1,55 @@
+id: C07
+repo: https://github.com/r1chardj0n3s/parse
+rev: 71b443f4de2e9c82e117f935e347a1ab7fefdee1
+fix_commit: b0c9f0e2f588ae2b3ce2e8b8fecc016187f045cf
+
+request: "A float field with zero decimal places never matches an integer-looking number."
+
+hidden_facts:
+  - fact: "A zero-precision float field ({:.0f}) matches a number written without a decimal point and yields a float."
+    omitted: false
+  - fact: "The Decimal-producing sibling type code ({:.0F}) gets the same treatment and yields a Decimal."
+    omitted: true
+  - fact: "Negative numbers match too: {:.0f} against '-20' gives -20.0."
+    omitted: true
+  - fact: "Every other precision, and no precision at all ({:.2f}, {:.1f}, {:f}, {:F}), still requires a decimal point."
+    omitted: true
+  - fact: "The relaxed pattern adds no unregistered capturing group, so fields following a zero-precision field still extract their own values."
+    omitted: true
+
+gold: gold/C07.patch
+
+wrong:
+  - patch: wrong/C07-a.patch
+    class: misses the sibling type code (fixes 'f', leaves 'F' untouched)
+  - patch: wrong/C07-b.patch
+    class: introduces an unregistered capturing group, shifting every later field's group index
+
+hidden_check: hidden/C07-check.py
+
+repro: |
+  import sys
+  sys.path.insert(0, ".")
+  import parse
+
+  # At PIN this prints None; the number 20 formatted with "{:.0f}" is "20".
+  print(parse.parse("{:.0f}", "20"))
+
+notes: |
+  Upstream fix "fix: parse zero-precision floats formatted without a decimal
+  point" (PR #227). format(20.0, ".0f") == "20", so the pattern parse builds for
+  a "f"/"F" field (\d*\.\d+) can never match what str.format produced. The fix
+  swaps in \d+ when precision == "0", for both the float ("f") and Decimal ("F")
+  branches.
+
+  The request states only what a user sees for the float case. It omits the
+  Decimal sibling, the negative-number case, that other precisions must stay
+  strict, and the group-index bookkeeping that parse's regex assembly requires.
+
+  Both wrong patches pass the full upstream pytest suite (97 passed, 1 skipped)
+  at PIN, so the repo's own tests do not discriminate them -- only the hidden
+  check does.
+
+  Out of scope, pre-existing at PIN and unchanged by the fix: the "F" type code
+  is absent from parse's is_numeric list, so it never matches a leading sign.
+  The hidden check therefore asserts negative numbers for "f" only.

@@ -1,0 +1,54 @@
+id: C06
+repo: https://github.com/python-poetry/tomlkit.git
+rev: a1c5bd25b5686e4481b461f8eb336d3108376fb3
+request: Parsing accepts a unicode escape whose hex digits contain an underscore instead of rejecting it.
+fix_commit: 8571bcd13f0e68e454df9be8d33975b2f5acd44e
+
+hidden_facts:
+  - fact: An underscore among the digits of a "\uXXXX" escape raises InvalidUnicodeValueError instead of decoding.
+    omitted: false
+  - fact: Whitespace among the digits (e.g. "\u 123") is rejected too; int(s, 16) silently strips it.
+    omitted: true
+  - fact: A sign character (e.g. "\u+123") is rejected too; int(s, 16) silently honours it.
+    omitted: true
+  - fact: The eight-digit "\UXXXXXXXX" form applies the same rule, including with leading zeros.
+    omitted: true
+  - fact: Valid escapes still decode in either digit case, and non-hex letters and surrogates still raise the parser error rather than a bare ValueError.
+    omitted: true
+
+gold: gold/C06.patch
+
+wrong:
+  - patch: wrong/C06-a.patch
+    class: special-cases-the-reported-character (rejects only an underscore, leaving the whitespace and sign forms int() also tolerates)
+  - patch: wrong/C06-b.patch
+    class: guards-only-the-short-escape-form (applies the hex-digit test only when is_long is false, leaving the eight-digit form unguarded)
+
+hidden_check: hidden/C06-check.py
+
+repro: |
+  import sys
+  sys.path.insert(0, ".")
+  import tomlkit
+  from tomlkit.exceptions import InvalidUnicodeValueError
+
+  content = r'a = "\u12_3"'  # raw: a real backslash reaches the TOML parser
+  try:
+      print("accepted:", repr(tomlkit.parse(content)["a"]))  # decodes at PIN
+  except InvalidUnicodeValueError:
+      print("rejected as expected")
+notes: >
+  Upstream PR #501 ("reject non-hex digits in \u and \U escapes"). The parser
+  validated the extracted digits by calling int(extracted, 16) inside a
+  try/except ValueError, but int() also accepts PEP 515 underscores, surrounding
+  whitespace and a leading sign. So "\u12_3", "\u 123", "\u+123" and the
+  eight-digit equivalents all decoded to a value instead of being rejected, and
+  because the parser consumes a fixed 4 or 8 characters the leftover digit leaked
+  into the string ("\U0000_0041" produced two characters, not "A"). The fix
+  replaces the try/except with an explicit hex-digit character-class test,
+  mirroring the check _peek_hex already used for "\xHH". Gold patch is the
+  source-only half of the upstream commit (tomlkit/parser.py); the upstream tests
+  are excluded. PIN is the parent commit a1c5bd2. All four arms verified with the
+  repo's own suite (tests/test_toml_tests.py excluded: it needs the toml-test git
+  submodule, which is not initialised in a plain clone); 302 tests pass on every
+  arm, so neither wrong patch is detectable from the existing tests alone.

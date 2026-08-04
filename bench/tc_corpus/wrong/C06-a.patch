@@ -1,0 +1,14 @@
+diff --git a/tomlkit/parser.py b/tomlkit/parser.py
+index b72ee73..8749550 100644
+--- a/tomlkit/parser.py
++++ b/tomlkit/parser.py
+@@ -1163,6 +1163,9 @@ class Parser:
+             else:
+                 extracted = self.extract()
+ 
++                if "_" in extracted:
++                    return None, extracted
++
+                 try:
+                     codepoint = int(extracted, 16)
+                 except ValueError:

@@ -1,0 +1,13 @@
+diff --git a/tabulate/__init__.py b/tabulate/__init__.py
+index b0810a9..080c25f 100644
+--- a/tabulate/__init__.py
++++ b/tabulate/__init__.py
+@@ -295,7 +295,7 @@ def _asciidoc_row(is_header, *args):
+         if is_header:
+             return make_header_line(True, colwidths, colaligns) + "\n" + data_line
+         else:
+-            return data_line
++            return data_line.rstrip()
+ 
+     else:
+         raise ValueError(

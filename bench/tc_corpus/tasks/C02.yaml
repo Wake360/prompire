@@ -1,0 +1,63 @@
+id: C02
+repo: https://github.com/astanin/python-tabulate.git
+rev: 2939dc1d17e13a71c256042d9ad46bfd9d8a07b8
+fix_commit: 3aa568c66987dbc97c079c6a2e4bd0ad362a949f
+request: >-
+  asciidoc output has trailing spaces at the end of every data row.
+hidden_facts:
+  - fact: >-
+      Data lines of an asciidoc table no longer end with whitespace.
+    omitted: false
+  - fact: >-
+      The header line is trimmed the same way; it is not left with its trailing
+      padding space.
+    omitted: true
+  - fact: >-
+      Only end-of-line whitespace goes away. Cell padding inside the line is
+      untouched - cells keep their one-space padding and stay aligned to the
+      full column width.
+    omitted: true
+  - fact: >-
+      It holds when the last column is left-aligned text, where the trailing run
+      is the alignment padding, not just when it is a right-aligned number with a
+      single padding space.
+    omitted: true
+  - fact: >-
+      It holds for headerless tables, whose rows are emitted through the datarow
+      path with the cols specifier written as lineabove.
+    omitted: true
+gold: gold/C02.patch
+wrong:
+  - patch: wrong/C02-a.patch
+    class: >-
+      miss the sibling path - data rows are trimmed but the header row, built in
+      the is_header branch of _asciidoc_row, is not
+  - patch: wrong/C02-b.patch
+    class: >-
+      wrong lever - sets the asciidoc format padding to 0 instead of trimming the
+      line, which cleans the sampled numeric-last-column table while mangling cell
+      padding and still leaving trailing runs when the last column is left-aligned
+hidden_check: hidden/C02-check.py
+repro: |
+  import sys
+  sys.path.insert(0, ".")
+  from tabulate import tabulate
+
+  out = tabulate([["spam", 42], ["eggs", 451]], ["item", "qty"], tablefmt="asciidoc")
+  print([line for line in out.split("\n") if line != line.rstrip()])
+  # at PIN:     ['| item   |   qty ', '| spam   |    42 ', '| eggs   |   451 ']
+  # after gold: []
+notes: >-
+  Upstream commit 3aa568c "fix #408 - remove trailing whitespace from asciidoc
+  output" adds .rstrip() at the four return points of _asciidoc_row. Two of the
+  four are load-bearing: the is_header branch (header row) and the else branch
+  (data rows); the other two guard the cols-specifier paths, which never trail.
+  The gold patch is the commit's tabulate/__init__.py hunk only; its README.md,
+  test/test_output.py and test/test_regression.py changes are excluded per the
+  source-only rule. Consequence: at PIN the repo test suite is green (339 passed,
+  1 skipped, ~3s), and at PIN+gold two upstream tests fail because they still
+  encode the trailing whitespace - test_output.py::test_asciidoc and
+  ::test_asciidoc_headerless. Both were rewritten in the fix commit itself. Score
+  this task with hidden/C02-check.py, not with the repo suite. Note that this PIN
+  predates C01's PIN, so the two tasks are independent checkouts of the same
+  repository. Requires wcwidth; no network.
