@@ -1,0 +1,77 @@
+experiment: universal-prompt-compiler-raw-vs-prompire
+preregistered_at: 2026-08-04
+starting_revision: 367d0b608f4fdd0a8481549a29d5003baf940621
+final_prompt_compiler_revision: 27b3aa3e9cad13660bdace6ab20e57657cfe57fd
+
+population:
+  tasks: 12
+  repeats_per_task_per_arm: 2
+  arms: [RAW, PROMPIRE]
+  specificity: {LOW: 6, MEDIUM: 4, HIGH: 2}
+  minimum_projects: 4
+  minimum_surfaces: 6
+  maximum_tasks_per_surface: 2
+  minimum_existing_repository_tasks: 8
+
+execution:
+  seed: 20260804
+  compiler_workers: 3
+  executor_workers: 4
+  compiler_model: gpt-5.6-sol
+  compiler_reasoning_effort: medium
+  executor_model: gpt-5.6-sol
+  executor_reasoning_effort: medium
+  codex_cli_version: 0.146.0
+  executor_timeout_seconds: 600
+  compiler_timeout_seconds: 240
+  sandbox: workspace-write
+  interaction: one noninteractive fresh ephemeral session per cell
+  compiler_frequency: one fresh four-call compilation per PROMPIRE repeat
+  executor_infrastructure_retry: one retry only when no Codex turn started
+
+primary_success:
+  prompire_total_minimum_delta: 2.0
+  low_specificity_minimum_delta: 1.5
+  high_specificity_maximum_regression: 0.5
+  minimum_positive_delta_surfaces: 3
+  maximum_median_compiler_latency_seconds: 120
+  compiler_questions: 0
+
+ceiling_rule:
+  activates_at_raw_total: 10.5
+  maximum_success_regression: 0.5
+  low_specificity_requires_no_success_regression: true
+  low_specificity_secondary_improvement_percent: 20
+  overall_secondary_improvement_percent: 20
+  eligible_secondary_metrics:
+    - median_executor_tokens
+    - mean_unnecessary_file_changes
+  zero_baseline_metrics_are_ineligible: true
+
+grading:
+  executor_exit_zero_required: true
+  deterministic_tasks: [U01, U02, U03, U04, U05, U06, U07, U08, U09, U11, U12]
+  subjective_tasks: [U10]
+  subjective_reviewer_model: gpt-5.6-sol
+  subjective_reviewer_reasoning_effort: medium
+  subjective_reviewer_attempts: 2
+  subjective_pass_score: 7
+  subjective_critical_regression_fails: true
+  subjective_rubric:
+    mobile_overflow: 2
+    header_navigation_actions: 2
+    cards_chart_responsiveness: 2
+    table_information_access: 2
+    desktop_preservation: 2
+  blind_arm_identity: true
+  randomized_result_order: true
+
+methodological_blocker:
+  unresolved_infrastructure_cells_greater_than: 2
+  subjective_grader_unavailable: true
+
+artifacts:
+  local_only: true
+  persist_private_reasoning: false
+  isolate_hidden_grades: true
+  preserve_prompts_metrics_diffs_and_outcomes: true
