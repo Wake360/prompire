@@ -35,12 +35,18 @@ py-modules = [
   "baseline",
   "brief_common",
   "check_scope",
+  "critic",
   "hook_policy",
   "hook_scope_guard",
   "hook_copilot_guard",
   "hook_antigravity_guard",
   "lint_brief",
   "render_brief",
+  "repo_context",
+  "task_compiler",
+  "task_ir",
+  "task_renderer",
+  "task_resolver",
   "verify_acceptance",
 ]
 

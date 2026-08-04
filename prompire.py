@@ -1257,6 +1257,88 @@ def status(args, extra):
     return 0
 
 
+def compile_context_request(sentence, root):
+    from task_compiler import CodexModel, TaskContextCompiler
+
+    return TaskContextCompiler(
+        root,
+        resolver_model=CodexModel(),
+        critic_model=CodexModel(),
+    ).compile(sentence)
+
+
+def compile_context(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra), args.json)
+    try:
+        from repo_context import context_repo_root
+        root = context_repo_root(pathlib.Path("."))
+        result = compile_context_request(args.sentence, root)
+    except Exception as exc:
+        return report_refusal(f"task compilation failed: {exc}", args.json)
+    if args.json:
+        print(json.dumps({
+            "status": "compiled",
+            "request": args.sentence,
+            "task_ir": result.task_ir.to_dict(),
+            "prompt": result.prompt,
+            "metrics": result.metrics,
+        }, ensure_ascii=False))
+    else:
+        print(result.prompt, end="")
+    return 0
+
+
+def launch_codex(prompt, root, runner=subprocess.run):
+    argv = [
+        "codex", "exec", "--strict-config", "--ignore-user-config",
+        "--ignore-rules", "--sandbox", "workspace-write", "--ephemeral",
+        "--color", "never",
+    ]
+    for feature in (
+            "apps", "auth_elicitation", "browser_use", "browser_use_external",
+            "browser_use_full_cdp_access", "computer_use", "hooks",
+            "image_generation", "in_app_browser", "multi_agent", "plugins",
+            "remote_plugin", "skill_mcp_dependency_install", "skill_search",
+            "tool_call_mcp_elicitation", "tool_suggest"):
+        argv.extend(["--disable", feature])
+    argv.extend(["-c", 'web_search="disabled"', "-"])
+    try:
+        result = runner(
+            argv,
+            input=prompt,
+            cwd=str(root),
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"refused: could not launch Codex: {exc}", file=sys.stderr)
+        return 2
+    return result.returncode
+
+
+def run_context(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra))
+    if args.agent != "codex":
+        return report_refusal(f"unknown coding agent `{args.agent}`; known: codex")
+    try:
+        from repo_context import context_repo_root
+        root = context_repo_root(pathlib.Path("."))
+        print("Compiling task...")
+        result = compile_context_request(args.sentence, root)
+    except Exception as exc:
+        return report_refusal(f"task compilation failed: {exc}")
+    retrievals = result.metrics["retrieval_calls"]
+    found = result.metrics["critic_found"]
+    adopted = result.metrics["critic_adopted"]
+    print(f"[ok] found relevant context ({retrievals} retrieval calls)")
+    print(f"[ok] critic found {found} likely omissions; resolver adopted {adopted}")
+    print(f"[ok] prompt ready ({result.metrics['prompt_words']} words)")
+    print("Launching Codex...")
+    return launch_codex(result.prompt, root)
+
+
 def cli_version():
     """A checkout's VERSION file wins over installed metadata: `python3
     prompire.py --version` in a checkout must report the checkout, not
@@ -1304,6 +1386,18 @@ def build_parser():
                               "as an agent reply")
     drafted.add_argument("--json", action="store_true")
     drafted.set_defaults(handler=draft)
+
+    compiled = commands.add_parser(
+        "compile", help="experimental: compile one request into repository-aware task context")
+    compiled.add_argument("sentence")
+    compiled.add_argument("--json", action="store_true")
+    compiled.set_defaults(handler=compile_context)
+
+    run = commands.add_parser(
+        "run", help="experimental: compile one request and launch one coding agent")
+    run.add_argument("sentence")
+    run.add_argument("--agent", default="codex")
+    run.set_defaults(handler=run_context)
 
     demoed = commands.add_parser(
         "demo", help="walk a clean run and a caught violation in a throwaway repo")

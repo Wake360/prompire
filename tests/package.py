@@ -47,6 +47,8 @@ for cmd in (
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prepare" in result.stdout
     assert "verify" in result.stdout
+    assert "compile" in result.stdout
+    assert "run" in result.stdout
 
 with tempfile.TemporaryDirectory() as tmp:
     env = pathlib.Path(tmp) / "venv"
@@ -80,6 +82,19 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == data["project"]["version"], result.stdout
+
+    for module in (
+            "repo_context", "task_ir", "task_resolver", "critic",
+            "task_renderer", "task_compiler"):
+        result = subprocess.run(
+            [str(python), "-c", f"import {module}"],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        assert result.returncode == 0, (
+            f"installed package cannot import {module}: {result.stderr}")
 
     for shipped in ("share/prompire/SKILL.md",
                     "share/prompire/references/threat-model.md",

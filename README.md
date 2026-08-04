@@ -29,6 +29,8 @@ prompire close .prompire/task.yaml
 
 Python 3 and PyYAML. Nothing else — no service, no key, no network. The underlying
 scripts remain documented under [Diagnostic commands](#diagnostic-commands).
+The experimental `compile` and `run` commands additionally require an authenticated
+Codex CLI and network access.
 
 A sandbox bounds where an agent can technically reach. Prompire bounds what one task
 allowed it to change, and defines how done is recognized. The two compose; neither
@@ -108,6 +110,26 @@ uv tool install prompire
 
 Prompire supports Python 3.11+ on macOS, Linux, and Windows. The package:
 https://pypi.org/project/prompire/.
+
+## Experimental task context compiler
+
+Prompire is testing repository-aware task compilation for coding agents.
+
+```bash
+prompire compile "fix CSV export with quoted newlines"
+prompire run "fix CSV export with quoted newlines" --agent codex
+```
+
+Compilation lists and searches tracked files, reads bounded file ranges, and may inspect
+local history or diffs. The resolver selects those reads, one fresh critic pass attacks
+its first interpretation, and the renderer emits a prompt capped at 250 words. Predicted
+paths are advisory. The coding agent chooses the implementation and may inspect or change
+other files when needed.
+
+The compilation phase does not modify the repository or execute model-authored commands,
+patches, checks, or generated code. `run` launches the coding agent only after compilation;
+that downstream agent receives normal workspace-write access. This experiment does not yet
+claim that compiled context improves coding-agent outcomes or reduces human specification.
 
 ## Primary workflow
 

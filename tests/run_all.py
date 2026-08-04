@@ -21,6 +21,7 @@ SUITES = (
     "bench.py",
     "cli.py",
     "runner.py",
+    "task_context.py",
     "package.py",
     "ci.py",
 )
