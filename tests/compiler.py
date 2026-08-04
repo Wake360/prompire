@@ -201,10 +201,15 @@ def _(repo, c):
 
 @case("a breaker that answers garbage does not sink the run")
 def _(repo, c):
-    state, payload, _counts, _m = compile_with(repo, "breaker-garbage",
-                                               rounds=1)
+    state, payload, counts, milestones = compile_with(repo, "breaker-garbage",
+                                                      rounds=1)
     c.equal(state, "READY", "state")
     c.equal(payload["rounds"][0]["verdict"], "error", "the round is recorded")
+    c.equal(counts.get("breaker"), 2, "the breaker got its retry")
+    c.ok(any("adversarial check incomplete" in m for m in milestones),
+         "the run does not claim it was stress-tested")
+    c.equal(payload["ledger"]["breaker_exercised"], False,
+            "the ledger says the breaker never ran usable")
 
 
 @case("a resolver that answers garbage twice is INSUFFICIENT")
@@ -264,6 +269,14 @@ def _(repo, c):
     _spec, err = compile_prompts.parse_resolver_reply(reply)
     c.ok("no behavioral probe cases" in str(err),
          "behavioral requirements need at least one case")
+    backticked = ("verdict: no_counterexample\nattempted:\n"
+                  "  - `text.strip()` on the input, whitespace only\n"
+                  "  - @decorator-based dispatch swap\n")
+    result, err = compile_prompts.parse_breaker_reply(backticked)
+    c.ok(err is None and result["verdict"] == "no_counterexample",
+         f"reserved-indicator list items are recovered: {err}")
+    c.ok(any("text.strip()" in a for a in result["attempted"]),
+         "the backticked item survived intact")
 
 
 def main():

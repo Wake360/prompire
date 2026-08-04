@@ -164,12 +164,13 @@ def main():
     scenario = os.environ.get("FAKE_SCENARIO", "ready-after-strengthen")
     if "Breaker stage" in prompt:
         round_no = bump("breaker")
+        if scenario == "breaker-garbage":
+            sys.stdout.write("this is not yaml: [")
+            return 0
         declines = ("unbreakable-round-one", "one-question", "three-questions",
                     "relax-tests-policy", "stall-constraint")
         if scenario in declines or round_no > 1:
             sys.stdout.write(NO_BREAK_REPLY)
-        elif scenario == "breaker-garbage":
-            sys.stdout.write("this is not yaml: [")
         elif scenario == "breaker-uncaught":
             # claims a counterexample the oracle in fact catches: the write-set
             # leaves the bug in place, so the flip case still fails

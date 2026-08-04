@@ -8,6 +8,7 @@ the specification would accept. Every reply is parsed as data — sizes clamped,
 shapes validated, unknown keys refused — because a role's output is untrusted
 until the orchestrator has measured or falsified it.
 """
+import json
 import re
 
 import yaml
@@ -186,27 +187,48 @@ def _strip_fences(text):
     return "\n".join(lines)
 
 
+RESERVED_ITEM = re.compile(r"^(\s*-\s+)([`@].*)$")
+
+
+def _quote_reserved_items(text):
+    """A list item starting with a backtick or `@` is a YAML reserved
+    indicator, and a model writing markdown-flavored prose produces exactly
+    that. Quote only such lines; everything else stays byte-identical."""
+    out = []
+    for line in text.splitlines():
+        match = RESERVED_ITEM.match(line)
+        if match:
+            out.append(match.group(1) + json.dumps(match.group(2)))
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _load_yaml(text):
     """A role reply parsed as data; None with a reason when it is not."""
     raw = _strip_fences(text)
-    # Models sometimes lead with a sentence; recover the document if a known
-    # top-level key starts a later line.
-    try:
-        data = yaml.safe_load(raw)
-    except yaml.YAMLError:
-        match = re.search(r"^(requirements|verdict):", raw, re.M)
-        if not match:
-            return None, "the reply is not YAML"
+    trouble = "the reply is not YAML"
+    data = None
+    # Models sometimes lead with a sentence, or start a list item with a
+    # reserved indicator; recover before giving up.
+    attempts = [raw, _quote_reserved_items(raw)]
+    match = re.search(r"^(requirements|verdict):", raw, re.M)
+    if match:
+        attempts.append(_quote_reserved_items(raw[match.start():]))
+    for candidate in attempts:
         try:
-            data = yaml.safe_load(raw[match.start():])
+            data = yaml.safe_load(candidate)
+        except yaml.YAMLError as exc:
+            trouble = f"the reply is not YAML: {exc}"
+            continue
         except Exception as exc:
-            return None, f"the reply is not YAML: {exc}"
-    except Exception as exc:
-        # a tag whose constructor fails raises outside YAMLError (`!!bool "1"`)
-        return None, f"the reply carries a YAML tag that cannot be read: {exc!r}"
-    if not isinstance(data, dict):
+            # a tag whose constructor fails raises outside YAMLError
+            return None, f"the reply carries a YAML tag that cannot be read: {exc!r}"
+        if isinstance(data, dict):
+            return data, None
+    if data is not None:
         return None, "the reply is not a YAML mapping"
-    return data, None
+    return None, trouble
 
 
 def _clean_list(value, limit, what):

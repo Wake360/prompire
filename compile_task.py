@@ -151,7 +151,7 @@ def parse_host_reply(stdout):
     return stdout, None, None
 
 
-def run_role(role, prompt, workdir, argv, meter):
+def run_role(role, prompt, workdir, argv, meter, log_dir=None):
     started = _now()
     try:
         done = subprocess.run(argv, input=prompt, cwd=str(workdir),
@@ -164,6 +164,11 @@ def run_role(role, prompt, workdir, argv, meter):
         raise CompileError(f"{role} did not answer within {ROLE_TIMEOUT}s")
     text, usage, cost = parse_host_reply(done.stdout)
     meter.record(role, _now() - started, done.returncode, usage, cost)
+    if log_dir is not None:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = f"{len(meter.sessions):02d}-{role}"
+        (log_dir / f"{stamp}.prompt.txt").write_text(prompt, encoding="utf-8")
+        (log_dir / f"{stamp}.reply.txt").write_text(text, encoding="utf-8")
     if done.returncode:
         tail = (done.stderr or done.stdout or "").strip().splitlines()
         raise CompileError(f"{role} exited {done.returncode}"
@@ -466,6 +471,9 @@ def build_ledger(request, state, spec, measurement, rounds, questions, meter):
     return {
         "request": request,
         "state": state,
+        "breaker_exercised": any(
+            r.get("verdict") in ("counterexample", "no_counterexample")
+            for r in rounds),
         "decisions": decisions,
         "measurement": {
             "flip_cases": measurement.get("flip_cases", []),
@@ -516,6 +524,7 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
     meter = Meter()
     argv = role_argv(agent, role_cmd)
     root = pathlib.Path(root)
+    log_dir = root / ".prompire" / "compile-logs" / slug
 
     spec = None
     trouble = None
@@ -525,7 +534,7 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
             if trouble:
                 prompt += ("\nYour previous reply was rejected: "
                            f"{trouble}. Answer again, one yaml document only.")
-            reply = run_role("resolver", prompt, tree, argv, meter)
+            reply = run_role("resolver", prompt, tree, argv, meter, log_dir)
             spec, trouble = compile_prompts.parse_resolver_reply(reply)
             if spec:
                 break
@@ -549,11 +558,12 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
                     "cost": meter.summary()}
             weakness = ("the orchestrator could not establish the probe on "
                         f"the untouched checkout: {measurement['reason']}")
-            spec = refine(request, spec, weakness, "", root, argv, meter,
-                          snapshot_ctx)
+            spec, trouble = refine(request, spec, weakness, "", root, argv,
+                                   meter, snapshot_ctx, log_dir)
             if spec is None:
                 return "INSUFFICIENT_SPEC", {
-                    "reason": f"refinement failed after: {weakness}",
+                    "reason": f"refinement failed after: {weakness} "
+                              f"({trouble})",
                     "cost": meter.summary()}
             continue
         log(f"✓ reproduced on HEAD ({len(measurement['flip_cases'])} failing "
@@ -564,7 +574,7 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
             break
         breaker_result, verified = attack(request, root, slug, spec,
                                           measurement, argv, meter,
-                                          snapshot_ctx)
+                                          snapshot_ctx, log_dir)
         record = {"round": round_no,
                   "attempted": breaker_result["attempted"]
                   if breaker_result else [],
@@ -575,19 +585,28 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
             record["detail"] = verified.get("description") or verified.get("reason")
         rounds.append(record)
         if not (verified and verified["confirmed"]):
-            log("✓ stress-tested: no plausible wrong implementation passed "
-                f"(round {round_no})")
+            if record["verdict"] == "no_counterexample":
+                log("✓ stress-tested: no plausible wrong implementation "
+                    f"passed (round {round_no})")
+            elif record["verdict"] == "counterexample":
+                log(f"✓ stress-tested: the breaker's candidate was caught by "
+                    f"the oracle (round {round_no})")
+            else:
+                log(f"⚠ breaker round {round_no} produced no usable attack — "
+                    "adversarial check incomplete")
             break
         log(f"✗ specification too weak (round {round_no}): "
             f"{verified['description']} — strengthening")
         ce = breaker_result["counterexample"]
-        spec2 = refine(request, spec,
-                       f"a wrong implementation passed every check: "
-                       f"{verified['description']}",
-                       ce["counter_probe"], root, argv, meter, snapshot_ctx)
+        spec2, trouble = refine(request, spec,
+                                f"a wrong implementation passed every check: "
+                                f"{verified['description']}",
+                                ce["counter_probe"], root, argv, meter,
+                                snapshot_ctx, log_dir)
         if spec2 is None:
             return "INSUFFICIENT_SPEC", {
-                "reason": "refinement failed after a confirmed weakness",
+                "reason": "refinement failed after a confirmed weakness "
+                          f"({trouble})",
                 "rounds": rounds, "cost": meter.summary()}
         spec = spec2
 
@@ -633,7 +652,8 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
                    "cost": meter.summary()}
 
 
-def attack(request, root, slug, spec, measurement, argv, meter, snapshot_ctx):
+def attack(request, root, slug, spec, measurement, argv, meter, snapshot_ctx,
+           log_dir=None):
     """One breaker round in a fresh context; (breaker_result, verification)."""
     oracle_cmds = [f"{PYTHON} {PROBE_DIR}/{slug}.py  # all cases"]
     oracle_cmds += measurement["regression_ok"]
@@ -642,13 +662,22 @@ def attack(request, root, slug, spec, measurement, argv, meter, snapshot_ctx):
                   requirements=compile_prompts.render_requirements(spec),
                   oracle=compile_prompts.render_oracle(oracle_cmds),
                   probe_rel=f"{PROBE_DIR}/{slug}.py")
+    result = trouble = None
     with snapshot_ctx(root) as (tree, _rev):
         write_probe(tree, slug, spec["probe_file"])
-        try:
-            reply = run_role("breaker", prompt, tree, argv, meter)
-        except CompileError as exc:
-            return None, {"confirmed": False, "reason": str(exc)}
-    result, trouble = compile_prompts.parse_breaker_reply(reply)
+        for attempt in range(2):
+            asked = prompt
+            if trouble:
+                asked += ("\nYour previous reply was rejected: "
+                          f"{trouble}. Answer again — one yaml document only, "
+                          "and never start a list item with a backtick.")
+            try:
+                reply = run_role("breaker", asked, tree, argv, meter, log_dir)
+            except CompileError as exc:
+                return None, {"confirmed": False, "reason": str(exc)}
+            result, trouble = compile_prompts.parse_breaker_reply(reply)
+            if result:
+                break
     if trouble:
         return None, {"confirmed": False,
                       "reason": f"breaker reply unusable: {trouble}"}
@@ -660,7 +689,7 @@ def attack(request, root, slug, spec, measurement, argv, meter, snapshot_ctx):
 
 
 def refine(request, spec, weakness, counter_probe, root, argv, meter,
-           snapshot_ctx):
+           snapshot_ctx, log_dir=None):
     prompt = fill(compile_prompts.REFINE_PROMPT,
                   request=request,
                   previous=compile_prompts.render_spec_for_refine(spec),
@@ -668,8 +697,7 @@ def refine(request, spec, weakness, counter_probe, root, argv, meter,
                   counter_probe=counter_probe or "(none)")
     with snapshot_ctx(root) as (tree, _rev):
         try:
-            reply = run_role("refiner", prompt, tree, argv, meter)
-        except CompileError:
-            return None
-    revised, trouble = compile_prompts.parse_resolver_reply(reply)
-    return revised if not trouble else None
+            reply = run_role("refiner", prompt, tree, argv, meter, log_dir)
+        except CompileError as exc:
+            return None, str(exc)
+    return compile_prompts.parse_resolver_reply(reply)
