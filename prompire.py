@@ -409,29 +409,36 @@ def record_run(brief, code, scope_data, acceptance_data):
     verdict (exit 0 or 1) is recorded; indeterminate runs and refusals leave no
     row. `git diff <base>` omits untracked files, so patch_sha256 identifies the
     tracked patch only."""
-    brief_path = pathlib.Path(brief).resolve()
-    root = repo_root(brief_path.parent)
-    base = scope_data.get("base")
-    patch_sha256 = None
-    if base:
-        diff = subprocess.run(
-            ["git", "-C", str(root), "diff", "--binary", str(base)],
-            capture_output=True)
-        if diff.returncode == 0:
-            patch_sha256 = hashlib.sha256(diff.stdout).hexdigest()
-    row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-           "run_id": uuid.uuid4().hex,
-           "brief": brief_path.relative_to(root).as_posix(),
-           "brief_sha256": digest_of(brief_path),
-           "base": base,
-           "patch_sha256": patch_sha256,
-           "exit_code": code,
-           "scope": scope_data,
-           "acceptance": acceptance_data}
-    store = root / RUNS_REL
-    store.parent.mkdir(parents=True, exist_ok=True)
-    with open(store, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    try:
+        brief_path = pathlib.Path(brief).resolve()
+        root = repo_root(brief_path.parent)
+        base = scope_data.get("base")
+        patch_sha256 = None
+        if base:
+            diff = subprocess.run(
+                ["git", "-C", str(root), "diff", "--binary", str(base)],
+                capture_output=True)
+            if diff.returncode == 0:
+                patch_sha256 = hashlib.sha256(diff.stdout).hexdigest()
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "run_id": uuid.uuid4().hex,
+               "brief": brief_path.relative_to(root).as_posix(),
+               "brief_sha256": digest_of(brief_path),
+               "base": base,
+               "patch_sha256": patch_sha256,
+               "exit_code": code,
+               "scope": scope_data,
+               "acceptance": acceptance_data}
+        store = root / RUNS_REL
+        store.parent.mkdir(parents=True, exist_ok=True)
+        with open(store, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except (OSError, RepoError, ValueError) as exc:
+        # The verdict already printed and its exit code is the contract; a run
+        # store that cannot be written must not turn a real verdict into a
+        # failure. Same warn-don't-mask stance as _restore_brief.
+        print(f"WARNING: could not record the verdict in {RUNS_REL}: {exc}",
+              file=sys.stderr)
 
 
 def report_scope_preflight(brief, scope, scope_data, json_mode):

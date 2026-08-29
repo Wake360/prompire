@@ -1834,6 +1834,29 @@ def _(repo, checks):
     checks.ok(not store.exists(), "--record is opt-in; nothing written without it")
 
 
+@case("verify --record works in human mode and survives an unwritable store")
+def _(repo, checks):
+    path = prepared(repo)
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    result = run("verify", path, "--record")
+    checks.equal(result.returncode, 0, "human-mode recorded exit")
+    checks.ok(result.stdout.startswith("clean"),
+              "human verdict line unchanged by --record")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 1, "human mode records the same row")
+    checks.equal(json.loads(lines[0])["exit_code"], 0,
+                 "human-mode row carries the verdict")
+    store.unlink()
+    store.mkdir()  # an append into a directory must fail on every platform
+    blocked = run("verify", path, "--record")
+    checks.equal(blocked.returncode, 0,
+                 "a failed record must not change the verdict")
+    checks.ok("could not record" in blocked.stderr,
+              "the failed write is warned, never silent")
+    checks.ok(blocked.stdout.startswith("clean"),
+              "the verdict still prints when the record fails")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
