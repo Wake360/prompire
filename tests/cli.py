@@ -1752,6 +1752,48 @@ def _(repo, checks):
                  "refusal JSON is one canonical line, byte for byte")
 
 
+@case("verify --record appends a row whose halves byte-match the JSON verdict")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    result = run("verify", path, "--record", "--json")
+    checks.equal(result.returncode, 0, "recorded clean exit")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    checks.ok(store.is_file(), "the store exists after a recorded verdict")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 1, "one verdict, one row")
+    row = json.loads(lines[0])
+    checks.equal(sorted(row),
+                 ["acceptance", "base", "brief", "brief_sha256", "exit_code",
+                  "patch_sha256", "run_id", "scope", "ts"], "envelope keys")
+    checks.equal(
+        json.dumps({"scope": row["scope"], "acceptance": row["acceptance"]},
+                   ensure_ascii=False) + "\n",
+        result.stdout, "recorded halves byte-match the stdout verdict")
+    checks.equal(row["exit_code"], 0, "recorded exit code")
+    checks.equal(row["brief"], ".prompire/task.yaml", "repo-relative brief path")
+    checks.equal(row["brief_sha256"],
+                 hashlib.sha256(path.read_bytes()).hexdigest(), "brief digest")
+    checks.equal(row["base"], row["scope"]["base"], "base echoes the scope base")
+    diff = subprocess.run(["git", "-C", str(repo), "diff", "--binary",
+                           row["base"]], capture_output=True)
+    checks.equal(row["patch_sha256"], hashlib.sha256(diff.stdout).hexdigest(),
+                 "patch digest is sha256 of git diff --binary against base")
+    again = run("verify", path, "--record", "--json")
+    checks.equal(again.returncode, 0, "second recorded clean exit")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 2, "two verifies, two rows — append, never truncate")
+    row2 = json.loads(lines[1])
+    checks.ok(row2["run_id"] != row["run_id"], "each row has its own run id")
+    checks.equal(
+        json.dumps({"scope": row2["scope"], "acceptance": row2["acceptance"]},
+                   ensure_ascii=False) + "\n",
+        again.stdout, "second row halves byte-match the second stdout verdict")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)

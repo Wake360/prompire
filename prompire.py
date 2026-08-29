@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import yaml
 
@@ -388,6 +390,41 @@ def report_verification(brief, scope, scope_data, acceptance, acceptance_data,
         if acceptance.stderr:
             print(acceptance.stderr, end="", file=sys.stderr)
     return code
+
+
+RUNS_REL = ".prompire/runs.jsonl"
+
+
+def record_run(brief, code, scope_data, acceptance_data):
+    """One verdict, one appended JSONL row: a small envelope plus the same scope
+    and acceptance objects the verdict printed — re-serializing those two halves
+    reproduces the `--json` stdout byte for byte. Only a run that reached a
+    verdict (exit 0 or 1) is recorded; indeterminate runs and refusals leave no
+    row. `git diff <base>` omits untracked files, so patch_sha256 identifies the
+    tracked patch only."""
+    brief_path = pathlib.Path(brief).resolve()
+    root = repo_root(brief_path.parent)
+    base = scope_data.get("base")
+    patch_sha256 = None
+    if base:
+        diff = subprocess.run(
+            ["git", "-C", str(root), "diff", "--binary", str(base)],
+            capture_output=True)
+        if diff.returncode == 0:
+            patch_sha256 = hashlib.sha256(diff.stdout).hexdigest()
+    row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+           "run_id": uuid.uuid4().hex,
+           "brief": brief_path.relative_to(root).as_posix(),
+           "brief_sha256": digest_of(brief_path),
+           "base": base,
+           "patch_sha256": patch_sha256,
+           "exit_code": code,
+           "scope": scope_data,
+           "acceptance": acceptance_data}
+    store = root / RUNS_REL
+    store.parent.mkdir(parents=True, exist_ok=True)
+    with open(store, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def report_scope_preflight(brief, scope, scope_data, json_mode):
@@ -1133,8 +1170,11 @@ def verify(args, extra):
         return report_indeterminate(
             "scope", scope, "scope could not produce a trustworthy result",
             args.json, scope_data)
-    return report_verification(
+    code = report_verification(
         args.brief, scope, scope_data, acceptance, acceptance_data, args.json)
+    if args.record:
+        record_run(args.brief, code, scope_data, acceptance_data)
+    return code
 
 
 def close(args, extra):
@@ -1245,6 +1285,8 @@ def build_parser():
         "verify", help="verdict from the real git diff plus the acceptance commands")
     verified.add_argument("brief")
     verified.add_argument("--ack-disarms")
+    verified.add_argument("--record", action="store_true",
+                          help=f"append the verdict to {RUNS_REL}")
     verified.add_argument("--json", action="store_true")
     verified.set_defaults(handler=verify)
 
