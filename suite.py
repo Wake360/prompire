@@ -192,6 +192,8 @@ def _report(payload, json_mode):
     elif payload["status"] == "added":
         print(f"admitted {payload['fixture']} — suite v{payload['suite_version']}, "
               f"manifest {payload['content_sha256'][:12]}")
+    elif payload["status"] == "incomplete":
+        print(f"incomplete: {payload['reason']} — {payload['message']}")
     else:
         print(f"rejected: {payload['reason']} — {payload['message']}")
 
@@ -260,8 +262,22 @@ def add(root, selector, reserve, json_mode):
                 json.dumps({"at_pin": at_pin, "at_patch": at_patch},
                            ensure_ascii=False) + "\n", encoding="utf-8")
             os.rename(staging, final_dir)
-            version, content = update_manifest(
-                root, row, reserve, final_dir, time.strftime("%Y-%m-%dT%H:%M:%S"))
+            try:
+                version, content = update_manifest(
+                    root, row, reserve, final_dir, time.strftime("%Y-%m-%dT%H:%M:%S"))
+            except (OSError, ValueError) as exc:
+                # The fixture is already on disk at this point — a manifest write
+                # failure (an I/O error, or a corrupt/hand-edited manifest.json
+                # that won't parse) is neither "rejected" (nothing landed, which
+                # is false here) nor a bare traceback on the gate's reserved
+                # exit 1. It's its own outcome: fixture pinned, manifest behind.
+                _report({"status": "incomplete", "reason": "manifest-unwritten",
+                         "fixture": fixture_id,
+                         "message": f"fixture {fixture_id} is pinned on disk but "
+                         f"the manifest was not updated: {exc}; re-running "
+                         "`suite add` for it will report already-admitted"},
+                        json_mode)
+                return 2
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise

@@ -2147,6 +2147,35 @@ def _(repo, checks):
                  "a rejection never touches the manifest")
 
 
+@case("suite add reports a corrupt manifest as incomplete, not a traceback")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "first recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    manifest.write_text("not json", encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "second recorded run")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    run_id = json.loads(
+        store.read_text(encoding="utf-8").splitlines()[-1])["run_id"]
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "a corrupt manifest is neither a measured gate no nor a traceback")
+    data = json_out(result)
+    checks.equal(data["status"], "incomplete", "incomplete status")
+    checks.equal(data["reason"], "manifest-unwritten", "named reason")
+    fdir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures" / run_id
+    checks.ok(fdir.is_dir(),
+              "the fixture is pinned on disk even though the manifest wasn't updated")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
