@@ -1794,6 +1794,30 @@ def _(repo, checks):
         again.stdout, "second row halves byte-match the second stdout verdict")
 
 
+@case("verify --record captures the preflight-blocked verdict")
+def _(repo, checks):
+    path = prepared(repo)
+    fixtures.write(repo, "src/outside.py", "value = 1\n")
+    result = run("verify", path, "--record", "--json")
+    checks.equal(result.returncode, 1, "blocked verdict exit")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    checks.ok(store.is_file(), "a blocked verdict is still a verdict — recorded")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 1, "one blocked verdict, one row")
+    row = json.loads(lines[0])
+    checks.equal(row["acceptance"],
+                 {"status": "not_run",
+                  "reason": "strict scope preflight did not pass"},
+                 "the recorded acceptance half is the synthesized not_run object")
+    checks.equal(
+        json.dumps({"scope": row["scope"], "acceptance": row["acceptance"]},
+                   ensure_ascii=False) + "\n",
+        result.stdout, "blocked halves byte-match the stdout verdict")
+    checks.equal(row["exit_code"], 1, "blocked exit recorded")
+    checks.equal(row["brief"], ".prompire/task.yaml",
+                 "a blocked row still names its brief")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)

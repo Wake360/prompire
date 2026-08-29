@@ -394,6 +394,13 @@ def report_verification(brief, scope, scope_data, acceptance, acceptance_data,
 
 RUNS_REL = ".prompire/runs.jsonl"
 
+# Shared with record_run so the printed and the recorded acceptance halves can
+# never drift apart. Never mutated — json.dumps only.
+PREFLIGHT_BLOCKED_ACCEPTANCE = {
+    "status": "not_run",
+    "reason": "strict scope preflight did not pass",
+}
+
 
 def record_run(brief, code, scope_data, acceptance_data):
     """One verdict, one appended JSONL row: a small envelope plus the same scope
@@ -428,10 +435,7 @@ def record_run(brief, code, scope_data, acceptance_data):
 
 
 def report_scope_preflight(brief, scope, scope_data, json_mode):
-    acceptance_data = {
-        "status": "not_run",
-        "reason": "strict scope preflight did not pass",
-    }
+    acceptance_data = PREFLIGHT_BLOCKED_ACCEPTANCE
     if json_mode:
         print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
                          ensure_ascii=False))
@@ -1150,7 +1154,12 @@ def verify(args, extra):
             "scope", preflight, "scope could not produce a trustworthy result",
             args.json, preflight_data)
     if preflight.returncode == 1 and not acceptance_evidence_safe(preflight_data):
-        return report_scope_preflight(args.brief, preflight, preflight_data, args.json)
+        code = report_scope_preflight(args.brief, preflight, preflight_data,
+                                      args.json)
+        if args.record:
+            record_run(args.brief, code, preflight_data,
+                       PREFLIGHT_BLOCKED_ACCEPTANCE)
+        return code
 
     acceptance = run_tool("acceptance", args.brief, "--json")
     acceptance_data, issue = parse_child_json("acceptance", acceptance)
