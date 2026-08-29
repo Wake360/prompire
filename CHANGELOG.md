@@ -15,6 +15,7 @@ lints clean today can fail on the next minor, and this file is where that is rec
   nothing, and a store that cannot be written warns on stderr without changing
   the verdict. `.prompire/**` is always inside the boundary, so the store never
   trips a later scope check.
+- `prompire suite add <run>`: promote a recorded run into a pinned suite fixture, but only when its acceptance fails at the pinned base and passes with the recorded patch — a task already green at base is rejected by name (`green-at-base`). The suite manifest is versioned and content-hashed and declares an explicit never-tuned reserve slice.
 
 ## 0.11.0 — 2026-08-03
 
