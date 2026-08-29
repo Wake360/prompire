@@ -3,6 +3,19 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## Unreleased
+
+### Added
+
+- `verify --record` appends the verdict to `.prompire/runs.jsonl`: the same
+  scope and acceptance objects `--json` prints, under a small envelope
+  (timestamp, run id, repo-relative brief path and its sha256, base revision,
+  sha256 of `git diff --binary` against that base, exit code). Only a run that
+  reached a verdict writes a row; an indeterminate run or a refusal writes
+  nothing, and a store that cannot be written warns on stderr without changing
+  the verdict. `.prompire/**` is always inside the boundary, so the store never
+  trips a later scope check.
+
 ## 0.11.0 — 2026-08-03
 
 **The compiler proposes; the human and the deterministic checks establish
