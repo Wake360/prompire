@@ -49,7 +49,7 @@ def find_run(root, selector):
         raise Rejection("missing-record", f"no run store at {RUNS_REL}; "
                         "run `prompire verify <brief> --record` first")
     rows = []
-    with open(store, encoding="utf-8") as fh:
+    with open(store, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -209,6 +209,11 @@ def update_manifest(root, row, reserve, fixture_dir, added_ts):
     data = {"suite_version": 0, "fixtures": [], "reserve": []}
     if path.is_file():
         data = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(data, dict)
+                or not isinstance(data.get("fixtures"), list)
+                or not isinstance(data.get("reserve"), list)
+                or not isinstance(data.get("suite_version"), int)):
+            raise ValueError(f"{MANIFEST_REL} is not shaped like a suite manifest")
     data["fixtures"].append({
         "id": str(row["run_id"]),
         "brief": str(row["brief"]),

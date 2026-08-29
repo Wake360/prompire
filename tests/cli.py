@@ -2176,6 +2176,48 @@ def _(repo, checks):
               "the fixture is pinned on disk even though the manifest wasn't updated")
 
 
+@case("suite add reports a wrong-shape manifest as incomplete, not a traceback")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "first recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "second recorded run")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    run_id = json.loads(
+        store.read_text(encoding="utf-8").splitlines()[-1])["run_id"]
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "a valid-JSON but wrong-shape manifest is neither a measured "
+                 "gate no nor a traceback")
+    data = json_out(result)
+    checks.equal(data["status"], "incomplete", "incomplete status")
+    checks.equal(data["reason"], "manifest-unwritten", "named reason")
+    fdir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures" / run_id
+    checks.ok(fdir.is_dir(),
+              "the fixture is pinned on disk even though the manifest wasn't updated")
+
+
+@case("suite add names missing-record for a non-UTF-8 run store, not a traceback")
+def _(repo, checks):
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_bytes(b"\xff\xfe not json\n")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "invalid UTF-8 in the store is a refusal, not a traceback")
+    checks.equal(json_out(result)["reason"], "missing-record", "named reason")
+    checks.equal(result.stderr.strip(), "", "no traceback reaches stderr")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
