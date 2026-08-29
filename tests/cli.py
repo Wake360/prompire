@@ -1818,6 +1818,22 @@ def _(repo, checks):
                  "a blocked row still names its brief")
 
 
+@case("verify --record writes nothing without a verdict and nothing without the flag")
+def _(repo, checks):
+    path = brief(repo)  # never prepared: no base -> exit 2
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    result = run("verify", path, "--record", "--json")
+    checks.equal(result.returncode, 2, "indeterminate exit")
+    checks.ok(not store.exists(), "no row for an indeterminate run")
+    refused = run("verify", path, "--record", "--bogus", "--json")
+    checks.equal(refused.returncode, 2, "refusal exit")
+    checks.ok(not store.exists(), "no row for a refusal")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    clean = run("verify", path, "--json")
+    checks.equal(clean.returncode, 0, "clean verify without --record")
+    checks.ok(not store.exists(), "--record is opt-in; nothing written without it")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
