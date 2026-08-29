@@ -1951,6 +1951,53 @@ def _(repo, checks):
               "no staging or fixture directory survives the rejection")
 
 
+@case("suite add reports a filesystem failure as a rejection, not a traceback")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "the fix verifies clean")
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    fixtures_dir.parent.mkdir(parents=True, exist_ok=True)
+    fixtures_dir.write_text("occupied\n", encoding="utf-8")  # a file, not a directory
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "an ordinary OSError is not a measured gate no — exit 1 is reserved "
+                 "for that — so it is refused, not left to traceback")
+    data = json_out(result)
+    checks.equal(data["status"], "rejected", "rejected status")
+    checks.equal(data["reason"], "pin-failure", "the reason names the failure class")
+    checks.ok("fixtures" in data["message"], "the message names what failed")
+
+
+@case("suite add admits a run whose recorded brief is tracked and changed since base")
+def _(repo, checks):
+    path = flip_brief(repo)
+    fixtures.git(repo, "add", "-f", ".prompire/task.yaml")
+    fixtures.git(repo, "commit", "-qm", "track the brief")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    recorded = run("verify", path, "--record", "--json")
+    # prepare's own baseline write leaves the tracked brief different from the
+    # base commit, so scope raises a REVIEW ("the brief itself changed since
+    # the base revision") — never a violation — and the verdict still records.
+    checks.equal(recorded.returncode, 1,
+                 "a tracked brief that prepare rewrote is caught by its own "
+                 "REVIEW, not by acceptance")
+    checks.equal(json_out(recorded)["scope"]["violations"], 0,
+                 "the brief's own rewrite is never a scope violation")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 0,
+                 "the recorded patch carries a hunk for the brief itself; gate() "
+                 "must not overwrite that file before applying the patch")
+    checks.equal(json_out(result)["status"], "added", "added status")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)

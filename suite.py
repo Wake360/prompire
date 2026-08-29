@@ -135,11 +135,12 @@ def _run_side(ws, entries):
     return results
 
 
-def gate(bundle_path, base, brief_rel, brief_bytes, patch_bytes):
+def gate(bundle_path, base, brief_bytes, patch_bytes):
     """Fail-at-pin, pass-at-patch, measured in a workspace restored from the
     pinned bundle itself — so the stored artifact is proven restorable."""
     with tempfile.TemporaryDirectory(prefix="prompire-suite-gate-") as tmp:
-        ws = pathlib.Path(tmp) / "ws"
+        tmp_path = pathlib.Path(tmp)
+        ws = tmp_path / "ws"
         cloned = subprocess.run(
             ["git", "clone", "-q", "-b", PIN_BRANCH, str(bundle_path), str(ws)],
             capture_output=True)
@@ -152,11 +153,15 @@ def gate(bundle_path, base, brief_rel, brief_bytes, patch_bytes):
         if not head.stdout.decode("utf-8", "replace").strip().startswith(base):
             raise Rejection("pin-failure",
                             "the restored workspace is not at the recorded base")
-        brief_ws = ws / brief_rel
-        brief_ws.parent.mkdir(parents=True, exist_ok=True)
-        brief_ws.write_bytes(brief_bytes)
+        # The recorded brief is measured from its own bytes, staged outside the
+        # workspace: writing it into `ws` before `git apply` would, for a brief
+        # tracked in git, overwrite the very file the recorded patch has a hunk
+        # for — the hunk's context expects the pristine base content, not the
+        # already-final content, and `git apply` fails on an untouched patch.
+        brief_tmp = tmp_path / "brief.yaml"
+        brief_tmp.write_bytes(brief_bytes)
         try:
-            entries = acceptance_entries(load_brief(str(brief_ws)))
+            entries = acceptance_entries(load_brief(str(brief_tmp)))
         except BriefError as exc:
             raise Rejection("not-runnable", f"the recorded brief does not load: {exc}")
         if not entries:
@@ -210,7 +215,7 @@ def add(root, selector, reserve, json_mode):
             (staging / "patch.bin").write_bytes(patch_bytes)
             pin_bundle(root, base, staging / "base.bundle")
             at_pin, at_patch = gate(staging / "base.bundle", base,
-                                    str(row["brief"]), brief_bytes, patch_bytes)
+                                    brief_bytes, patch_bytes)
             (staging / "gate.json").write_text(
                 json.dumps({"at_pin": at_pin, "at_patch": at_patch},
                            ensure_ascii=False) + "\n", encoding="utf-8")
@@ -222,5 +227,12 @@ def add(root, selector, reserve, json_mode):
         _report({"status": "rejected", "reason": exc.reason, "message": str(exc)},
                 json_mode)
         return exc.code
+    except OSError as exc:
+        # A plain filesystem failure (e.g. something already occupying where
+        # fixtures/ must go) is not a measured gate "no" — exit 1 is reserved
+        # for that — so it is reported as a rejection, not left to traceback.
+        _report({"status": "rejected", "reason": "pin-failure", "message": str(exc)},
+                json_mode)
+        return 2
     _report({"status": "added", "fixture": fixture_id}, json_mode)
     return 0
