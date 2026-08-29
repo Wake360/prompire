@@ -1998,6 +1998,101 @@ def _(repo, checks):
     checks.equal(json_out(result)["status"], "added", "added status")
 
 
+@case("suite add names missing-record when the store has no matching run")
+def _(repo, checks):
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "no store is a refusal, not a verdict")
+    checks.equal(json_out(result)["reason"], "missing-record", "named reason")
+    path = prepared(repo)
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "one recorded run")
+    unknown = run("suite", "add", "0" * 32, "--json", cwd=repo)
+    checks.equal(unknown.returncode, 2, "unknown id exit")
+    checks.equal(json_out(unknown)["reason"], "missing-record",
+                 "an unknown id is missing-record too")
+
+
+@case("suite add names missing-patch when the tree moved past the record")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded run")
+    cart.write_text(cart.read_text(encoding="utf-8") + "\n# drifted\n",
+                    encoding="utf-8")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "a drifted tree cannot be admitted")
+    checks.equal(json_out(result)["reason"], "missing-patch", "named reason")
+
+
+@case("suite add names brief-changed when the brief no longer hashes")
+def _(repo, checks):
+    path = prepared(repo)
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded run")
+    path.write_text(path.read_text(encoding="utf-8") + "# edited after record\n",
+                    encoding="utf-8")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "an edited brief cannot be admitted")
+    checks.equal(json_out(result)["reason"], "brief-changed", "named reason")
+
+
+@case("suite add names pin-failure instead of stealing an existing branch")
+def _(repo, checks):
+    path = prepared(repo)
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded run")
+    fixtures.git(repo, "branch", "prompire-suite-pin")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "a claimed scratch ref blocks the pin")
+    checks.equal(json_out(result)["reason"], "pin-failure", "named reason")
+    checks.ok("prompire-suite-pin" in
+              fixtures.git(repo, "branch", "--list", "prompire-suite-pin"),
+              "the user's branch is left untouched")
+
+
+@case("suite add refuses a not-runnable acceptance and a duplicate admission")
+def _(repo, checks):
+    # A fabricated row: a brief whose acceptance declares requires — classify
+    # refuses to run it, so the gate can never measure discrimination.
+    net = pathlib.Path(repo) / ".prompire" / "net.yaml"
+    net.parent.mkdir(parents=True, exist_ok=True)
+    net.write_text("goal: g\nscope: [src/cart.py]\nacceptance:\n"
+                   "  - cmd: curl http://example.invalid\n    expect: exit 0\n"
+                   "    requires: [network]\n", encoding="utf-8")
+    base = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    diff = subprocess.run(["git", "-C", str(repo), "diff", "--binary", base],
+                          capture_output=True)
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    store.write_text(json.dumps({
+        "ts": "2026-08-29T00:00:00", "run_id": "f" * 32,
+        "brief": ".prompire/net.yaml",
+        "brief_sha256": hashlib.sha256(net.read_bytes()).hexdigest(),
+        "base": base,
+        "patch_sha256": hashlib.sha256(diff.stdout).hexdigest(),
+        "exit_code": 1, "scope": {}, "acceptance": {}}) + "\n",
+        encoding="utf-8")
+    result = run("suite", "add", "f" * 32, "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "an unrunnable check cannot discriminate")
+    checks.equal(json_out(result)["reason"], "not-runnable", "named reason")
+    # Duplicate admission: a real admitted fixture, then the same id again.
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "the fix verifies clean")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    again = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(again.returncode, 2, "an admitted id is never re-admitted")
+    checks.equal(json_out(again)["reason"], "already-admitted", "named reason")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
