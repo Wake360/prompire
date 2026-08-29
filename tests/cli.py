@@ -2093,6 +2093,60 @@ def _(repo, checks):
     checks.equal(json_out(again)["reason"], "already-admitted", "named reason")
 
 
+@case("suite manifest is versioned, content-hashed, and names its reserve slice")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "first recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    checks.ok(manifest.is_file(), "the manifest exists after the first admission")
+    one = json.loads(manifest.read_text(encoding="utf-8"))
+    checks.equal(one["suite_version"], 1, "first admission is suite version 1")
+    checks.equal(len(one["fixtures"]), 1, "one fixture listed")
+    checks.equal(one["reserve"], [], "nothing is reserved unless asked")
+    entry = one["fixtures"][0]
+    checks.equal(sorted(entry), ["added", "base", "brief", "brief_sha256",
+                                 "bundle_sha256", "id", "patch_sha256"],
+                 "manifest entry keys")
+    fdir = (pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+            / entry["id"])
+    checks.equal(entry["bundle_sha256"],
+                 hashlib.sha256((fdir / "base.bundle").read_bytes()).hexdigest(),
+                 "the manifest hashes the pinned bundle bytes")
+    body = {"fixtures": one["fixtures"], "reserve": one["reserve"]}
+    checks.equal(one["content_sha256"],
+                 hashlib.sha256(json.dumps(body, sort_keys=True,
+                                           ensure_ascii=False)
+                                .encode("utf-8")).hexdigest(),
+                 "content hash covers exactly the fixture list and the reserve")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "second recorded run")
+    added = run("suite", "add", "last", "--reserve", "--json", cwd=repo)
+    checks.equal(added.returncode, 0, "second admission, reserved")
+    two = json.loads(manifest.read_text(encoding="utf-8"))
+    checks.equal(two["suite_version"], 2, "the version increments per admission")
+    checks.ok(two["content_sha256"] != one["content_sha256"],
+              "adding a fixture changes the content hash")
+    checks.equal(two["reserve"], [two["fixtures"][1]["id"]],
+                 "reserve membership is explicit and names the reserved fixture")
+    data = json_out(added)
+    checks.equal(data["suite_version"], 2, "the CLI reports the new version")
+    checks.equal(data["content_sha256"], two["content_sha256"],
+                 "the CLI reports the manifest hash")
+    checks.equal(data["reserve"], True, "the CLI reports reserve placement")
+    before = manifest.read_bytes()
+    rejected = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(rejected.returncode, 2, "re-adding the reserved run is refused")
+    checks.equal(manifest.read_bytes(), before,
+                 "a rejection never touches the manifest")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)

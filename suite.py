@@ -13,6 +13,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 
 from baseline import classify, run_one
 from brief_common import BriefError, acceptance_entries, load_brief, norm_cmd
@@ -189,9 +190,48 @@ def _report(payload, json_mode):
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False))
     elif payload["status"] == "added":
-        print(f"admitted {payload['fixture']}")
+        print(f"admitted {payload['fixture']} — suite v{payload['suite_version']}, "
+              f"manifest {payload['content_sha256'][:12]}")
     else:
         print(f"rejected: {payload['reason']} — {payload['message']}")
+
+
+def _manifest_hash(data):
+    body = {"fixtures": data["fixtures"], "reserve": data["reserve"]}
+    return _sha256(json.dumps(body, sort_keys=True,
+                              ensure_ascii=False).encode("utf-8"))
+
+
+def update_manifest(root, row, reserve, fixture_dir, added_ts):
+    path = root / MANIFEST_REL
+    data = {"suite_version": 0, "fixtures": [], "reserve": []}
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+    data["fixtures"].append({
+        "id": str(row["run_id"]),
+        "brief": str(row["brief"]),
+        "base": str(row["base"]),
+        "brief_sha256": row["brief_sha256"],
+        "patch_sha256": row["patch_sha256"],
+        "bundle_sha256": _sha256((fixture_dir / "base.bundle").read_bytes()),
+        "added": added_ts,
+    })
+    if reserve:
+        data["reserve"].append(str(row["run_id"]))
+    data["suite_version"] += 1
+    data["content_sha256"] = _manifest_hash(data)
+    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False)
+    try:
+        with handle:
+            handle.write(text)
+        os.replace(handle.name, path)
+    except OSError:
+        pathlib.Path(handle.name).unlink(missing_ok=True)
+        raise
+    return data["suite_version"], data["content_sha256"]
 
 
 def add(root, selector, reserve, json_mode):
@@ -220,6 +260,8 @@ def add(root, selector, reserve, json_mode):
                 json.dumps({"at_pin": at_pin, "at_patch": at_patch},
                            ensure_ascii=False) + "\n", encoding="utf-8")
             os.rename(staging, final_dir)
+            version, content = update_manifest(
+                root, row, reserve, final_dir, time.strftime("%Y-%m-%dT%H:%M:%S"))
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
@@ -234,5 +276,6 @@ def add(root, selector, reserve, json_mode):
         _report({"status": "rejected", "reason": "pin-failure", "message": str(exc)},
                 json_mode)
         return 2
-    _report({"status": "added", "fixture": fixture_id}, json_mode)
+    _report({"status": "added", "fixture": fixture_id, "suite_version": version,
+             "content_sha256": content, "reserve": bool(reserve)}, json_mode)
     return 0
