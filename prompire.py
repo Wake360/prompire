@@ -21,6 +21,8 @@ import yaml
 from brief_common import (ACCEPTANCE_KEYS, DRAFT_LEDGER, DRAFT_MARKER, as_list,
                           glob_re, norm_path, utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
+import suite as suite_store
+from suite import RUNS_REL
 
 HERE = pathlib.Path(__file__).resolve().parent
 TOOLS = {
@@ -391,8 +393,6 @@ def report_verification(brief, scope, scope_data, acceptance, acceptance_data,
             print(acceptance.stderr, end="", file=sys.stderr)
     return code
 
-
-RUNS_REL = ".prompire/runs.jsonl"
 
 # Shared with record_run so the printed and the recorded acceptance halves can
 # never drift apart. Never mutated — json.dumps only.
@@ -1193,6 +1193,17 @@ def verify(args, extra):
     return code
 
 
+def suite_add(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra),
+                              args.json)
+    try:
+        root = repo_root(pathlib.Path(".").resolve())
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
+    return suite_store.add(root, args.run, args.reserve, args.json)
+
+
 def close(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra))
@@ -1305,6 +1316,22 @@ def build_parser():
                           help=f"append the verdict to {RUNS_REL}")
     verified.add_argument("--json", action="store_true")
     verified.set_defaults(handler=verify)
+
+    suite_cmd = commands.add_parser(
+        "suite", help="promote recorded runs into a pinned, gate-checked suite")
+    suite_actions = suite_cmd.add_subparsers(dest="suite_command", required=True,
+                                             metavar="action")
+    suite_added = suite_actions.add_parser(
+        "add", help="admit one recorded run if acceptance fails at the pinned "
+                    "base and passes with the recorded patch")
+    suite_added.add_argument(
+        "run", help=f"a run_id from {RUNS_REL}, a unique prefix (8+ chars), "
+                    "or `last`")
+    suite_added.add_argument("--reserve", action="store_true",
+                             help="place the fixture in the never-tuned "
+                                  "reserve slice")
+    suite_added.add_argument("--json", action="store_true")
+    suite_added.set_defaults(handler=suite_add)
 
     closed = commands.add_parser(
         "close", help="disarm the guard after review; the disarm is recorded")

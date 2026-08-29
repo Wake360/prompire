@@ -60,7 +60,8 @@ def run(*args, cwd=None, env=None):
 def run_with_replaced_tools(args, replacements):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-tools-") as tmp:
         tool_root = pathlib.Path(tmp)
-        for name in ("prompire.py", "check_scope.py", "brief_common.py"):
+        for name in ("prompire.py", "check_scope.py", "brief_common.py",
+                     "suite.py", "baseline.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         for name, body in replacements.items():
             (tool_root / name).write_text(body, encoding="utf-8")
@@ -84,6 +85,23 @@ acceptance:
 """ + extra + """\
 manual_checks:
   - the diff adds the count helper
+autonomy: ask
+""", encoding="utf-8")
+    return path
+
+
+def flip_brief(repo, name="task"):
+    path = pathlib.Path(repo) / ".prompire" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("""\
+goal: Fix the off-by-one in src/cart.total().
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python -m unittest -q tests.test_total
+    expect: exit 0
+    transition: flip
 autonomy: ask
 """, encoding="utf-8")
     return path
@@ -1371,7 +1389,13 @@ def _(repo, checks):
     path = brief(repo)
     result = run_with_replaced_tools(
         ("prepare", path, "--json"),
-        {"baseline.py": "raise SystemExit(7)\n"},
+        # `suite.py` imports `classify`/`run_one` from this module at prompire.py
+        # startup, so the broken stub must stay importable and misbehave only
+        # when run as the `baseline` subprocess tool, same as the real file.
+        {"baseline.py": "def classify(entry): return None\n"
+                        "def run_one(root, entry): return {}\n"
+                        "if __name__ == '__main__':\n"
+                        "    raise SystemExit(7)\n"},
     )
 
     checks.equal(result.returncode, 2, "prepare unexpected-child exit")
@@ -1857,6 +1881,76 @@ def _(repo, checks):
               "the verdict still prints when the record fails")
 
 
+@case("suite add rejects a run whose acceptance is already green at the pinned base")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded clean run")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 1,
+                 "a non-discriminating run is a measured rejection, not a refusal")
+    data = json_out(result)
+    checks.equal(data["status"], "rejected", "rejected status")
+    checks.equal(data["reason"], "green-at-base", "the reason is named")
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    checks.ok(not fixtures_dir.exists() or not any(fixtures_dir.iterdir()),
+              "a rejected run leaves nothing under fixtures/")
+
+
+@case("suite add admits a run that flips acceptance from red at base to green")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "the fix verifies clean")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    run_id = json.loads(
+        store.read_text(encoding="utf-8").splitlines()[-1])["run_id"]
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 0, "a discriminating run is admitted")
+    data = json_out(result)
+    checks.equal(data["status"], "added", "added status")
+    checks.equal(data["fixture"], run_id, "the fixture id is the run id")
+    fdir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures" / run_id
+    for name in ("record.json", "brief.yaml", "patch.bin", "base.bundle",
+                 "gate.json"):
+        checks.ok((fdir / name).is_file(), f"the fixture carries {name}")
+    checks.equal((fdir / "brief.yaml").read_bytes(), path.read_bytes(),
+                 "brief bytes are pinned verbatim")
+    row = json.loads((fdir / "record.json").read_text(encoding="utf-8"))
+    checks.equal(row["run_id"], run_id, "record.json is the promoted row")
+    checks.equal(hashlib.sha256((fdir / "patch.bin").read_bytes()).hexdigest(),
+                 row["patch_sha256"], "patch bytes hash to the recorded digest")
+    gate = json.loads((fdir / "gate.json").read_text(encoding="utf-8"))
+    checks.ok(any(r["status"] != "pass" for r in gate["at_pin"]),
+              "gate evidence: red at pin")
+    checks.ok(all(r["status"] == "pass" for r in gate["at_patch"]),
+              "gate evidence: green at patch")
+    checks.equal(fixtures.git(repo, "branch", "--list", "prompire-suite-pin")
+                 .strip(), "", "the scratch pin branch does not survive")
+
+
+@case("suite add rejects a recorded failure and leaves no half-written fixture")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    caught = run("verify", path, "--record", "--json")
+    checks.equal(caught.returncode, 1, "the unfixed run verifies caught")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 1, "fail-at-patch is a measured rejection")
+    checks.equal(json_out(result)["reason"], "fail-at-patch", "named reason")
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    checks.ok(not fixtures_dir.exists() or not any(fixtures_dir.iterdir()),
+              "no staging or fixture directory survives the rejection")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
@@ -2181,7 +2275,8 @@ def _(repo, checks):
     )
     with tempfile.TemporaryDirectory(prefix="prompire-cli-bare-") as tmp:
         tool_root = pathlib.Path(tmp)
-        for name in ("prompire.py", "check_scope.py", "brief_common.py"):
+        for name in ("prompire.py", "check_scope.py", "brief_common.py",
+                     "suite.py", "baseline.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         result = subprocess.run(
             [sys.executable, "-c", probe],
