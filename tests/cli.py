@@ -2279,6 +2279,39 @@ def _(repo, checks):
               "human output names the moved slices")
 
 
+@case("suite run records outcomes without touching the manifest or the fixtures")
+def _(repo, checks):
+    main_id, reserve_id = admitted_pair(repo)
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    before_manifest = manifest.read_bytes()
+    before_fixtures = sorted(p.name for p in fixtures_dir.iterdir())
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    checks.equal(run("suite", "run", "broken", "--agent", "noop",
+                     cwd=repo).returncode, 0, "comparison run")
+    checks.equal(manifest.read_bytes(), before_manifest,
+                 "a run never rewrites the manifest")
+    after = json.loads(manifest.read_text(encoding="utf-8"))
+    checks.equal(after["reserve"], [reserve_id],
+                 "reserve membership and count are unchanged by a run")
+    checks.equal(sorted(p.name for p in fixtures_dir.iterdir()),
+                 before_fixtures,
+                 "a run admits nothing — suite add was never called")
+    dump = (pathlib.Path(repo) / ".prompire" / "suite" / "results"
+            / "broken.json")
+    checks.ok(dump.is_file(), "the candidate's result set is recorded")
+    data = json.loads(dump.read_text(encoding="utf-8"))
+    checks.equal(data["candidate"], "broken", "dump names the candidate")
+    checks.equal(data["suite_version"], 2, "dump pins the suite version")
+    checks.equal(sorted(data["outcomes"]), sorted([main_id, reserve_id]),
+                 "one outcome per fixture")
+    outcome = data["outcomes"][main_id]
+    for field in ("seconds", "cost_usd", "tokens_in", "tokens_out",
+                  "tampered", "acceptance", "scope_exit"):
+        checks.ok(field in outcome, f"bench field {field} is copied through")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
