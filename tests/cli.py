@@ -2355,16 +2355,13 @@ def _(repo, checks):
                     cwd=repo)
     checks.equal(json_out(bad_agent)["reason"], "unknown-agent",
                  "named: unknown-agent")
-    # Store baseline with the 2-fixture suite
     checks.equal(run("suite", "run", "fixed", "--agent", "patch",
                      "--as-baseline", cwd=repo).returncode, 0, "baseline run")
-    # Record a third run (the brief is already set from admitted_pair)
     path = pathlib.Path(repo) / ".prompire" / "task.yaml"
     checks.equal(run("verify", path, "--record", "--json", cwd=repo).returncode, 0,
                  "third recorded run")
     checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
                  "third admission changes the manifest hash")
-    # Try to run against the changed suite (should fail with suite-changed)
     stale = run("suite", "run", "broken", "--agent", "noop", "--json",
                 cwd=repo)
     checks.equal(stale.returncode, 2, "a grown suite invalidates the baseline")
