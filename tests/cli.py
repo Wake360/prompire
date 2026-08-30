@@ -2332,6 +2332,46 @@ def _(repo, checks):
               "human output states the absence, not an empty list")
 
 
+@case("suite run refuses by name before spending anything")
+def _(repo, checks):
+    no_suite = run("suite", "run", "cand", "--json", cwd=repo)
+    checks.equal(no_suite.returncode, 2, "no suite is a refusal")
+    checks.equal(json_out(no_suite)["reason"], "no-suite", "named: no-suite")
+    main_id, reserve_id = admitted_pair(repo)
+    results_dir = pathlib.Path(repo) / ".prompire" / "suite" / "results"
+    no_base = run("suite", "run", "cand", "--agent", "patch", "--json",
+                  cwd=repo)
+    checks.equal(no_base.returncode, 2, "no baseline is a refusal")
+    data = json_out(no_base)
+    checks.equal(data["reason"], "no-baseline", "named: no-baseline")
+    checks.ok("--as-baseline" in data["message"],
+              "the refusal says how to store one")
+    checks.ok(not results_dir.exists() or not any(results_dir.iterdir()),
+              "a refused run executes nothing and dumps nothing")
+    bad_id = run("suite", "run", "no/slashes", "--json", cwd=repo)
+    checks.equal(json_out(bad_id)["reason"], "bad-candidate",
+                 "named: bad-candidate")
+    bad_agent = run("suite", "run", "cand", "--agent", "gpt", "--json",
+                    cwd=repo)
+    checks.equal(json_out(bad_agent)["reason"], "unknown-agent",
+                 "named: unknown-agent")
+    # Store baseline with the 2-fixture suite
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    # Record a third run (the brief is already set from admitted_pair)
+    path = pathlib.Path(repo) / ".prompire" / "task.yaml"
+    checks.equal(run("verify", path, "--record", "--json", cwd=repo).returncode, 0,
+                 "third recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "third admission changes the manifest hash")
+    # Try to run against the changed suite (should fail with suite-changed)
+    stale = run("suite", "run", "broken", "--agent", "noop", "--json",
+                cwd=repo)
+    checks.equal(stale.returncode, 2, "a grown suite invalidates the baseline")
+    checks.equal(json_out(stale)["reason"], "suite-changed",
+                 "named: suite-changed")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
