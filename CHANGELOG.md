@@ -16,6 +16,14 @@ lints clean today can fail on the next minor, and this file is where that is rec
   the verdict. `.prompire/**` is always inside the boundary, so the store never
   trips a later scope check.
 - `prompire suite add <run>`: promote a recorded run into a pinned suite fixture, but only when its acceptance fails at the pinned base and passes with the recorded patch — a task already green at base is rejected by name (`green-at-base`). The suite manifest is versioned and content-hashed and declares an explicit never-tuned reserve slice.
+- `prompire suite run <candidate>`: replay every admitted fixture from its
+  pinned bundle through the bench machinery and print a comparison against a
+  stored baseline (`--as-baseline` stores one), sliced by acceptance, scope
+  and gamed, with the never-tuned reserve slice as its own block. The output
+  is always a diff between two result sets — a run with no baseline is
+  refused, and a run never changes the manifest or the reserve membership.
+  Deterministic candidates `patch` and `noop` replay for free; `claude`,
+  `codex` and `antigravity` replay live.
 
 ## 0.11.0 — 2026-08-03
 
