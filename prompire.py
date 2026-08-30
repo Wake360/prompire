@@ -22,6 +22,7 @@ from brief_common import (ACCEPTANCE_KEYS, DRAFT_LEDGER, DRAFT_MARKER, as_list,
                           glob_re, norm_path, utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
 import suite as suite_store
+import suite_run as suite_replay
 from suite import RUNS_REL
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -1204,6 +1205,18 @@ def suite_add(args, extra):
     return suite_store.add(root, args.run, args.reserve, args.json)
 
 
+def suite_run_cmd(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra),
+                              args.json)
+    try:
+        root = repo_root(pathlib.Path(".").resolve())
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
+    return suite_replay.run(root, args.candidate, args.variant, args.agent,
+                            args.as_baseline, args.json)
+
+
 def close(args, extra):
     if extra:
         return report_refusal("unrecognized arguments: " + " ".join(extra))
@@ -1332,6 +1345,24 @@ def build_parser():
                                   "reserve slice")
     suite_added.add_argument("--json", action="store_true")
     suite_added.set_defaults(handler=suite_add)
+
+    suite_ran = suite_actions.add_parser(
+        "run", help="replay the admitted suite with a candidate and diff it "
+                    "against the stored baseline")
+    suite_ran.add_argument("candidate",
+                           help="a name for this result set, e.g. current-claude")
+    suite_ran.add_argument("--variant", default="current",
+                           help="prompt variant from bench/variants.py")
+    suite_ran.add_argument("--agent", default="patch",
+                           help="patch (apply the pinned fix), noop (change "
+                                "nothing), scripted:<behavior>, claude, codex "
+                                "or antigravity")
+    suite_ran.add_argument("--as-baseline", action="store_true",
+                           dest="as_baseline",
+                           help="store this result set as the baseline "
+                                "instead of comparing")
+    suite_ran.add_argument("--json", action="store_true")
+    suite_ran.set_defaults(handler=suite_run_cmd)
 
     closed = commands.add_parser(
         "close", help="disarm the guard after review; the disarm is recorded")

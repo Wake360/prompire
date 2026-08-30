@@ -61,7 +61,7 @@ def run_with_replaced_tools(args, replacements):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-tools-") as tmp:
         tool_root = pathlib.Path(tmp)
         for name in ("prompire.py", "check_scope.py", "brief_common.py",
-                     "suite.py", "baseline.py"):
+                     "suite.py", "suite_run.py", "baseline.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         for name, body in replacements.items():
             (tool_root / name).write_text(body, encoding="utf-8")
@@ -2218,6 +2218,67 @@ def _(repo, checks):
     checks.equal(result.stderr.strip(), "", "no traceback reaches stderr")
 
 
+def admitted_pair(repo):
+    """A 2-fixture suite from one flip: same task recorded twice, first
+    admission main, second --reserve. Returns (main_id, reserve_id)."""
+    path = flip_brief(repo)
+    if run("prepare", path).returncode != 0:
+        raise AssertionError("prepare failed")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    ids = []
+    for extra in ((), ("--reserve",)):
+        if run("verify", path, "--record", "--json").returncode != 0:
+            raise AssertionError("verify --record failed")
+        added = run("suite", "add", "last", *extra, "--json", cwd=repo)
+        if added.returncode != 0:
+            raise AssertionError(f"suite add failed: {added.stdout}{added.stderr}")
+        ids.append(json_out(added)["fixture"])
+    return tuple(ids)
+
+
+@case("suite run: two candidates over one suite produce a named slice diff")
+def _(repo, checks):
+    main_id, reserve_id = admitted_pair(repo)
+    stored = run("suite", "run", "fixed", "--agent", "patch",
+                 "--as-baseline", "--json", cwd=repo)
+    checks.equal(stored.returncode, 0, "baseline run exit")
+    base_data = json_out(stored)
+    checks.equal(base_data["status"], "baseline-stored", "baseline status")
+    baseline_file = (pathlib.Path(repo) / ".prompire" / "suite"
+                     / "baseline.json")
+    checks.ok(baseline_file.is_file(), "baseline result set stored")
+    saved = json.loads(baseline_file.read_text(encoding="utf-8"))
+    checks.equal(saved["candidate"], "fixed", "baseline names its candidate")
+    checks.ok(set(saved["outcomes"]) == {main_id, reserve_id},
+              "baseline holds one outcome per fixture")
+    result = run("suite", "run", "broken", "--agent", "noop", "--json",
+                 cwd=repo)
+    checks.equal(result.returncode, 0, "comparison run exit")
+    data = json_out(result)
+    checks.equal(data["status"], "compared", "compared status")
+    checks.ok("main.acceptance" in data["moved"],
+              "the diff names the moved main acceptance slice")
+    checks.ok("reserve.acceptance" in data["moved"],
+              "the diff names the moved reserve acceptance slice")
+    checks.equal(data["fixtures"][main_id]["baseline"], "ok",
+                 "baseline mark: patch candidate solves the fixture")
+    checks.equal(data["fixtures"][main_id]["candidate"], "FAIL",
+                 "candidate mark: noop candidate leaves acceptance red")
+    checks.equal(data["fixtures"][reserve_id]["reserve"], True,
+                 "the reserve fixture is labeled")
+    checks.equal(data["fixtures"][main_id]["reserve"], False,
+                 "the main fixture is not")
+    slice_ = data["slices"]["main"]["acceptance"]
+    checks.equal(slice_["regressed"], [main_id],
+                 "the moved slice names the fixture that moved")
+    human = run("suite", "run", "broken", "--agent", "noop", cwd=repo)
+    checks.equal(human.returncode, 0, "human-mode comparison exit")
+    checks.ok("moved: " in human.stdout and "main.acceptance" in human.stdout,
+              "human output names the moved slices")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
@@ -2543,7 +2604,7 @@ def _(repo, checks):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-bare-") as tmp:
         tool_root = pathlib.Path(tmp)
         for name in ("prompire.py", "check_scope.py", "brief_common.py",
-                     "suite.py", "baseline.py"):
+                     "suite.py", "suite_run.py", "baseline.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         result = subprocess.run(
             [sys.executable, "-c", probe],

@@ -89,6 +89,19 @@ def check_prepare_rejects_unlintable(tmp):
     check("prepare() refuses a task brief that lint_brief.py rejects", ok, detail)
 
 
+def check_measure_brief_rel(tmp):
+    task = sorted(TASKS.glob("*.yaml"))[0]
+    repo, brief = bench_run.prepare(task, pathlib.Path(tmp) / "brief-rel")
+    other = repo / ".prompire" / "other-name.yaml"
+    shutil.copy(brief, other)
+    base = str(load_brief(str(brief)).get("base_rev"))
+    default = bench_run.measure(repo, base)
+    renamed = bench_run.measure(repo, base,
+                                brief_rel=".prompire/other-name.yaml")
+    check("measure reads the brief at brief_rel",
+          renamed["acceptance"] == default["acceptance"])
+
+
 def check_dirty_rev():
     """A rev recorded off a dirty tree does not identify the code that ran: two rows
     can share a rev and a variant name and still be different prompts. prompire_rev()
@@ -1282,6 +1295,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
         check_prepare_rejects_unlintable(tmp)
+        check_measure_brief_rel(tmp)
         check_cli(tmp)
         check_compile_harness(tmp)
     check_dirty_rev()
