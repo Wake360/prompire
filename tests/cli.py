@@ -2312,6 +2312,26 @@ def _(repo, checks):
         checks.ok(field in outcome, f"bench field {field} is copied through")
 
 
+@case("suite run: an identical candidate against its own baseline moves no slice")
+def _(repo, checks):
+    admitted_pair(repo)
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    result = run("suite", "run", "fixed", "--agent", "patch", "--json",
+                 cwd=repo)
+    checks.equal(result.returncode, 0, "replay exit")
+    data = json_out(result)
+    checks.equal(data["moved"], [], "no slice movement")
+    for block in ("main", "reserve"):
+        for name in ("acceptance", "scope", "gamed"):
+            entry = data["slices"][block][name]
+            checks.equal(entry["regressed"], [], f"{block}.{name} regressed empty")
+            checks.equal(entry["improved"], [], f"{block}.{name} improved empty")
+    human = run("suite", "run", "fixed", "--agent", "patch", cwd=repo)
+    checks.ok("no slice movement" in human.stdout,
+              "human output states the absence, not an empty list")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
