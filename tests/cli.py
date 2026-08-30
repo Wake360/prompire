@@ -2369,6 +2369,37 @@ def _(repo, checks):
                  "named: suite-changed")
 
 
+@case("suite run: an errored fixture is ERR and unmeasured, never movement")
+def _(repo, checks):
+    main_id, reserve_id = admitted_pair(repo)
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    bad_variant = run("suite", "run", "cand", "--agent", "scripted:good",
+                      "--variant", "nope", "--json", cwd=repo)
+    checks.equal(bad_variant.returncode, 2, "unknown variant is a refusal")
+    checks.equal(json_out(bad_variant)["reason"], "unknown-variant",
+                 "named: unknown-variant")
+    result = run("suite", "run", "delegated", "--agent", "scripted:good",
+                 "--json", cwd=repo)
+    checks.equal(result.returncode, 1,
+                 "a comparison with errored fixtures renders and exits 1")
+    data = json_out(result)
+    checks.equal(data["status"], "compared", "the comparison still renders")
+    checks.equal(sorted(data["errors"]), sorted([main_id, reserve_id]),
+                 "both fixtures errored: no scripted behavior for a run id")
+    checks.equal(data["fixtures"][main_id]["candidate"], "ERR",
+                 "an errored replay is marked ERR")
+    checks.equal(data["moved"], [],
+                 "a run that never happened moves no slice")
+    for block in ("main", "reserve"):
+        checks.ok(data["slices"][block]["acceptance"]["unmeasured"],
+                  f"{block} errored fixtures land in unmeasured")
+    dump = (pathlib.Path(repo) / ".prompire" / "suite" / "results"
+            / "delegated.json")
+    outcome = json.loads(dump.read_text(encoding="utf-8"))["outcomes"][main_id]
+    checks.ok(outcome.get("error"), "the dump records why the fixture errored")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
