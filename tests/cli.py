@@ -2400,6 +2400,46 @@ def _(repo, checks):
     checks.ok(outcome.get("error"), "the dump records why the fixture errored")
 
 
+@case("suite run: a corrupt or malformed stored baseline is a refusal")
+def _(repo, checks):
+    admitted_pair(repo)
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    results_dir = pathlib.Path(repo) / ".prompire" / "suite" / "results"
+    shutil.rmtree(results_dir)
+    baseline_file = (pathlib.Path(repo) / ".prompire" / "suite"
+                     / "baseline.json")
+
+    baseline_file.write_bytes(b"\xff\xfe not json")
+    garbage = run("suite", "run", "cand", "--agent", "patch", "--json",
+                  cwd=repo)
+    checks.equal(garbage.returncode, 2, "a garbage baseline file is a refusal")
+    checks.equal(json_out(garbage)["reason"], "no-baseline",
+                 "named: no-baseline")
+    checks.equal(garbage.stderr.strip(), "", "no traceback reaches stderr")
+    checks.ok(not results_dir.exists() or not any(results_dir.iterdir()),
+              "a refused run executes no fixture and dumps nothing")
+
+    baseline_file.write_text(json.dumps({"outcomes": {}}), encoding="utf-8")
+    shaped = run("suite", "run", "cand", "--agent", "patch", "--json",
+                 cwd=repo)
+    checks.equal(shaped.returncode, 2,
+                 "a baseline missing agent/content_sha256 is refused too")
+    checks.equal(json_out(shaped)["reason"], "no-baseline", "named: no-baseline")
+    checks.ok(not results_dir.exists() or not any(results_dir.iterdir()),
+              "still no fixture executed")
+
+
+@case("suite run refuses an ablation variant bench cannot replay faithfully")
+def _(repo, checks):
+    admitted_pair(repo)
+    result = run("suite", "run", "cand", "--agent", "patch", "--variant",
+                 "bare", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "an unreplayable variant is a refusal")
+    checks.equal(json_out(result)["reason"], "unreplayable-variant",
+                 "named: unreplayable-variant")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)

@@ -9,6 +9,8 @@ suite membership, and the reserve slice is a report block, not a tuning input.
 
 Exit 0 = comparison rendered or baseline stored, every fixture measured;
 1 = rendered/stored but at least one fixture errored; 2 = refusal, nothing ran.
+Refusal reasons: bad-candidate, unknown-agent, unknown-variant,
+unreplayable-variant, bench-unavailable, no-suite, no-baseline, suite-changed.
 """
 import json
 import os
@@ -56,8 +58,27 @@ def load_manifest(root):
         raise Rejection("no-suite", f"{MANIFEST_REL} does not parse: {exc}")
     if (not isinstance(data, dict) or not isinstance(data.get("fixtures"), list)
             or not isinstance(data.get("reserve"), list)
-            or not data["fixtures"]):
-        raise Rejection("no-suite", f"{MANIFEST_REL} holds no admitted fixtures")
+            or not data["fixtures"]
+            or not isinstance(data.get("suite_version"), int)
+            or not isinstance(data.get("content_sha256"), str)):
+        raise Rejection("no-suite", f"{MANIFEST_REL} is malformed or holds no "
+                        "admitted fixtures")
+    return data
+
+
+def load_baseline(path):
+    """Same shape guard as load_manifest: a stored baseline is read back as a
+    dict with outcomes/agent/content_sha256 all present, or refused by name —
+    never a raw traceback from a hand-edited or truncated file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise Rejection("no-baseline", f"{BASELINE_REL} does not parse: {exc}; "
+                        "re-run `prompire suite run <candidate> --as-baseline`")
+    if (not isinstance(data, dict) or not isinstance(data.get("outcomes"), dict)
+            or "agent" not in data or "content_sha256" not in data):
+        raise Rejection("no-baseline", f"{BASELINE_REL} is malformed; re-run "
+                        "`prompire suite run <candidate> --as-baseline`")
     return data
 
 
@@ -186,11 +207,11 @@ def compare(baseline, current, reserve_ids, bench_report):
             entry = {"baseline": 0, "candidate": 0,
                      "regressed": [], "improved": [], "unmeasured": []}
             for i in block_ids:
-                b = baseline["outcomes"].get(i) or {"error": "absent"}
-                c = current["outcomes"].get(i) or {"error": "absent"}
-                if b.get("error") or c.get("error"):
+                marks = fixtures[i]
+                if marks["baseline"] == "ERR" or marks["candidate"] == "ERR":
                     entry["unmeasured"].append(i)
                     continue
+                b, c = baseline["outcomes"][i], current["outcomes"][i]
                 was, now = good(b), good(c)
                 entry["baseline"] += was
                 entry["candidate"] += now
@@ -272,6 +293,11 @@ def run(root, candidate, variant, agent, as_baseline, json_mode):
             raise Rejection("unknown-variant",
                             f"unknown variant {variant!r} — one of: "
                             + ", ".join(sorted(bench_run.VARIANTS)))
+        if variant in bench_run.BRIEF_EDITS or variant in bench_run.REPO_FILES:
+            raise Rejection("unreplayable-variant",
+                            f"variant {variant!r} applies brief edits or "
+                            "plants repo files during a bench run that a "
+                            "pinned-fixture replay cannot reproduce faithfully")
         manifest = load_manifest(root)
         baseline = None
         if not as_baseline:
@@ -281,7 +307,7 @@ def run(root, candidate, variant, agent, as_baseline, json_mode):
                                 f"no stored baseline at {BASELINE_REL}; run "
                                 "`prompire suite run <candidate> --as-baseline`"
                                 " first — a lone scorecard is not a comparison")
-            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+            baseline = load_baseline(baseline_path)
             if baseline.get("content_sha256") != manifest["content_sha256"]:
                 raise Rejection("suite-changed",
                                 "the stored baseline was measured over a "
