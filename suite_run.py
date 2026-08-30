@@ -240,8 +240,8 @@ def _render_compared(payload):
 def _report(payload, json_mode):
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False))
-    elif payload["status"] == "refused":
-        print(f"refused: {payload['reason']} — {payload['message']}")
+    elif payload["status"] == "rejected":
+        print(f"rejected: {payload['reason']} — {payload['message']}")
     elif payload["status"] == "baseline-stored":
         n = payload["fixture_count"]
         line = (f"baseline stored: {payload['candidate']['id']} over suite "
@@ -289,7 +289,7 @@ def run(root, candidate, variant, agent, as_baseline, json_mode):
                                 "differs); re-run --as-baseline over the "
                                 "current suite")
     except Rejection as exc:
-        _report({"status": "refused", "reason": exc.reason,
+        _report({"status": "rejected", "reason": exc.reason,
                  "message": str(exc)}, json_mode)
         return exc.code
     outcomes, errors = execute(root, manifest, variant, agent, bench_run)
