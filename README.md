@@ -1,6 +1,10 @@
 # Prompire
 
-A verifiable contract for work you delegate to a coding agent.
+A pinned contract for work you delegate to a coding agent — and a bench built
+from the runs that contract has already graded. Prompire reads its verdicts from
+the real git diff, without the agent's cooperation; admits into its suite only
+fixtures that can fail; and reports every suite run as a comparison against a
+stored baseline, not a score for one diff.
 
 Before the work starts, the request is compiled into a brief that can be *checked*: a
 bounded `scope`, a `forbidden` list, acceptance criteria that are commands rather than
@@ -204,6 +208,26 @@ that you read the tombstone log and accept what it says. Re-run with the
 printed `--ack-disarms` digest and the verdict is `clean` — and the next
 disarm changes the digest, so an acknowledgement never carries forward.
 
+## From one verdict to a suite
+
+A verdict worth keeping is worth replaying. `prompire verify --record` appends
+each verdict to `.prompire/runs.jsonl` — the same scope and acceptance objects
+`--json` prints, under a small envelope carrying the base revision and a digest
+of the diff it graded. `prompire suite add <run>` promotes a recorded run into a
+pinned fixture, and only a run that discriminates is admitted: its acceptance
+must fail at the pinned base and pass with the recorded patch, so a task already
+green at base is rejected by name (`green-at-base`).
+
+`prompire suite run <candidate>` replays every admitted fixture — `patch` and
+`noop` deterministically, `claude`, `codex` and `antigravity` live — and prints
+a comparison against a stored baseline (`--as-baseline` stores the first one),
+sliced by acceptance, scope and gamed. The manifest declares a reserve slice
+that is reported in its own block and never used to tune; a replay changes no
+fixture and no membership. The output is always a diff between two result sets —
+did this agent, model or brief do better than that one on your own recorded
+tasks — never a score for a single diff. The record envelope, the admission and
+refusal vocabularies and the exit codes: `references/suite.md`.
+
 ## What a verify verdict means
 
 Every `prompire verify` run leads with one line:
@@ -287,6 +311,12 @@ acceptance criteria, not the wording around them, that carried the outcome. It d
 judge whether the work is good — only whether it stayed inside what was declared, and
 whether what was declared was pinned before the work began.
 
+It is not a prompt optimizer or a context compiler either: that thesis was
+tested against preregistered gates and killed, and the record of the kill lives
+in `docs/research/`. And the suite is not a public leaderboard, an LLM judge, or
+drift monitoring — it replays your own admitted fixtures and reports scope,
+acceptance and test integrity, nothing more.
+
 ## Documentation
 
 - `SKILL.md` — the workflow, the brief shape, the hard rules.
@@ -298,6 +328,8 @@ whether what was declared was pinned before the work began.
   and how a campaign is read.
 - `references/ci.md` — the GitHub Action: what the base means in CI, and what the
   Action cannot check.
+- `references/suite.md` — recorded runs, the suite admission gate, and replaying
+  a candidate against a baseline.
 - `references/schema.md` — every field, every edge case.
 - `references/rules.md` — the sixteen lint rules and what each can and cannot catch.
 - `references/grounding.md` — where each rule comes from.

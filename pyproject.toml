@@ -43,6 +43,7 @@ packages = ["prompire"]
   "references/rendering.md",
   "references/rules.md",
   "references/schema.md",
+  "references/suite.md",
   "references/threat-model.md",
 ]
 "share/prompire/examples" = [

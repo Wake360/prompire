@@ -103,6 +103,15 @@ Substitute it; do not assume one host's path.
 | `check_scope.py brief.yaml` | did the agent stay inside the boundary? (run after) |
 | `render_brief.py brief.yaml --target X` | the prompt and the checklist |
 
+## Recording and the suite
+
+`prompire verify --record` keeps each verdict as a row in `.prompire/runs.jsonl`.
+`prompire suite add <run>` promotes a recorded run into a pinned fixture, admitting
+only one whose acceptance fails at the pinned base and passes with the recorded
+patch. `prompire suite run <candidate>` replays the admitted suite and prints a
+comparison against a stored baseline — semantics, refusal names and exit codes in
+`references/suite.md`.
+
 ## When not to use this
 
 One-file edits, a bug you can describe in a sentence, anything you'd finish faster than
