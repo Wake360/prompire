@@ -25,6 +25,12 @@ lints clean today can fail on the next minor, and this file is where that is rec
   Deterministic candidates `patch` and `noop` replay for free; `claude`,
   `codex` and `antigravity` replay live.
 
+### Fixed
+
+- Wheels shipped without `compile_task.py` and `compile_prompts.py`: the two
+  modules were never added to `py-modules`, so `prompire compile` from an
+  installed 0.12.0 CLI crashed on ImportError. A repo checkout was unaffected.
+
 ## 0.12.0 — 2026-08-03
 
 **Compiler v2: the five defects E1 reproduced, closed. No new capability — the

@@ -35,6 +35,8 @@ py-modules = [
   "baseline",
   "brief_common",
   "check_scope",
+  "compile_prompts",
+  "compile_task",
   "hook_policy",
   "hook_scope_guard",
   "hook_copilot_guard",
