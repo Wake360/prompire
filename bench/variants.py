@@ -11,7 +11,7 @@ import pathlib
 import sys
 
 SKILL = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 from brief_common import as_list, glob_re, norm_path
 from render_brief import (autonomy_sentence, render_durable, render_prompt,

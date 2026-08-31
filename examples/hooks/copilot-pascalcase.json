@@ -5,8 +5,8 @@
       {
         "type": "command",
         "matcher": "Edit|Write",
-        "bash": "python3 \"$HOME/.copilot/skills/prompire/hook_copilot_guard.py\"",
-        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\hook_copilot_guard.py\"",
+        "bash": "python3 \"$HOME/.copilot/skills/prompire/prompire/hook_copilot_guard.py\"",
+        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\prompire\\hook_copilot_guard.py\"",
         "timeoutSec": 15
       }
     ]

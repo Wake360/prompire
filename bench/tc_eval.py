@@ -35,7 +35,7 @@ import time
 import yaml
 
 SKILL = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 from brief_common import DRAFT_LEDGER, DRAFT_MARKER  # noqa: E402
 
@@ -91,7 +91,7 @@ def blind_confirm(brief_path):
 
 def acceptance_arm(tree, brief_rel):
     """pass/fail/error for the compiled acceptance run in this tree."""
-    r = run([sys.executable, str(SKILL / "verify_acceptance.py"),
+    r = run([sys.executable, str(SKILL / "prompire" / "verify_acceptance.py"),
              brief_rel, "--json"], cwd=str(tree), timeout=900)
     try:
         data = json.loads(r.stdout)
@@ -132,7 +132,7 @@ def compile_one(task, workdir, role_args):
     workspace = workdir / "workspace"
     clone_at(task["repo"], task["rev"], workdir.parent / "repo-cache", workspace)
     started = time.monotonic()
-    r = run([sys.executable, str(SKILL / "prompire.py"), "compile",
+    r = run([sys.executable, str(SKILL / "prompire" / "cli.py"), "compile",
              task["request"], "--slug", "task", "--json"] + role_args,
             cwd=str(workspace), timeout=COMPILE_TIMEOUT)
     seconds = round(time.monotonic() - started, 1)
@@ -149,11 +149,11 @@ def compile_one(task, workdir, role_args):
 
 
 def measure_baseline(tree, brief_rel):
-    r = run([sys.executable, str(SKILL / "baseline.py"), brief_rel, "--write"],
+    r = run([sys.executable, str(SKILL / "prompire" / "baseline.py"), brief_rel, "--write"],
             cwd=str(tree), timeout=900)
     if r.returncode:
         return f"baseline exit {r.returncode}: " + (r.stdout + r.stderr)[-300:]
-    r = run([sys.executable, str(SKILL / "lint_brief.py"), brief_rel, "--json"],
+    r = run([sys.executable, str(SKILL / "prompire" / "lint_brief.py"), brief_rel, "--json"],
             cwd=str(tree), timeout=300)
     try:
         lint = json.loads(r.stdout)
@@ -179,7 +179,7 @@ def quality_row(task, compiled, workspace, workdir, spec_dir):
     if failure:
         row["quality_reason"] = failure
         return row
-    words = run([sys.executable, str(SKILL / "render_brief.py"),
+    words = run([sys.executable, str(SKILL / "prompire" / "render_brief.py"),
                  ".prompire/task.yaml", "--target", "generic", "--words"],
                 cwd=str(workspace))
     row["render_exit"] = words.returncode

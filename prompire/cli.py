@@ -18,6 +18,8 @@ import uuid
 
 import yaml
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
 from brief_common import (ACCEPTANCE_KEYS, DRAFT_LEDGER, DRAFT_MARKER, as_list,
                           glob_re, norm_path, utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
@@ -1157,7 +1159,7 @@ def demo(args, extra):
                         *command], check=True, capture_output=True)
 
     def cli(*command):
-        return subprocess.run([sys.executable, str(HERE / "prompire.py"), *command],
+        return subprocess.run([sys.executable, str(HERE / "cli.py"), *command],
                               cwd=str(root), capture_output=True,
                               encoding="utf-8", errors="replace")
 
@@ -1412,10 +1414,10 @@ def status(args, extra):
 
 def cli_version():
     """A checkout's VERSION file wins over installed metadata: `python3
-    prompire.py --version` in a checkout must report the checkout, not
+    prompire/cli.py --version` in a checkout must report the checkout, not
     whatever wheel is installed beside it. The wheel ships no VERSION, so an
     installed CLI reads its own package metadata instead."""
-    version_file = HERE / "VERSION"
+    version_file = HERE.parent / "VERSION"
     if version_file.is_file():
         return version_file.read_text(encoding="utf-8").strip()
     return importlib.metadata.version("prompire")
@@ -1423,7 +1425,7 @@ def cli_version():
 
 class _VersionAction(argparse.Action):
     """The version is computed only when --version is asked for: a bare
-    prompire.py copy with no VERSION beside it and no installed distribution
+    cli.py copy with no VERSION beside it and no installed distribution
     must still run every other command."""
 
     def __call__(self, parser, namespace, values, option_string=None):

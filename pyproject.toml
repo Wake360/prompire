@@ -30,23 +30,7 @@ Changelog = "https://github.com/Wake360/prompire/blob/master/CHANGELOG.md"
 prompire = "prompire:entrypoint"
 
 [tool.setuptools]
-py-modules = [
-  "prompire",
-  "baseline",
-  "brief_common",
-  "check_scope",
-  "compile_prompts",
-  "compile_task",
-  "hook_policy",
-  "hook_scope_guard",
-  "hook_copilot_guard",
-  "hook_antigravity_guard",
-  "lint_brief",
-  "render_brief",
-  "suite",
-  "suite_run",
-  "verify_acceptance",
-]
+packages = ["prompire"]
 
 [tool.setuptools.data-files]
 "share/prompire" = ["SKILL.md"]

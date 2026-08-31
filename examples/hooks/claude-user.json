@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/skills/prompire/hook_scope_guard.py"
+            "command": "python3 ~/.claude/skills/prompire/prompire/hook_scope_guard.py"
           }
         ]
       }

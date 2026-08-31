@@ -25,7 +25,7 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 SKILL = HERE.parent
 sys.path.insert(0, str(SKILL / "bench"))
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 import yaml
 
@@ -227,7 +227,7 @@ def check_state_notes_sync():
     """STATE_NOTES (bench/variants.py) must name every literal short label
     render_brief.state_of can return, or no_state silently stops ablating a
     branch the renderer grew after STATE_NOTES was last updated."""
-    tree = ast.parse((SKILL / "render_brief.py").read_text(encoding="utf-8"))
+    tree = ast.parse((SKILL / "prompire" / "render_brief.py").read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "state_of")
     labels = {n.value.elts[0].value for n in ast.walk(fn)

@@ -26,7 +26,7 @@ import time
 import yaml
 
 SKILL = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 sys.path.insert(0, str(SKILL / "tests"))
 sys.path.insert(0, str(SKILL / "bench"))
 
@@ -42,7 +42,7 @@ GUARDED = (BRIEF_REL, ".prompire/ACTIVE")
 
 
 def tool(repo, name, *args):
-    return subprocess.run([sys.executable, str(SKILL / name), *args],
+    return subprocess.run([sys.executable, str(SKILL / "prompire" / name), *args],
                           cwd=str(repo), capture_output=True, text=True,
                           encoding="utf-8")
 
@@ -194,7 +194,7 @@ def run_agent(spec, prompt, repo, task):
         return codex_stats(r.returncode, r.stdout)
     if spec == "antigravity":
         # agy cannot read the prompt from stdin and does not treat an untrusted cwd
-        # as a workspace — the same two facts DRAFT_AGENTS in prompire.py records —
+        # as a workspace — the same two facts DRAFT_AGENTS in prompire/cli.py records —
         # so the prompt is argv and the cell is added via --add-dir. --mode
         # accept-edits is the analogue of claude's acceptEdits; never raise it to
         # --dangerously-skip-permissions.

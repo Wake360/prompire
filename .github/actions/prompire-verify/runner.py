@@ -22,7 +22,7 @@ import sys
 
 HOME = pathlib.Path(os.environ.get("PROMPIRE_HOME")
                     or pathlib.Path(__file__).resolve().parents[3])
-sys.path.insert(0, str(HOME))
+sys.path.insert(0, str(HOME / "prompire"))
 
 try:
     from brief_common import utf8_stdio
@@ -284,13 +284,13 @@ def run_scope(brief, base):
     if flag("PROMPIRE_STRICT"):
         argv.append("--strict")
     argv += ["--base", base]
-    return subprocess.run([sys.executable, str(HOME / "check_scope.py"), *argv],
+    return subprocess.run([sys.executable, str(HOME / "prompire" / "check_scope.py"), *argv],
                           capture_output=True, encoding="utf-8", errors="replace")
 
 
 def run_acceptance(brief):
     return subprocess.run(
-        [sys.executable, str(HOME / "verify_acceptance.py"), str(brief), "--json"],
+        [sys.executable, str(HOME / "prompire" / "verify_acceptance.py"), str(brief), "--json"],
         capture_output=True, encoding="utf-8", errors="replace")
 
 

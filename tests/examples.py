@@ -19,7 +19,7 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 SKILL = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 import fixtures  # noqa: E402
 
@@ -156,7 +156,7 @@ def measure(repo, name, body):
     p = pathlib.Path(repo) / ".prompire" / f"{name}.yaml"
     p.parent.mkdir(exist_ok=True)
     p.write_text(body.lstrip(), encoding="utf-8")
-    r = subprocess.run([sys.executable, str(SKILL / "baseline.py"), str(p), "--json"],
+    r = subprocess.run([sys.executable, str(SKILL / "prompire" / "baseline.py"), str(p), "--json"],
                        capture_output=True, text=True, encoding="utf-8")
     if r.returncode == 2:
         raise AssertionError(f"{name}: baseline refused: {r.stdout}{r.stderr}")
@@ -204,7 +204,7 @@ def main():
             if statuses(committed) != statuses(fresh):
                 problems.append(f"recorded {statuses(committed)} but a fresh measurement "
                                 f"gives {statuses(fresh)}")
-            r = subprocess.run([sys.executable, str(SKILL / "lint_brief.py"), str(target),
+            r = subprocess.run([sys.executable, str(SKILL / "prompire" / "lint_brief.py"), str(target),
                                 "--json"], capture_output=True, text=True, encoding="utf-8")
             lr = json.loads(r.stdout)
             if lr["errors"] or lr["warnings"]:

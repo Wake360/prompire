@@ -127,7 +127,7 @@ the brief. This is for work you're delegating and won't watch.
 
 3. **Measure the baseline:**
    ```
-   python3 $PROMPIRE/baseline.py .prompire/<slug>.yaml --write
+   python3 $PROMPIRE/prompire/baseline.py .prompire/<slug>.yaml --write
    ```
    It runs each command on HEAD, refuses the ones that are destructive, interactive,
    repo-writing or environment-dependent, and appends the `baseline:` block **and the
@@ -142,7 +142,7 @@ the brief. This is for work you're delegating and won't watch.
 
 4. **Lint it:**
    ```
-   python3 $PROMPIRE/lint_brief.py .prompire/<slug>.yaml
+   python3 $PROMPIRE/prompire/lint_brief.py .prompire/<slug>.yaml
    ```
    Exit 0 = shippable. Fix errors and re-run. Warnings are judgment calls — resolve them
    or say out loud why you're accepting them. Never edit the linter to make a brief pass.
@@ -152,7 +152,7 @@ the brief. This is for work you're delegating and won't watch.
 
 6. **Arm the guard — before the agent starts, not after:**
    ```
-   python3 $PROMPIRE/check_scope.py .prompire/<slug>.yaml --activate
+   python3 $PROMPIRE/prompire/check_scope.py .prompire/<slug>.yaml --activate
    ```
    This is the step that makes the verdict worth anything, and it is the one that is easy
    to skip because nothing fails without it. It copies the brief's `base_rev` and a

@@ -21,7 +21,7 @@ import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
 SKILL = HERE.parent
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 from brief_common import (  # noqa: E402
     ACCEPTANCE_KEYS,
@@ -229,7 +229,7 @@ def cli_problems():
 
 
 def enforced_rule_ids():
-    src = read("lint_brief.py")
+    src = read("prompire/lint_brief.py")
     return sorted({m.group(1) for m in re.finditer(r'(?:err|warn)\(\s*"(B\d+)\s', src)},
                   key=lambda r: int(r[1:]))
 
@@ -340,7 +340,7 @@ def host_problems():
                        "references/rendering.md never describes")
 
     for name in HOOKS:
-        if not (SKILL / name).exists():
+        if not (SKILL / "prompire" / name).exists():
             out.append(f"missing {name}")
         elif name not in hosts:
             out.append(f"{name} ships but references/hosts.md never names it")
@@ -886,7 +886,7 @@ def main():
                         "workflow it documents cannot be followed on that host")
 
     for t in TOOLS:
-        if not (SKILL / t).exists():
+        if not (SKILL / "prompire" / t).exists():
             problems.append(f"missing tool {t}")
     for t in TOOLS[:4]:
         if f"`{t}" not in read("SKILL.md") and t not in read("SKILL.md"):

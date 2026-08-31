@@ -10,7 +10,7 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 SKILL = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 import fixtures  # noqa: E402
 from verify_acceptance import main, verify  # noqa: E402
@@ -33,7 +33,7 @@ def brief(repo, name, body):
 
 
 def run_cli(path, *args):
-    return subprocess.run([sys.executable, str(SKILL / "verify_acceptance.py"),
+    return subprocess.run([sys.executable, str(SKILL / "prompire" / "verify_acceptance.py"),
                            str(path), *args], capture_output=True, text=True,
                           encoding="utf-8", env=ENV)
 
@@ -162,7 +162,7 @@ def test_unreadable_brief_returns_exit_2():
             run_cli(missing, "--json"),
             run_cli(invalid_utf8, "--json"),
             subprocess.run(
-                [sys.executable, str(SKILL / "verify_acceptance.py"), "--json"],
+                [sys.executable, str(SKILL / "prompire" / "verify_acceptance.py"), "--json"],
                 capture_output=True, text=True, encoding="utf-8", env=ENV,
             ),
         )

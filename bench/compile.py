@@ -40,7 +40,7 @@ import time
 import yaml
 
 SKILL = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 sys.path.insert(0, str(SKILL / "tests"))
 sys.path.insert(0, str(SKILL / "bench"))
 
@@ -50,14 +50,14 @@ from behaviors import BEHAVIORS
 from brief_common import (DRAFT_LEDGER, DRAFT_MARKER, acceptance_entries, as_list,
                           effective_transition, glob_re, load_brief,
                           manual_check_entries, norm_cmd, norm_path, utf8_stdio)
-from prompire import DRAFT_KEYS, detect_acceptance
+from cli import DRAFT_KEYS, detect_acceptance
 
 BRIEF_REL = ".prompire/task.yaml"
 MARKER_LINE = re.compile(rf"[ \t]*# {re.escape(DRAFT_MARKER)}[^\n]*")
 
 
 def tool(repo, name, *args):
-    return subprocess.run([sys.executable, str(SKILL / name), *args],
+    return subprocess.run([sys.executable, str(SKILL / "prompire" / name), *args],
                           cwd=str(repo), capture_output=True, text=True,
                           encoding="utf-8", errors="replace")
 
@@ -75,7 +75,7 @@ def covers(pattern, other):
 
 def run_backend(backend, request, repo):
     """Invoke the compiler frontend; returns (draft_json, error)."""
-    argv = [sys.executable, str(SKILL / "prompire.py"), "draft", request, "--json"]
+    argv = [sys.executable, str(SKILL / "prompire" / "cli.py"), "draft", request, "--json"]
     proposal_file = None
     if backend == "gold":
         # The gold brief's proposable fields, through the same gate as any model

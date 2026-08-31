@@ -38,7 +38,7 @@ replaces the other.
 
 `prompire demo` builds a throwaway repo and walks the workflow above through a clean run
 and a caught violation. This is one real run (invoked in this checkout as
-`python3 prompire.py demo`):
+`prompire demo`):
 
 ```
 demo repo: /private/var/folders/45/h3sq302j7z71ff4vs24zlz1c0000gn/T/prompire-demo-46zql2iy

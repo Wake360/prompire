@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.gemini/config/skills/prompire/hook_antigravity_guard.py",
+            "command": "python3 ~/.gemini/config/skills/prompire/prompire/hook_antigravity_guard.py",
             "timeout": 15
           }
         ]

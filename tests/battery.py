@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 
-LINT = pathlib.Path(__file__).resolve().parent.parent / "lint_brief.py"
+LINT = pathlib.Path(__file__).resolve().parent.parent / "prompire" / "lint_brief.py"
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="prompire-cases-"))
 
 # (name, yaml, must_fire_as_error, must_fire_as_warning, must_not_fire_at_all)

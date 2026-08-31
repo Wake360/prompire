@@ -32,7 +32,7 @@ the boundary the guard is supposed to enforce.
 ## What a compiler may propose
 
 Every compiler frontend — the deterministic heuristic, `draft --agent`/`--agent-cmd`,
-and `draft --proposal` — flows through one parser and one serializer in `prompire.py`.
+and `draft --proposal` — flows through one parser and one serializer in `prompire/cli.py`.
 Field by field, the authority classes are:
 
 | class | fields | what enforces it |

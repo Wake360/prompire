@@ -13,12 +13,10 @@ assert data["project"]["requires-python"] == ">=3.11"
 assert data["project"]["scripts"]["prompire"] == "prompire:entrypoint"
 assert data["project"]["dependencies"] == ["PyYAML>=6"]
 
-# Every host adapter in the tree ships in the package, or none should: a pip user
-# reading references/hosts.md must never find that their host's adapter is the one
-# the wheel left out. 0.9.0 shipped without hook_antigravity_guard exactly this way.
-adapters = {p.stem for p in ROOT.glob("hook_*.py")}
-shipped = set(data["tool"]["setuptools"]["py-modules"])
-assert adapters <= shipped, f"adapters missing from py-modules: {adapters - shipped}"
+# The whole source tree ships as one package: a module added later must fail
+# here, not silently stay out of the wheel. 0.9.0 shipped without
+# hook_antigravity_guard and 0.12.0 without the compile modules exactly this way.
+assert data["tool"]["setuptools"]["packages"] == ["prompire"]
 
 # A PyPI page that cannot reach the repository strands the install docs.
 urls = data["project"]["urls"]
@@ -40,7 +38,7 @@ for target, source_dir, pattern in (
     assert sorted(data_files[target]) == expected, (target, expected)
 
 for cmd in (
-    [sys.executable, str(ROOT / "prompire.py"), "--help"],
+    [sys.executable, str(ROOT / "prompire" / "cli.py"), "--help"],
     [sys.executable, "-m", "prompire", "--help"],
 ):
     result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
@@ -99,3 +97,11 @@ with tempfile.TemporaryDirectory() as tmp:
         for f in files:
             member = prefix + target + "/" + pathlib.PurePosixPath(f).name
             assert member in names, f"wheel is missing {member}"
+    # Every tracked module in the package is in the wheel — the check the old
+    # hand-maintained py-modules list could not give.
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "prompire/*.py"],
+        capture_output=True, text=True, encoding="utf-8")
+    assert tracked.returncode == 0, tracked.stderr
+    for module in tracked.stdout.split():
+        assert module in names, f"wheel is missing {module}"

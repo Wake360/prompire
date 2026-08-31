@@ -41,7 +41,7 @@ BANNED = (
 
 def render(example, target):
     # relative path, run from the skill dir: a snapshot must not pin one machine's home
-    r = subprocess.run([sys.executable, "render_brief.py",
+    r = subprocess.run([sys.executable, "prompire/render_brief.py",
                         f"examples/{pathlib.Path(example).name}", "--target", target],
                        capture_output=True, text=True, encoding="utf-8", cwd=str(SKILL))
     if r.returncode == 2:
@@ -106,7 +106,7 @@ def preview_drift_checks():
     today…" (6), so the preview may exceed the real count by at most one word per
     flip — and must never undercount, because undercounting is exactly the E1
     failure: a contract confirmed at length that could not be rendered."""
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     import yaml
     from brief_common import acceptance_entries, effective_transition
     from render_brief import PROMPT_TARGETS, preview_counts, render

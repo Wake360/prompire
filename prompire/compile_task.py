@@ -520,7 +520,7 @@ def compile_request(request, root, slug, agent="claude", role_cmd=None,
                     max_breaker_rounds=2, snapshot_ctx=None, log=print):
     """The full loop. Returns (state, payload)."""
     if snapshot_ctx is None:
-        from prompire import draft_snapshot as snapshot_ctx
+        from cli import draft_snapshot as snapshot_ctx
     meter = Meter()
     argv = role_argv(agent, role_cmd)
     root = pathlib.Path(root)

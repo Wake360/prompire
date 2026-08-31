@@ -18,7 +18,7 @@ import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "prompire"))
 sys.path.insert(0, str(HERE))
 
 import fixtures  # noqa: E402
@@ -228,7 +228,7 @@ def _(repo, c):
     env["FAKE_STATE"] = str(state_file)
     role_cmd = f'"{sys.executable}" "{HERE / "fake_roles.py"}"'
     done = subprocess.run(
-        [sys.executable, str(ROOT / "prompire.py"), "compile",
+        [sys.executable, str(ROOT / "prompire" / "cli.py"), "compile",
          "fix total() so it returns the sum", "--slug", "task",
          "--role-cmd", role_cmd, "--json"],
         cwd=str(repo), capture_output=True, text=True, encoding="utf-8", env=env)
@@ -240,7 +240,7 @@ def _(repo, c):
     c.ok((repo / ".prompire" / "probes" / "task.py").is_file(), "probe written")
     c.ok((repo / ".prompire" / "task.ledger.yaml").is_file(), "ledger written")
     prepared = subprocess.run(
-        [sys.executable, str(ROOT / "prompire.py"), "prepare",
+        [sys.executable, str(ROOT / "prompire" / "cli.py"), "prepare",
          ".prompire/task.yaml"],
         cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     c.equal(prepared.returncode, 0,

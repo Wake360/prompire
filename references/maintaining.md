@@ -6,18 +6,23 @@ Nothing here is needed to *use* the skill. It is for changing it.
 
 ```
 SKILL.md              when to use it, the workflow, the shape, the hard rules
-prompire.py           CLI: prepare, verify, and close
-brief_common.py       schema helpers every tool shares: loading, keys, transitions, globs
-lint_brief.py         is the brief shippable
-baseline.py           measure each criterion on untouched HEAD
-check_scope.py        did the agent stay inside the boundary (run after the agent)
-render_brief.py       prompt and checklist targets
-verify_acceptance.py  run the declared acceptance criteria
 pyproject.toml        package metadata and the `prompire` command
-hook_policy.py        the host-neutral hook core: which paths, which roots, which verdict
-hook_scope_guard.py   Claude Code PreToolUse adapter — stderr + exit 2
-hook_copilot_guard.py GitHub Copilot CLI preToolUse adapter — stdout JSON decision
-hook_antigravity_guard.py  Antigravity CLI PreToolUse adapter — stdout JSON decision
+prompire/             the package — every module the CLI and the hooks run
+  cli.py              CLI: prepare, verify, suite, and close
+  brief_common.py     schema helpers every tool shares: loading, keys, transitions, globs
+  lint_brief.py       is the brief shippable
+  baseline.py         measure each criterion on untouched HEAD
+  check_scope.py      did the agent stay inside the boundary (run after the agent)
+  render_brief.py     prompt and checklist targets
+  verify_acceptance.py  run the declared acceptance criteria
+  suite.py            promote recorded runs into pinned, gate-checked fixtures
+  suite_run.py        replay the admitted suite and diff it against a baseline
+  compile_task.py     experimental `prompire compile` orchestrator (unpromoted)
+  compile_prompts.py  role prompts for the compile loop
+  hook_policy.py      the host-neutral hook core: which paths, which roots, which verdict
+  hook_scope_guard.py Claude Code PreToolUse adapter — stderr + exit 2
+  hook_copilot_guard.py GitHub Copilot CLI preToolUse adapter — stdout JSON decision
+  hook_antigravity_guard.py  Antigravity CLI PreToolUse adapter — stdout JSON decision
 references/
   schema.md           the authoritative field list — one definition per field
   rules.md            what each rule catches, and what it cannot
@@ -25,19 +30,25 @@ references/
   hosts.md            Claude Code and Copilot CLI: install, hooks, failure semantics
   grounding.md        the book passage behind each rule
   maintaining.md      this file
-examples/             five briefs; baselines measured, not written
+examples/             six briefs; baselines measured, not written
   hooks/              hook configurations per hook host; tests/docs.py parses each one
+bench/                the behavioural benchmark and its frozen campaigns
 tests/
   battery.py          adversarial YAML cases: which rule ids fire, as errors or warnings
   e2e.py              real git repos, real commands, real diffs
   examples.py         regenerates and verifies examples/
   golden.py           renderer snapshots + the wording rules
   hook.py             every hook adapter, as subprocesses, on throwaway repos
+  encoding.py         every tool's stdout is utf-8 under a cp1252 console
   verify.py           acceptance verifier integration cases
-  cli.py              prepare, verify, and close integration cases
+  cli.py              prepare, verify, suite, and close integration cases
+  compiler.py         the compile orchestrator against scripted roles
+  bench.py            the bench harness against scripted agents
+  ci.py               the GitHub Action: real repos, runner, annotations
   runner.py           suite timeout, continuation, and timing output
   package.py          installed CLI packaging checks
-  fixtures.py         builds the throwaway repo the last three measure against
+  fixtures.py         builds the throwaway repo the integration suites measure against
+  fake_roles.py       scripted stand-ins for the compile roles
   docs.py             the docs and the code still agree
   run_all.py          all of the above
 ```
@@ -187,6 +198,13 @@ an `ACTIVE.tombstones` recording that a guard was once disarmed. A disarm log a 
 erase is not a log, and `any_disarm()` reads both directory names. The LifeOS mirror is
 carrying seven dogfood briefs under `.prompire/` right now; without these two excludes the
 command above deletes them.
+
+**One-time migration (0.13.0):** the modules moved from the repo root into the
+`prompire/` package, and `rsync --delete` removes the old root-level copies from
+every install on the next sync. Any host hook config still pointing at
+`skills/prompire/hook_*.py` silently stops guarding — re-point each one at
+`skills/prompire/prompire/hook_*.py` (the shapes in `examples/hooks/` are
+already updated) before or immediately after the first sync.
 
 After syncing, run the suite from the destination, not only from the repo — that is what
 proves the install is complete rather than merely recent:

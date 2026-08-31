@@ -35,11 +35,12 @@ def _bench():
     """bench/run.py and bench/report.py, importable only beside a source
     checkout — the wheel ships suite_run.py but not bench/, so a missing bench
     is a named refusal, not an ImportError traceback."""
-    if not (HERE / "bench" / "run.py").is_file():
+    root = HERE.parent
+    if not (root / "bench" / "run.py").is_file():
         raise Rejection("bench-unavailable",
                         "suite run replays through bench/run.py, which is not "
                         "beside this install; run from a Prompire checkout")
-    for p in (str(HERE / "bench"), str(HERE / "tests"), str(HERE)):
+    for p in (str(root / "bench"), str(root / "tests"), str(HERE)):
         if p not in sys.path:
             sys.path.insert(0, p)
     import report as bench_report

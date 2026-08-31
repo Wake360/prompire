@@ -57,7 +57,7 @@ class Checks:
 
 
 def tool(name, *args):
-    r = subprocess.run([sys.executable, str(SKILL / name)] + [str(a) for a in args],
+    r = subprocess.run([sys.executable, str(SKILL / "prompire" / name)] + [str(a) for a in args],
                        capture_output=True, text=True, encoding="utf-8")
     return r
 
@@ -85,7 +85,7 @@ def cli(repo, *args, env=None):
     """Run the prompire CLI itself inside the fixture repo — P3's behavior lives
     in the orchestration, not in any one child tool. `env` is merged over the
     caller's environment and inherited by the child tools prompire spawns."""
-    return subprocess.run([sys.executable, str(SKILL / "prompire.py"), *map(str, args)],
+    return subprocess.run([sys.executable, str(SKILL / "prompire" / "cli.py"), *map(str, args)],
                           cwd=str(repo), capture_output=True, text=True,
                           encoding="utf-8",
                           env=None if env is None else {**os.environ, **env})
@@ -121,7 +121,7 @@ def measured(repo, name, body):
     p = brief(repo, name, body)
     r = base(p)
     data = json.loads(r.stdout)
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     import baseline as bl
     block = bl.render_block(data["results"], data["base_rev"])
     p.write_text(p.read_text(encoding="utf-8").rstrip("\n") + "\n" + block + "\n",
@@ -362,7 +362,7 @@ def _(repo, c):
 
     def measure_with_env(name, body):
         p = brief(repo, name, body)
-        r = subprocess.run([sys.executable, str(SKILL / "baseline.py"), str(p),
+        r = subprocess.run([sys.executable, str(SKILL / "prompire" / "baseline.py"), str(p),
                             "--json"], capture_output=True, text=True,
                            encoding="utf-8", env=env)
         return r, (json.loads(r.stdout) if r.stdout.strip().startswith("{") else {})
@@ -1015,7 +1015,7 @@ class TestTotal(unittest.TestCase):
 @case("shared-boundary-verdicts")
 def _(repo, c):
     """The hook and check_scope.py must read the same boundary from the same brief."""
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     from brief_common import boundary_verdict, tests_verdict
     b = {"scope": ["src/**"], "forbidden": ["src/secret.py", "docs/**"],
          "tests_policy": "named", "tests_editable": ["tests/test_cart.py"]}
@@ -1156,7 +1156,7 @@ def _(repo, c):
     close a coverage gap. This case is what keeps the branch correct until a caller with
     a parsed brief in hand actually appears.
     """
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     import check_scope
     from brief_common import load_brief
     body = """goal: Add a count() helper to src/cart.py.
@@ -1295,7 +1295,7 @@ autonomy: ask
 
 @case("active-brief-query-matches-activation")
 def _(repo, c):
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     from check_scope import active_brief
 
     p, _ = measured(repo, "status", """
@@ -1960,7 +1960,7 @@ def _(repo, c):
     deleted, so it is pinned here directly — the two reads are forced to disagree."""
     import io
     from contextlib import redirect_stdout
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     import check_scope
     head = fixtures.git(repo, "rev-parse", "HEAD").strip()
     p = _spec(repo, head)
@@ -2129,7 +2129,7 @@ def _(repo, c):
     And `dirty()` skipped the brief's own directory by a literal `.prompire/` prefix,
     which only matches when the brief sits at the git root: vendored one directory down,
     writing the brief made its own baseline refuse to run."""
-    sys.path.insert(0, str(SKILL))
+    sys.path.insert(0, str(SKILL / "prompire"))
     import yaml as _yaml
 
     import baseline as bl
@@ -2183,7 +2183,7 @@ def _(repo, c):
 
 # ------------------------------------------------ GitHub Copilot CLI, on real repos
 
-COPILOT_HOOK = str(SKILL / "hook_copilot_guard.py")
+COPILOT_HOOK = str(SKILL / "prompire" / "hook_copilot_guard.py")
 
 
 def copilot_hook(repo, tool_name, args, cwd=None):

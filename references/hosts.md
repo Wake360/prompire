@@ -183,7 +183,7 @@ reviewer's, not the agent's. The primary CLI lifecycle performs those stages thr
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/skills/prompire/hook_scope_guard.py"
+            "command": "python3 ~/.claude/skills/prompire/prompire/hook_scope_guard.py"
           }
         ]
       }
@@ -234,8 +234,8 @@ loaded first and is an administrator's, not yours.
       {
         "type": "command",
         "matcher": "create|edit|str_replace_editor|apply_patch",
-        "bash": "python3 \"$HOME/.copilot/skills/prompire/hook_copilot_guard.py\"",
-        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\hook_copilot_guard.py\"",
+        "bash": "python3 \"$HOME/.copilot/skills/prompire/prompire/hook_copilot_guard.py\"",
+        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\prompire\\hook_copilot_guard.py\"",
         "timeoutSec": 15
       }
     ]
@@ -254,8 +254,8 @@ repository install:
       {
         "type": "command",
         "matcher": "create|edit|str_replace_editor|apply_patch",
-        "bash": "python3 \"$(git rev-parse --show-toplevel)/.github/skills/prompire/hook_copilot_guard.py\"",
-        "powershell": "python \"$(git rev-parse --show-toplevel)/.github/skills/prompire/hook_copilot_guard.py\"",
+        "bash": "python3 \"$(git rev-parse --show-toplevel)/.github/skills/prompire/prompire/hook_copilot_guard.py\"",
+        "powershell": "python \"$(git rev-parse --show-toplevel)/.github/skills/prompire/prompire/hook_copilot_guard.py\"",
         "timeoutSec": 15
       }
     ]
@@ -275,8 +275,8 @@ rather not maintain two:
       {
         "type": "command",
         "matcher": "Edit|Write",
-        "bash": "python3 \"$HOME/.copilot/skills/prompire/hook_copilot_guard.py\"",
-        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\hook_copilot_guard.py\"",
+        "bash": "python3 \"$HOME/.copilot/skills/prompire/prompire/hook_copilot_guard.py\"",
+        "powershell": "python \"$env:USERPROFILE\\.copilot\\skills\\prompire\\prompire\\hook_copilot_guard.py\"",
         "timeoutSec": 15
       }
     ]
@@ -295,7 +295,7 @@ contains no spaces and needs no variable expansion:
 
 ```json
 { "type": "command", "matcher": "create|edit|str_replace_editor|apply_patch",
-  "command": "python3 /opt/prompire/hook_copilot_guard.py", "timeoutSec": 15 }
+  "command": "python3 /opt/prompire/prompire/hook_copilot_guard.py", "timeoutSec": 15 }
 ```
 
 Prefer the explicit `bash`/`powershell` pair anywhere a home directory is involved.
@@ -355,7 +355,7 @@ repository install at `.agents/skills/prompire/` is reachable with a relative pa
         "hooks": [
           {
             "type": "command",
-            "command": "python3 skills/prompire/hook_antigravity_guard.py",
+            "command": "python3 skills/prompire/prompire/hook_antigravity_guard.py",
             "timeout": 15
           }
         ]
@@ -377,7 +377,7 @@ global install; `~` is expanded by the host:
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.gemini/config/skills/prompire/hook_antigravity_guard.py",
+            "command": "python3 ~/.gemini/config/skills/prompire/prompire/hook_antigravity_guard.py",
             "timeout": 15
           }
         ]

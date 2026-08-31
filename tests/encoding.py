@@ -103,7 +103,7 @@ def emits_utf8(name, argv, *, stdin=b"", cwd=None, allowed=(0, 1, 2), json_mode=
 
 
 def tool(name, *args):
-    return [sys.executable, str(SKILL / name), *args]
+    return [sys.executable, str(SKILL / "prompire" / name), *args]
 
 
 def denies(r, name):
@@ -260,7 +260,7 @@ base_rev: {head}
     # Through the wrapper: `scope` re-emits check_scope.py's JSON, so a path the child
     # already escaped for its own stdout has to survive being printed a second time.
     emits_utf8("prompire/scope-czech-path-json",
-               tool("prompire.py", "scope", str(brief), "--json", "--base", head),
+               tool("cli.py", "scope", str(brief), "--json", "--base", head),
                cwd=root, json_mode=True)
 
     # Out of scope: the same path is named in a VIOLATION.

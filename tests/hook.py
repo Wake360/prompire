@@ -24,13 +24,13 @@ import unicodedata
 HERE = pathlib.Path(__file__).resolve().parent
 SKILL = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(SKILL))
+sys.path.insert(0, str(SKILL / "prompire"))
 
 import brief_common  # noqa: E402
 import fixtures  # noqa: E402
 
-HOOK = str(SKILL / "hook_scope_guard.py")
-GUARD = str(SKILL / "check_scope.py")
+HOOK = str(SKILL / "prompire" / "hook_scope_guard.py")
+GUARD = str(SKILL / "prompire" / "check_scope.py")
 
 BRIEF = """goal: Fix the off-by-one in src/cart.total().
 scope:
@@ -648,7 +648,7 @@ def main():
     return 1 if bad else 0
 
 
-COPILOT_HOOK = str(SKILL / "hook_copilot_guard.py")
+COPILOT_HOOK = str(SKILL / "prompire" / "hook_copilot_guard.py")
 
 FOLD_CASE = "fold-case"    # correct answer depends on whether this volume folds case
 FOLD_NORM = "fold-norm"    # …or Unicode normalisation
@@ -1277,7 +1277,7 @@ def copilot_cases(tmp, bad, case_folds, norm_folds):
     return len(cases) + len(extra)
 
 
-ANTIGRAVITY_HOOK = str(SKILL / "hook_antigravity_guard.py")
+ANTIGRAVITY_HOOK = str(SKILL / "prompire" / "hook_antigravity_guard.py")
 
 
 def agy(tool, args, *workspaces, **extra):

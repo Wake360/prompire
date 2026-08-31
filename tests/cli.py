@@ -20,7 +20,7 @@ import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-CLI = ROOT / "prompire.py"
+CLI = ROOT / "prompire" / "cli.py"
 sys.path.insert(0, str(HERE))
 
 import fixtures  # noqa: E402
@@ -60,14 +60,14 @@ def run(*args, cwd=None, env=None):
 def run_with_replaced_tools(args, replacements):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-tools-") as tmp:
         tool_root = pathlib.Path(tmp)
-        for name in ("prompire.py", "check_scope.py", "brief_common.py",
+        for name in ("cli.py", "check_scope.py", "brief_common.py",
                      "render_brief.py", "suite.py", "suite_run.py",
                      "baseline.py"):
-            shutil.copy2(ROOT / name, tool_root / name)
+            shutil.copy2(ROOT / "prompire" / name, tool_root / name)
         for name, body in replacements.items():
             (tool_root / name).write_text(body, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, str(tool_root / "prompire.py"), *map(str, args)],
+            [sys.executable, str(tool_root / "cli.py"), *map(str, args)],
             capture_output=True, text=True, encoding="utf-8", env=ENV,
         )
 
@@ -913,11 +913,11 @@ def _(repo, checks):
     checks.equal(unknown.returncode, 2, "unknown --agent must be refused")
     checks.ok("claude" in unknown.stdout and "codex" in unknown.stdout,
               "the refusal must name the known agents")
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "prompire"))
     try:
-        from prompire import DRAFT_AGENTS
+        from cli import DRAFT_AGENTS
     finally:
-        sys.path.remove(str(ROOT))
+        sys.path.remove(str(ROOT / "prompire"))
     argv = DRAFT_AGENTS.get("codex", [])
     checks.ok("read-only" in argv,
               "the codex drafting invocation must keep the sandbox read-only")
@@ -929,11 +929,11 @@ def _(repo, checks):
     checks.ok("{prompt}" in agy_argv and "{root}" in agy_argv,
               "the antigravity invocation must carry both placeholders — agy reads "
               "neither the prompt from stdin nor an untrusted cwd as a workspace")
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "prompire"))
     try:
-        from prompire import agent_argv, draft_snapshot
+        from cli import agent_argv, draft_snapshot
     finally:
-        sys.path.remove(str(ROOT))
+        sys.path.remove(str(ROOT / "prompire"))
     snapshot_path = None
     try:
         with draft_snapshot(pathlib.Path(repo)) as (made, setup_rev):
@@ -1164,8 +1164,8 @@ def _(repo, checks):
 
 @case("displayed next commands quote brief paths")
 def _(repo, checks):
-    sys.path.insert(0, str(ROOT))
-    import prompire
+    sys.path.insert(0, str(ROOT / "prompire"))
+    import cli as prompire
     original = prompire.os.name
     try:
         prompire.os.name = "posix"
@@ -1176,7 +1176,7 @@ def _(repo, checks):
                      'prompire verify "task brief.yaml"', "Windows command")
     finally:
         prompire.os.name = original
-        sys.path.remove(str(ROOT))
+        sys.path.remove(str(ROOT / "prompire"))
 
 
 @case("verify stops before acceptance on a strict scope finding")
@@ -1570,7 +1570,7 @@ def _(repo, checks):
     path = brief(repo)
     result = run_with_replaced_tools(
         ("prepare", path, "--json"),
-        # `suite.py` imports `classify`/`run_one` from this module at prompire.py
+        # `suite.py` imports `classify`/`run_one` from this module at cli.py
         # startup, so the broken stub must stay importable and misbehave only
         # when run as the `baseline` subprocess tool, same as the real file.
         {"baseline.py": "def classify(entry): return None\n"
@@ -1691,7 +1691,7 @@ def _(repo, checks):
     checks.equal(again.returncode, 1, "prepare refuses to overwrite an already measured brief")
     # Re-arm through the existing low-level tool after the derived prompt workflow has
     # deliberately refused to overwrite the brief's measured baseline.
-    armed = subprocess.run([sys.executable, str(ROOT / "check_scope.py"), str(path), "--activate"],
+    armed = subprocess.run([sys.executable, str(ROOT / "prompire" / "check_scope.py"), str(path), "--activate"],
                            capture_output=True, text=True, encoding="utf-8")
     checks.equal(armed.returncode, 0, "low-level rearm")
     repin = json_out(run("status", path, "--json"))
@@ -1762,7 +1762,7 @@ def _(repo, checks):
 def _(repo, checks):
     for command, script in (("baseline", "baseline.py"), ("lint", "lint_brief.py"),
                             ("render", "render_brief.py"), ("scope", "check_scope.py")):
-        direct = subprocess.run([sys.executable, str(ROOT / script), "--help"],
+        direct = subprocess.run([sys.executable, str(ROOT / "prompire" / script), "--help"],
                                 capture_output=True, text=True, encoding="utf-8")
         forwarded = run(command, "--help")
         checks.equal(forwarded.returncode, direct.returncode,
@@ -1776,7 +1776,7 @@ def _(repo, checks):
 @case("low-level subcommands preserve 0, 1, 2 and option forwarding")
 def _(repo, checks):
     good = brief(repo, "good")
-    measured = subprocess.run([sys.executable, str(ROOT / "baseline.py"), str(good), "--write"],
+    measured = subprocess.run([sys.executable, str(ROOT / "prompire" / "baseline.py"), str(good), "--write"],
                               capture_output=True, text=True, encoding="utf-8")
     checks.equal(measured.returncode, 0, "good fixture baseline")
     bad = brief(repo, "bad", extra="scope: []\n")
@@ -1786,7 +1786,7 @@ def _(repo, checks):
         ("baseline", "baseline.py", ()),
     )
     for command, script, arguments in probes:
-        direct = subprocess.run([sys.executable, str(ROOT / script), *map(str, arguments)],
+        direct = subprocess.run([sys.executable, str(ROOT / "prompire" / script), *map(str, arguments)],
                                 capture_output=True, text=True, encoding="utf-8")
         forwarded = run(command, *arguments)
         checks.equal(forwarded.returncode, direct.returncode,
@@ -1806,9 +1806,9 @@ def _(repo, checks):
     # (checking the mode bit, not deletion) because POSIX lets a naive rmtree remove a
     # read-only file regardless, so an rmtree-level test alone would not have caught
     # this.
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "prompire"))
     import importlib
-    prompire_mod = importlib.import_module("prompire")
+    prompire_mod = importlib.import_module("cli")
     with tempfile.TemporaryDirectory() as tmp:
         target = pathlib.Path(tmp) / "readonly.txt"
         target.write_text("x", encoding="utf-8")
@@ -1819,9 +1819,9 @@ def _(repo, checks):
 
 @case("demo removes its throwaway repo even with a read-only file inside")
 def _(repo, checks):
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "prompire"))
     import importlib
-    prompire_mod = importlib.import_module("prompire")
+    prompire_mod = importlib.import_module("cli")
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp) / "demo-like"
         root.mkdir()
@@ -2937,18 +2937,18 @@ def _(repo, checks):
         "    raise importlib.metadata.PackageNotFoundError(name)\n"
         "importlib.metadata.version = missing\n"
         "sys.argv = ['prompire', '--help']\n"
-        "import prompire\n"
+        "import cli\n"
         "try:\n"
-        "    prompire.main()\n"
+        "    cli.main()\n"
         "except SystemExit as error:\n"
         "    raise SystemExit(error.code)\n"
     )
     with tempfile.TemporaryDirectory(prefix="prompire-cli-bare-") as tmp:
         tool_root = pathlib.Path(tmp)
-        for name in ("prompire.py", "check_scope.py", "brief_common.py",
+        for name in ("cli.py", "check_scope.py", "brief_common.py",
                      "render_brief.py", "suite.py", "suite_run.py",
                      "baseline.py"):
-            shutil.copy2(ROOT / name, tool_root / name)
+            shutil.copy2(ROOT / "prompire" / name, tool_root / name)
         result = subprocess.run(
             [sys.executable, "-c", probe],
             capture_output=True, text=True, encoding="utf-8",
