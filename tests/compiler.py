@@ -10,6 +10,7 @@ Run: python3 tests/compiler.py
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -312,7 +313,7 @@ def main():
             (tool_dir / "python").symlink_to(sys.executable)
         os.environ["PATH"] = str(tool_dir) + os.pathsep + os.environ["PATH"]
         for name, fn in CASES:
-            repo = fixtures.build(root / name.replace(" ", "-")[:40])
+            repo = fixtures.build(root / re.sub(r'[^A-Za-z0-9._-]', "-", name)[:40])
             checks = Checks()
             try:
                 fn(repo, checks)
