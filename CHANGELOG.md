@@ -3,7 +3,14 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
-## Unreleased
+## 0.13.0 — 2026-08-31
+
+**The suite arc ships, and the source tree becomes a package. A recorded
+verdict can now be promoted into a pinned fixture and replayed against a
+baseline; the modules move from the repo root into `prompire/`, so installed
+wheels ship the whole package and mirror tool paths gain a `prompire/`
+segment — update host hook configs after the first sync (see
+`references/maintaining.md`).**
 
 ### Added
 
@@ -24,6 +31,21 @@ lints clean today can fail on the next minor, and this file is where that is rec
   refused, and a run never changes the manifest or the reserve membership.
   Deterministic candidates `patch` and `noop` replay for free; `claude`,
   `codex` and `antigravity` replay live.
+- `references/suite.md`: the run-record envelope, the admission gate and its
+  rejection vocabulary, the replay refusals and exit codes, the slices, and
+  the reserve discipline. Ships in the wheel with the other references.
+
+### Changed
+
+- The flat root modules moved into the `prompire/` package; `prompire.py`
+  became `prompire/cli.py` (the console script is unchanged). Wheels ship the
+  package instead of a hand-maintained module list, and `tests/package.py` now
+  asserts every tracked `prompire/*.py` is in the wheel. Skill-mirror tool
+  paths gain a `prompire/` segment: host hook configs pointing at the old
+  root-level `hook_*.py` must be re-pointed after the next sync.
+- The research record — the surveys, verdicts and reports from the 2026
+  program, including the compiler-family kills — moved to `docs/research/`
+  with an ordering index. README and SKILL.md now document the suite arc.
 
 ### Fixed
 

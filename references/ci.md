@@ -21,7 +21,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - uses: Wake360/prompire/.github/actions/prompire-verify@v0.12.0
+      - uses: Wake360/prompire/.github/actions/prompire-verify@v0.13.0
         with:
           comment: 'true'
           artifact-name: prompire
