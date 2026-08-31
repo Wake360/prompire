@@ -28,7 +28,7 @@ from tc_eval import apply_patch, clone_at  # noqa: E402
 def check_arm(tree, check_path):
     shutil.copy(check_path, tree / "_hidden_check.py")
     done = subprocess.run([sys.executable, "_hidden_check.py"], cwd=str(tree),
-                          capture_output=True, text=True, timeout=300)
+                          capture_output=True, text=True, encoding="utf-8", timeout=300)
     (tree / "_hidden_check.py").unlink()
     return done.returncode, (done.stdout + done.stderr).strip()[-200:]
 

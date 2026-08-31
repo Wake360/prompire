@@ -61,7 +61,7 @@ def compile_with(repo, scenario, request="fix total() so it returns the sum",
             max_breaker_rounds=rounds, log=milestones.append)
         counts = {}
         if state_file.is_file():
-            for line in state_file.read_text().splitlines():
+            for line in state_file.read_text(encoding="utf-8").splitlines():
                 key, _, value = line.partition("=")
                 counts[key] = int(value or 0)
         return state, payload, counts, milestones
@@ -114,18 +114,18 @@ def _(repo, c):
     flip_cmd = next(a["cmd"] for a in brief["acceptance"]
                     if a.get("transition") == "flip")
     on_head = subprocess.run(flip_cmd, shell=True, cwd=str(repo),
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8")
     c.ok(on_head.returncode != 0, "flip criterion is red on untouched HEAD")
     (repo / "src" / "cart.py").write_text(
         "def add(items, item):\n    return list(items) + [item]\n\n\n"
         "def total(items):\n    return sum(items)\n", encoding="utf-8")
     fixed = subprocess.run(flip_cmd, shell=True, cwd=str(repo),
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
     c.equal(fixed.returncode, 0, "flip criterion green after the real fix")
     probe_path.write_text(probe_path.read_text(encoding="utf-8")
                           .replace("== 3", "== 2"), encoding="utf-8")
     tampered = subprocess.run(flip_cmd, shell=True, cwd=str(repo),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8")
     c.ok(tampered.returncode != 0, "edited probe fails the digest check")
     c.ok("probe-tampered" in (tampered.stderr + tampered.stdout),
          "tampering is named")
@@ -231,7 +231,7 @@ def _(repo, c):
         [sys.executable, str(ROOT / "prompire.py"), "compile",
          "fix total() so it returns the sum", "--slug", "task",
          "--role-cmd", role_cmd, "--json"],
-        cwd=str(repo), capture_output=True, text=True, env=env)
+        cwd=str(repo), capture_output=True, text=True, encoding="utf-8", env=env)
     state_file.unlink(missing_ok=True)
     c.equal(done.returncode, 0, "compile exit for READY")
     data = json.loads(done.stdout)
@@ -242,7 +242,7 @@ def _(repo, c):
     prepared = subprocess.run(
         [sys.executable, str(ROOT / "prompire.py"), "prepare",
          ".prompire/task.yaml"],
-        cwd=str(repo), capture_output=True, text=True)
+        cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
     c.equal(prepared.returncode, 0,
             f"prepare accepts the READY contract: {prepared.stdout}"
             f"{prepared.stderr}")

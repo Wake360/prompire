@@ -147,11 +147,11 @@ def bump(name):
     state = pathlib.Path(os.environ.get("FAKE_STATE", ""))
     counts = {}
     if state.is_file():
-        for line in state.read_text().splitlines():
+        for line in state.read_text(encoding="utf-8").splitlines():
             key, _, value = line.partition("=")
             counts[key] = int(value or 0)
     counts[name] = counts.get(name, 0) + 1
-    state.write_text("".join(f"{k}={v}\n" for k, v in counts.items()))
+    state.write_text("".join(f"{k}={v}\n" for k, v in counts.items()), encoding="utf-8")
     return counts[name]
 
 
