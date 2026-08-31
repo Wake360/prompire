@@ -595,8 +595,7 @@ sys.stdin.read()
 pathlib.Path("planted.txt").write_text("x", encoding="utf-8")
 sys.stdout.write(pathlib.Path({str(reply)!r}).read_text(encoding="utf-8"))
 """, encoding="utf-8")
-    cmd = shlex.join([sys.executable, str(script)]) if os.name != "nt" else \
-        subprocess.list2cmdline([sys.executable, str(script)])
+    cmd = shlex.join([pathlib.Path(sys.executable).as_posix(), script.as_posix()])
     result = run("draft", "Improve the cart", "--agent-cmd", cmd,
                  "--out", ".prompire/mutated.yaml", cwd=repo)
     checks.equal(result.returncode, 2, "a mutating drafting run must be refused")
@@ -621,8 +620,7 @@ subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a",
                capture_output=True)
 sys.stdout.write(pathlib.Path({str(reply)!r}).read_text(encoding="utf-8"))
 """, encoding="utf-8")
-    cmd = shlex.join([sys.executable, str(committer)]) if os.name != "nt" else \
-        subprocess.list2cmdline([sys.executable, str(committer)])
+    cmd = shlex.join([pathlib.Path(sys.executable).as_posix(), committer.as_posix()])
     result = run("draft", "Improve the cart", "--agent-cmd", cmd,
                  "--out", ".prompire/committed.yaml", cwd=repo)
     checks.equal(result.returncode, 2,
@@ -2972,7 +2970,7 @@ def main():
             (tool_dir / "python").symlink_to(sys.executable)
         ENV["PATH"] = str(tool_dir) + os.pathsep + ENV["PATH"]
         for name, fn in CASES:
-            repo = fixtures.build(root / name.replace(" ", "-"))
+            repo = fixtures.build(root / re.sub(r'[^A-Za-z0-9._-]', "-", name))
             checks = Checks()
             try:
                 fn(repo, checks)
