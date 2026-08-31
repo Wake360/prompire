@@ -3,7 +3,7 @@ title: Prompire Product Thesis — final research verdict
 tags: [prompire, product, thesis, verdict, research]
 date: 2026-08-05
 source: full-history synthesis session — 12 parallel evidence lanes (experiments, docs, LifeOS book corpus, Reddit-adjacent, X, market) + fresh-context adversarial review
-related: [docs/e5-validated-agent-learning-verdict.md, docs/task-compiler.md, docs/universal-prompt-compiler-report.md, docs/execution-compiler-verdict.md, synthesis_verdict.md, PROMPIRE-MONETIZACE.md]
+related: [e5-validated-agent-learning-verdict.md, task-compiler.md, universal-prompt-compiler-report.md, execution-compiler-verdict.md, synthesis_verdict.md, PROMPIRE-MONETIZACE.md]
 ---
 
 # Prompire Product Thesis
@@ -26,7 +26,7 @@ No loop clears the bar. For the record, the closest finalist's loop was: develop
 
 Six preregistered experiments in ~30 hours (E1, E2, task-compiler, task-context-compiler, universal-prompt-compiler, plus E3/E4 and E5) form one unbroken lineage. The verdicts reduce to a small set of forbidden mechanism shapes, each falsified more than once:
 
-**Generated authority dies.** Four independent implementations of "a model produces the specification a human currently writes" were killed on preregistered gates (E1 3/8; E2 0/8; task-compiler 0/8, kill fired; universal compiler RAW 11.0/12 vs PROMPIRE 10.5/12 with zero positive surfaces, +30% tokens, +100% wall time). The terminal lesson, stated in docs/task-compiler.md §15: nothing establishes authority except a mechanical measurement or a human confirmation. Source-text filters are not a trust boundary. Never execute unreviewed model-authored code.
+**Generated authority dies.** Four independent implementations of "a model produces the specification a human currently writes" were killed on preregistered gates (E1 3/8; E2 0/8; task-compiler 0/8, kill fired; universal compiler RAW 11.0/12 vs PROMPIRE 10.5/12 with zero positive surfaces, +30% tokens, +100% wall time). The terminal lesson, stated in task-compiler.md §15: nothing establishes authority except a mechanical measurement or a human confirmation. Source-text filters are not a trust boundary. Never execute unreviewed model-authored code.
 
 **The advisory channel dies.** E5: verbatim maintainer rules in the repo's own instruction file did not reduce targeted violations on held-out tasks (§4). Externally replicated three times over before our run (ETH 2602.11988, Guardrails-Beat-Guidance 2604.11088, ICML 2026 unfaithful self-evolvers) and once after (Anthropic deleted >80% of Claude Code's system prompt with no eval loss).
 

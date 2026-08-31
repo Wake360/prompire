@@ -3,7 +3,7 @@ title: Five preregistered experiments that killed their own hypotheses
 tags: [prompire, methodology, evaluation, preregistration, portfolio]
 date: 2026-08-05
 source: E1–E5 experiment repos and the Prompire benchmark corpus
-related: [docs/product-thesis.md, docs/e5-validated-agent-learning-verdict.md, docs/execution-compiler-verdict.md, docs/task-compiler.md]
+related: [product-thesis.md, e5-validated-agent-learning-verdict.md, execution-compiler-verdict.md, task-compiler.md]
 ---
 
 # Five preregistered experiments that killed their own hypotheses
@@ -42,7 +42,7 @@ The control worked as designed: a rule the maintainers themselves later walked b
 
 ## The benchmark corpus
 
-Eight frozen fix-parent tasks across five repositories, leak-audited, with hidden gold patches and plausible-but-wrong patches held outside every visible workspace, and mechanical triple grading. Preregistration committed before any task ran. The compiler evaluated against it scored 0/8 on contract quality and fired its own kill condition; the failure analysis separates the delivery defect (one line of reply parsing terminated 6 of 8 runs) from the architecture verdict (model-authored fields shipped unmeasured), because conflating them would have overstated the negative. Artifacts: `docs/tc-evidence/`, `bench/tc_corpus/PREREG.md`.
+Eight frozen fix-parent tasks across five repositories, leak-audited, with hidden gold patches and plausible-but-wrong patches held outside every visible workspace, and mechanical triple grading. Preregistration committed before any task ran. The compiler evaluated against it scored 0/8 on contract quality and fired its own kill condition; the failure analysis separates the delivery defect (one line of reply parsing terminated 6 of 8 runs) from the architecture verdict (model-authored fields shipped unmeasured), because conflating them would have overstated the negative. Artifacts: `tc-evidence/`, `bench/tc_corpus/PREREG.md`.
 
 ## What the instrument did establish
 
@@ -54,4 +54,4 @@ Preregistration committed before any graded run, with kill criteria as explicit 
 
 ## Reading order
 
-`docs/product-thesis.md` — the terminal synthesis and what all of it was for. `docs/e5-validated-agent-learning-verdict.md` — the most complete single experiment. `docs/execution-compiler-verdict.md` — the oracle-ceiling result. `docs/task-compiler.md` — the architecture that failed and the failure analysis that separates delivery from mechanism. `bench/tc_corpus/PREREG.md` and `docs/tc-evidence/` — the frozen corpus and its raw rows.
+`product-thesis.md` — the terminal synthesis and what all of it was for. `e5-validated-agent-learning-verdict.md` — the most complete single experiment. `execution-compiler-verdict.md` — the oracle-ceiling result. `task-compiler.md` — the architecture that failed and the failure analysis that separates delivery from mechanism. `bench/tc_corpus/PREREG.md` and `tc-evidence/` — the frozen corpus and its raw rows.

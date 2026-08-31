@@ -66,7 +66,7 @@ property no substitute provides, and both reports verified it live. The target u
 same in both — a developer delegating several substantial, semi-unattended coding tasks to
 a CLI agent, solo or on a 2–3 person team, not vibe coders. Deterministic verification is
 the core and must stay the core; both reports reject any ML in the verdict path, which
-matches the repository's own conclusion in `docs/ml-research-assessment.md`. Positioning
+matches the repository's own conclusion in `ml-research-assessment.md`. Positioning
 must be verification, never prevention, because the hooks are a documented speed bump. No
 additional host adapters: both name the four existing hooks as the most commoditized code
 in the tree. Verify's human output is illegible and needs a verdict line with JSON

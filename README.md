@@ -304,6 +304,8 @@ whether what was declared was pinned before the work began.
 - `references/rendering.md` — renderer targets and wording rules.
 - `references/maintaining.md` — tests, and how to change a rule safely.
 - `examples/` — five briefs, one shape each; `worked-example.yaml` is the canonical one.
+- `docs/research/` — the research record: the preregistered experiments that killed
+  the prompt-compiler thesis and produced the current design.
 
 ## Licence
 

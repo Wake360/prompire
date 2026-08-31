@@ -3,7 +3,7 @@ title: Compiler v2 — E1 defect closure
 tags: [prompire, compiler, e1, e2, trust-boundary]
 date: 2026-08-03
 source: implementation session on branch compiler-v2, frozen at the commit named below
-related: [docs/compiler-v1.md, references/schema.md, references/rules.md]
+related: [compiler-v1.md, references/schema.md, references/rules.md]
 ---
 
 # Compiler v2 — E1 defect closure

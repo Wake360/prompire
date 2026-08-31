@@ -3,7 +3,7 @@ title: Task Compiler — prototype, evaluation, and verdict
 tags: [prompire, compiler, task-compiler, tc, evaluation, verdict]
 date: 2026-08-04
 source: implementation and evaluation session on branch task-compiler, 0d23564..HEAD
-related: [docs/compiler-v2-report.md, docs/compiler-v1.md, bench/tc_corpus/PREREG.md]
+related: [compiler-v2-report.md, compiler-v1.md, bench/tc_corpus/PREREG.md]
 ---
 
 # TASK COMPILER ARCHITECTURE FAILED

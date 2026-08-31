@@ -3,7 +3,7 @@ title: Behavior-Constrained Optimization of AI-Generated Code — final verifier
 tags: [prompire, product, verdict, optimizer, patch-minimization, research]
 date: 2026-08-06
 source: first-hand measurement of the E3/E4 corpora + live reduction experiment + 10-agent external evidence sweep (TRIM, native simplify, GitButler, Atomic, PL prior art) + three fresh-context adversarial verifiers
-related: [docs/product-thesis.md, docs/preregistered-kills.md, PINCITE-VERDICT.md, ../prompire-e3/FINAL-VERDICT.md, ../prompire-e4/FINAL-VERDICT.md]
+related: [product-thesis.md, preregistered-kills.md, PINCITE-VERDICT.md, ../prompire-e3/FINAL-VERDICT.md, ../prompire-e4/FINAL-VERDICT.md]
 ---
 
 # Behavior-Constrained Optimization of AI-Generated Code
@@ -465,7 +465,7 @@ passes address a 2.5% and 1% inventory respectively.
 
 **3rd — Shape C, Full Change Compiler.** Dominated on every axis. Patch
 atomization is GitButler's shipped, funded product. Multi-candidate comparison is
-best-of-N, native in Cursor, already killed in `docs/product-thesis.md` §19 for
+best-of-N, native in Cursor, already killed in `product-thesis.md` §19 for
 native absorption. Change IR is Atomic's substrate, and better than a diff parser.
 
 ---
@@ -511,7 +511,7 @@ is a weekend.
 
 Nothing. The corpora retain value independent of this direction — they are the
 artifact that eval-environment work pays for, which round three of
-`docs/product-thesis.md` already identified.
+`product-thesis.md` already identified.
 
 ---
 
@@ -530,7 +530,7 @@ fresh corpus once the cost ratio was corrected. Here 3.75x became 1.21x once one
 confound was corrected. Both times the attractive number was an artifact, and
 both times the correction was cheap and available before building.
 
-**The market-shape kill (`docs/product-thesis.md` §3).** "wtcraft, Prompire's
+**The market-shape kill (`product-thesis.md` §3).** "wtcraft, Prompire's
 exact design, 206 commits, 3 stars; six independent Stop-hook verification gates,
 0–3 stars each." Substitute `patchslim` (0), `pi-trim` (0), `deslop` (3),
 `sloppy` (8), `code-humanizer` (41) and the paragraph is unchanged. Demand
@@ -661,7 +661,7 @@ hard-protected — and the answer is already on the table from two directions:
 TRIM's source ΔSlop of 20.4% over an 11.5% share, and this repository's corpora
 at a median excess of +3 lines. That reformulated gate fails.
 
-This is the habit `docs/product-thesis.md` §18 named and rejected: a mechanism
+This is the habit `product-thesis.md` §18 named and rejected: a mechanism
 experiment standing in for the demand experiment. Do not run it.
 
 ---

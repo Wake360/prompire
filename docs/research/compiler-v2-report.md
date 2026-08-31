@@ -3,7 +3,7 @@ title: Compiler v2 — work done and results
 tags: [prompire, compiler, e1, e2, report]
 date: 2026-08-03
 source: implementation session on branch compiler-v2, 21a83b2..08ca412
-related: [docs/compiler-v2.md, docs/compiler-v1.md, references/schema.md]
+related: [compiler-v2.md, compiler-v1.md, references/schema.md]
 ---
 
 # Compiler v2 — work done and results
@@ -13,7 +13,7 @@ verifier's authority, and leave a frozen treatment suitable for a new experiment
 feature was added, the product was not repositioned, and E2 was not run. E1's verdict —
 keep Prompire verifier-first — stands unchanged.
 
-`docs/compiler-v2.md` is the reference note on the resulting semantics. This file is the
+`compiler-v2.md` is the reference note on the resulting semantics. This file is the
 record of the work: what was reproduced, what was changed, what the adversarial review
 broke, and what the evidence actually supports.
 

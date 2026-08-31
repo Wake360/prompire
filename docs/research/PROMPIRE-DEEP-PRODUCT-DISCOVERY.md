@@ -101,7 +101,7 @@ The repository has:
 - Bench campaigns and compiler experiments.
 - MIT licensing and PyPI packaging.
 
-The current branch also contains extensive untracked research verdicts. One states that no viable product thesis had yet been found: [docs/product-thesis.md](/Users/filipvachek/prompire/docs/product-thesis.md:15).
+The current branch also contains extensive untracked research verdicts. One states that no viable product thesis had yet been found: [product-thesis.md](/Users/filipvachek/prompire/product-thesis.md:15).
 
 FACT — No repository files were modified during the research.
 
