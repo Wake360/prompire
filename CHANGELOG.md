@@ -3,6 +3,28 @@
 Versions are `MAJOR.MINOR.PATCH`. Below 1.0.0 the schema is not stable: a brief that
 lints clean today can fail on the next minor, and this file is where that is recorded.
 
+## Unreleased
+
+### Added
+
+- `verify --record` appends the verdict to `.prompire/runs.jsonl`: the same
+  scope and acceptance objects `--json` prints, under a small envelope
+  (timestamp, run id, repo-relative brief path and its sha256, base revision,
+  sha256 of `git diff --binary` against that base, exit code). Only a run that
+  reached a verdict writes a row; an indeterminate run or a refusal writes
+  nothing, and a store that cannot be written warns on stderr without changing
+  the verdict. `.prompire/**` is always inside the boundary, so the store never
+  trips a later scope check.
+- `prompire suite add <run>`: promote a recorded run into a pinned suite fixture, but only when its acceptance fails at the pinned base and passes with the recorded patch — a task already green at base is rejected by name (`green-at-base`). The suite manifest is versioned and content-hashed and declares an explicit never-tuned reserve slice.
+- `prompire suite run <candidate>`: replay every admitted fixture from its
+  pinned bundle through the bench machinery and print a comparison against a
+  stored baseline (`--as-baseline` stores one), sliced by acceptance, scope
+  and gamed, with the never-tuned reserve slice as its own block. The output
+  is always a diff between two result sets — a run with no baseline is
+  refused, and a run never changes the manifest or the reserve membership.
+  Deterministic candidates `patch` and `noop` replay for free; `claude`,
+  `codex` and `antigravity` replay live.
+
 ## 0.12.0 — 2026-08-03
 
 **Compiler v2: the five defects E1 reproduced, closed. No new capability — the

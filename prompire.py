@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -13,12 +14,16 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import yaml
 
 from brief_common import (ACCEPTANCE_KEYS, DRAFT_LEDGER, DRAFT_MARKER, as_list,
                           glob_re, norm_path, utf8_stdio)
 from check_scope import RepoError, active_brief, digest_of, read_pointer, repo_root
+import suite as suite_store
+import suite_run as suite_replay
+from suite import RUNS_REL
 
 # After the siblings above: render_brief prepends its own directory to sys.path,
 # so importing a stray installed copy first would make every later sibling import
@@ -398,11 +403,55 @@ def report_verification(brief, scope, scope_data, acceptance, acceptance_data,
     return code
 
 
+# Shared with record_run so the printed and the recorded acceptance halves can
+# never drift apart. Never mutated — json.dumps only.
+PREFLIGHT_BLOCKED_ACCEPTANCE = {
+    "status": "not_run",
+    "reason": "strict scope preflight did not pass",
+}
+
+
+def record_run(brief, code, scope_data, acceptance_data):
+    """One verdict, one appended JSONL row: a small envelope plus the same scope
+    and acceptance objects the verdict printed — re-serializing those two halves
+    reproduces the `--json` stdout byte for byte. Only a run that reached a
+    verdict (exit 0 or 1) is recorded; indeterminate runs and refusals leave no
+    row. `git diff <base>` omits untracked files, so patch_sha256 identifies the
+    tracked patch only."""
+    try:
+        brief_path = pathlib.Path(brief).resolve()
+        root = repo_root(brief_path.parent)
+        base = scope_data.get("base")
+        patch_sha256 = None
+        if base:
+            diff = subprocess.run(
+                ["git", "-C", str(root), "diff", "--binary", str(base)],
+                capture_output=True)
+            if diff.returncode == 0:
+                patch_sha256 = hashlib.sha256(diff.stdout).hexdigest()
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "run_id": uuid.uuid4().hex,
+               "brief": brief_path.relative_to(root).as_posix(),
+               "brief_sha256": digest_of(brief_path),
+               "base": base,
+               "patch_sha256": patch_sha256,
+               "exit_code": code,
+               "scope": scope_data,
+               "acceptance": acceptance_data}
+        store = root / RUNS_REL
+        store.parent.mkdir(parents=True, exist_ok=True)
+        with open(store, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except (OSError, RepoError, ValueError) as exc:
+        # The verdict already printed and its exit code is the contract; a run
+        # store that cannot be written must not turn a real verdict into a
+        # failure. Same warn-don't-mask stance as _restore_brief.
+        print(f"WARNING: could not record the verdict in {RUNS_REL}: {exc}",
+              file=sys.stderr)
+
+
 def report_scope_preflight(brief, scope, scope_data, json_mode):
-    acceptance_data = {
-        "status": "not_run",
-        "reason": "strict scope preflight did not pass",
-    }
+    acceptance_data = PREFLIGHT_BLOCKED_ACCEPTANCE
     if json_mode:
         print(json.dumps({"scope": scope_data, "acceptance": acceptance_data},
                          ensure_ascii=False))
@@ -1263,7 +1312,12 @@ def verify(args, extra):
             "scope", preflight, "scope could not produce a trustworthy result",
             args.json, preflight_data)
     if preflight.returncode == 1 and not acceptance_evidence_safe(preflight_data):
-        return report_scope_preflight(args.brief, preflight, preflight_data, args.json)
+        code = report_scope_preflight(args.brief, preflight, preflight_data,
+                                      args.json)
+        if args.record:
+            record_run(args.brief, code, preflight_data,
+                       PREFLIGHT_BLOCKED_ACCEPTANCE)
+        return code
 
     acceptance = run_tool("acceptance", args.brief, "--json")
     acceptance_data, issue = parse_child_json("acceptance", acceptance)
@@ -1283,8 +1337,34 @@ def verify(args, extra):
         return report_indeterminate(
             "scope", scope, "scope could not produce a trustworthy result",
             args.json, scope_data)
-    return report_verification(
+    code = report_verification(
         args.brief, scope, scope_data, acceptance, acceptance_data, args.json)
+    if args.record:
+        record_run(args.brief, code, scope_data, acceptance_data)
+    return code
+
+
+def suite_add(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra),
+                              args.json)
+    try:
+        root = repo_root(pathlib.Path(".").resolve())
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
+    return suite_store.add(root, args.run, args.reserve, args.json)
+
+
+def suite_run_cmd(args, extra):
+    if extra:
+        return report_refusal("unrecognized arguments: " + " ".join(extra),
+                              args.json)
+    try:
+        root = repo_root(pathlib.Path(".").resolve())
+    except RepoError as exc:
+        return report_refusal(str(exc), args.json)
+    return suite_replay.run(root, args.candidate, args.variant, args.agent,
+                            args.as_baseline, args.json)
 
 
 def close(args, extra):
@@ -1412,8 +1492,44 @@ def build_parser():
         "verify", help="verdict from the real git diff plus the acceptance commands")
     verified.add_argument("brief")
     verified.add_argument("--ack-disarms")
+    verified.add_argument("--record", action="store_true",
+                          help=f"append the verdict to {RUNS_REL}")
     verified.add_argument("--json", action="store_true")
     verified.set_defaults(handler=verify)
+
+    suite_cmd = commands.add_parser(
+        "suite", help="promote recorded runs into a pinned, gate-checked suite")
+    suite_actions = suite_cmd.add_subparsers(dest="suite_command", required=True,
+                                             metavar="action")
+    suite_added = suite_actions.add_parser(
+        "add", help="admit one recorded run if acceptance fails at the pinned "
+                    "base and passes with the recorded patch")
+    suite_added.add_argument(
+        "run", help=f"a run_id from {RUNS_REL}, a unique prefix (8+ chars), "
+                    "or `last`")
+    suite_added.add_argument("--reserve", action="store_true",
+                             help="place the fixture in the never-tuned "
+                                  "reserve slice")
+    suite_added.add_argument("--json", action="store_true")
+    suite_added.set_defaults(handler=suite_add)
+
+    suite_ran = suite_actions.add_parser(
+        "run", help="replay the admitted suite with a candidate and diff it "
+                    "against the stored baseline")
+    suite_ran.add_argument("candidate",
+                           help="a name for this result set, e.g. current-claude")
+    suite_ran.add_argument("--variant", default="current",
+                           help="prompt variant from bench/variants.py")
+    suite_ran.add_argument("--agent", default="patch",
+                           help="patch (apply the pinned fix), noop (change "
+                                "nothing), scripted:<behavior>, claude, codex "
+                                "or antigravity")
+    suite_ran.add_argument("--as-baseline", action="store_true",
+                           dest="as_baseline",
+                           help="store this result set as the baseline "
+                                "instead of comparing")
+    suite_ran.add_argument("--json", action="store_true")
+    suite_ran.set_defaults(handler=suite_run_cmd)
 
     closed = commands.add_parser(
         "close", help="disarm the guard after review; the disarm is recorded")

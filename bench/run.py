@@ -208,7 +208,7 @@ def run_agent(spec, prompt, repo, task):
                        "codex or antigravity")
 
 
-def measure(repo, base):
+def measure(repo, base, brief_rel=BRIEF_REL):
     """`base` is captured before the agent runs: the brief lives in .prompire/, which
     the scope check does not police, so an agent can re-stamp `base_rev` and delete the
     pin. Re-reading the base here would let it choose its own diff."""
@@ -218,8 +218,9 @@ def measure(repo, base):
     # the agent's file. __pycache__ is gitignored, so this changes no diff.
     for cache in repo.rglob("__pycache__"):
         shutil.rmtree(cache, ignore_errors=True)
-    verdict = verify_acceptance.verify(str(repo / BRIEF_REL))
-    scope = tool(repo, "check_scope.py", BRIEF_REL, "--json", "--base", base, "--strict")
+    verdict = verify_acceptance.verify(str(repo / brief_rel))
+    scope = tool(repo, "check_scope.py", brief_rel, "--json", "--base", base,
+                 "--strict")
     try:
         scope_report = json.loads(scope.stdout)
     except ValueError:

@@ -33,6 +33,7 @@ import fixtures
 import report
 import run as bench_run
 import variants
+import suite_run
 from behaviors import BEHAVIORS
 from brief_common import as_list, load_brief
 from variants import VARIANTS, STATE_NOTES
@@ -87,6 +88,20 @@ def check_prepare_rejects_unlintable(tmp):
     except RuntimeError as e:
         ok, detail = "lint_brief.py" in str(e), str(e)
     check("prepare() refuses a task brief that lint_brief.py rejects", ok, detail)
+
+
+def check_measure_brief_rel(tmp):
+    task = sorted(TASKS.glob("*.yaml"))[0]
+    repo, brief = bench_run.prepare(task, pathlib.Path(tmp) / "brief-rel")
+    other = repo / ".prompire" / "other-name.yaml"
+    shutil.copy(brief, other)
+    base = str(load_brief(str(brief)).get("base_rev"))
+    default = bench_run.measure(repo, base)
+    brief.unlink()
+    renamed = bench_run.measure(repo, base,
+                                brief_rel=".prompire/other-name.yaml")
+    check("measure reads the brief at brief_rel",
+          renamed["acceptance"] == default["acceptance"])
 
 
 def check_dirty_rev():
@@ -1278,10 +1293,38 @@ def check_report_footer_excludes_err():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_compare_err_is_never_movement():
+    """A crashed live CLI reads ERR from bench_report.mark (agent_exit truthy,
+    no `error` key) — suite_run.compare() must route that fixture to
+    unmeasured, the same as an outright error, never let it read as
+    regression or improvement in a slice."""
+    baseline = {"agent": "patch",
+                "outcomes": {"fx1": {"acceptance": {"passed": 1, "failed": 0,
+                                                     "not_run": 0},
+                                     "scope_exit": 0, "tampered": []}}}
+    candidate = {"agent": "claude",
+                 "outcomes": {"fx1": {"acceptance": {"passed": 0, "failed": 0,
+                                                      "not_run": 0},
+                                      "scope_exit": 0, "tampered": [],
+                                      "agent_exit": 1, "model": None}}}
+    fixtures_out, slices, moved = suite_run.compare(baseline, candidate,
+                                                     set(), report)
+    check("a crashed live candidate is marked ERR, not FAIL",
+          fixtures_out["fx1"]["candidate"] == "ERR", fixtures_out["fx1"])
+    for name in ("acceptance", "scope", "gamed"):
+        entry = slices["main"][name]
+        check(f"main.{name} routes the crashed fixture to unmeasured",
+              entry["unmeasured"] == ["fx1"], entry)
+        check(f"main.{name} counts no regression or improvement for it",
+              entry["regressed"] == [] and entry["improved"] == [], entry)
+    check("a run that never happened moves no slice", moved == [], moved)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="prompire-bench-test-") as tmp:
         check_seed_briefs(tmp)
         check_prepare_rejects_unlintable(tmp)
+        check_measure_brief_rel(tmp)
         check_cli(tmp)
         check_compile_harness(tmp)
     check_dirty_rev()
@@ -1309,6 +1352,7 @@ def main():
     check_report_attempted_denominator()
     check_report_all_err_cell()
     check_report_footer_excludes_err()
+    check_compare_err_is_never_movement()
     print(f"{TOTAL - FAILS}/{TOTAL} bench harness checks pass")
     return 1 if FAILS else 0
 

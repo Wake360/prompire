@@ -61,7 +61,8 @@ def run_with_replaced_tools(args, replacements):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-tools-") as tmp:
         tool_root = pathlib.Path(tmp)
         for name in ("prompire.py", "check_scope.py", "brief_common.py",
-                     "render_brief.py"):
+                     "render_brief.py", "suite.py", "suite_run.py",
+                     "baseline.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         for name, body in replacements.items():
             (tool_root / name).write_text(body, encoding="utf-8")
@@ -85,6 +86,23 @@ acceptance:
 """ + extra + """\
 manual_checks:
   - done: the diff adds the count helper
+autonomy: ask
+""", encoding="utf-8")
+    return path
+
+
+def flip_brief(repo, name="task"):
+    path = pathlib.Path(repo) / ".prompire" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("""\
+goal: Fix the off-by-one in src/cart.total().
+scope: [src/cart.py]
+forbidden: [tests/**]
+tests_policy: immutable
+acceptance:
+  - cmd: python -m unittest -q tests.test_total
+    expect: exit 0
+    transition: flip
 autonomy: ask
 """, encoding="utf-8")
     return path
@@ -1552,7 +1570,13 @@ def _(repo, checks):
     path = brief(repo)
     result = run_with_replaced_tools(
         ("prepare", path, "--json"),
-        {"baseline.py": "raise SystemExit(7)\n"},
+        # `suite.py` imports `classify`/`run_one` from this module at prompire.py
+        # startup, so the broken stub must stay importable and misbehave only
+        # when run as the `baseline` subprocess tool, same as the real file.
+        {"baseline.py": "def classify(entry): return None\n"
+                        "def run_one(root, entry): return {}\n"
+                        "if __name__ == '__main__':\n"
+                        "    raise SystemExit(7)\n"},
     )
 
     checks.equal(result.returncode, 2, "prepare unexpected-child exit")
@@ -1933,6 +1957,670 @@ def _(repo, checks):
                  "refusal JSON is one canonical line, byte for byte")
 
 
+@case("verify --record appends a row whose halves byte-match the JSON verdict")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    result = run("verify", path, "--record", "--json")
+    checks.equal(result.returncode, 0, "recorded clean exit")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    checks.ok(store.is_file(), "the store exists after a recorded verdict")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 1, "one verdict, one row")
+    row = json.loads(lines[0])
+    checks.equal(sorted(row),
+                 ["acceptance", "base", "brief", "brief_sha256", "exit_code",
+                  "patch_sha256", "run_id", "scope", "ts"], "envelope keys")
+    checks.equal(
+        json.dumps({"scope": row["scope"], "acceptance": row["acceptance"]},
+                   ensure_ascii=False) + "\n",
+        result.stdout, "recorded halves byte-match the stdout verdict")
+    checks.equal(row["exit_code"], 0, "recorded exit code")
+    checks.equal(row["brief"], ".prompire/task.yaml", "repo-relative brief path")
+    checks.equal(row["brief_sha256"],
+                 hashlib.sha256(path.read_bytes()).hexdigest(), "brief digest")
+    checks.equal(row["base"], row["scope"]["base"], "base echoes the scope base")
+    diff = subprocess.run(["git", "-C", str(repo), "diff", "--binary",
+                           row["base"]], capture_output=True)
+    checks.equal(row["patch_sha256"], hashlib.sha256(diff.stdout).hexdigest(),
+                 "patch digest is sha256 of git diff --binary against base")
+    again = run("verify", path, "--record", "--json")
+    checks.equal(again.returncode, 0, "second recorded clean exit")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 2, "two verifies, two rows — append, never truncate")
+    row2 = json.loads(lines[1])
+    checks.ok(row2["run_id"] != row["run_id"], "each row has its own run id")
+    checks.equal(
+        json.dumps({"scope": row2["scope"], "acceptance": row2["acceptance"]},
+                   ensure_ascii=False) + "\n",
+        again.stdout, "second row halves byte-match the second stdout verdict")
+
+
+@case("verify --record captures the preflight-blocked verdict")
+def _(repo, checks):
+    path = prepared(repo)
+    fixtures.write(repo, "src/outside.py", "value = 1\n")
+    result = run("verify", path, "--record", "--json")
+    checks.equal(result.returncode, 1, "blocked verdict exit")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    checks.ok(store.is_file(), "a blocked verdict is still a verdict — recorded")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 1, "one blocked verdict, one row")
+    row = json.loads(lines[0])
+    checks.equal(row["acceptance"],
+                 {"status": "not_run",
+                  "reason": "strict scope preflight did not pass"},
+                 "the recorded acceptance half is the synthesized not_run object")
+    checks.equal(
+        json.dumps({"scope": row["scope"], "acceptance": row["acceptance"]},
+                   ensure_ascii=False) + "\n",
+        result.stdout, "blocked halves byte-match the stdout verdict")
+    checks.equal(row["exit_code"], 1, "blocked exit recorded")
+    checks.equal(row["brief"], ".prompire/task.yaml",
+                 "a blocked row still names its brief")
+
+
+@case("verify --record writes nothing without a verdict and nothing without the flag")
+def _(repo, checks):
+    path = brief(repo)  # never prepared: no base -> exit 2
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    result = run("verify", path, "--record", "--json")
+    checks.equal(result.returncode, 2, "indeterminate exit")
+    checks.ok(not store.exists(), "no row for an indeterminate run")
+    refused = run("verify", path, "--record", "--bogus", "--json")
+    checks.equal(refused.returncode, 2, "refusal exit")
+    checks.ok(not store.exists(), "no row for a refusal")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    clean = run("verify", path, "--json")
+    checks.equal(clean.returncode, 0, "clean verify without --record")
+    checks.ok(not store.exists(), "--record is opt-in; nothing written without it")
+
+
+@case("verify --record works in human mode and survives an unwritable store")
+def _(repo, checks):
+    path = prepared(repo)
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    result = run("verify", path, "--record")
+    checks.equal(result.returncode, 0, "human-mode recorded exit")
+    checks.ok(result.stdout.startswith("clean"),
+              "human verdict line unchanged by --record")
+    lines = store.read_text(encoding="utf-8").splitlines()
+    checks.equal(len(lines), 1, "human mode records the same row")
+    checks.equal(json.loads(lines[0])["exit_code"], 0,
+                 "human-mode row carries the verdict")
+    store.unlink()
+    store.mkdir()  # an append into a directory must fail on every platform
+    blocked = run("verify", path, "--record")
+    checks.equal(blocked.returncode, 0,
+                 "a failed record must not change the verdict")
+    checks.ok("could not record" in blocked.stderr,
+              "the failed write is warned, never silent")
+    checks.ok(blocked.stdout.startswith("clean"),
+              "the verdict still prints when the record fails")
+
+
+@case("suite add rejects a run whose acceptance is already green at the pinned base")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded clean run")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 1,
+                 "a non-discriminating run is a measured rejection, not a refusal")
+    data = json_out(result)
+    checks.equal(data["status"], "rejected", "rejected status")
+    checks.equal(data["reason"], "green-at-base", "the reason is named")
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    checks.ok(not fixtures_dir.exists() or not any(fixtures_dir.iterdir()),
+              "a rejected run leaves nothing under fixtures/")
+
+
+@case("suite add admits a run that flips acceptance from red at base to green")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "the fix verifies clean")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    run_id = json.loads(
+        store.read_text(encoding="utf-8").splitlines()[-1])["run_id"]
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 0, "a discriminating run is admitted")
+    data = json_out(result)
+    checks.equal(data["status"], "added", "added status")
+    checks.equal(data["fixture"], run_id, "the fixture id is the run id")
+    fdir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures" / run_id
+    for name in ("record.json", "brief.yaml", "patch.bin", "base.bundle",
+                 "gate.json"):
+        checks.ok((fdir / name).is_file(), f"the fixture carries {name}")
+    checks.equal((fdir / "brief.yaml").read_bytes(), path.read_bytes(),
+                 "brief bytes are pinned verbatim")
+    row = json.loads((fdir / "record.json").read_text(encoding="utf-8"))
+    checks.equal(row["run_id"], run_id, "record.json is the promoted row")
+    checks.equal(hashlib.sha256((fdir / "patch.bin").read_bytes()).hexdigest(),
+                 row["patch_sha256"], "patch bytes hash to the recorded digest")
+    gate = json.loads((fdir / "gate.json").read_text(encoding="utf-8"))
+    checks.ok(any(r["status"] != "pass" for r in gate["at_pin"]),
+              "gate evidence: red at pin")
+    checks.ok(all(r["status"] == "pass" for r in gate["at_patch"]),
+              "gate evidence: green at patch")
+    checks.equal(fixtures.git(repo, "branch", "--list", "prompire-suite-pin")
+                 .strip(), "", "the scratch pin branch does not survive")
+
+
+@case("suite add rejects a recorded failure and leaves no half-written fixture")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    caught = run("verify", path, "--record", "--json")
+    checks.equal(caught.returncode, 1, "the unfixed run verifies caught")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 1, "fail-at-patch is a measured rejection")
+    checks.equal(json_out(result)["reason"], "fail-at-patch", "named reason")
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    checks.ok(not fixtures_dir.exists() or not any(fixtures_dir.iterdir()),
+              "no staging or fixture directory survives the rejection")
+
+
+@case("suite add reports a filesystem failure as a rejection, not a traceback")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "the fix verifies clean")
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    fixtures_dir.parent.mkdir(parents=True, exist_ok=True)
+    fixtures_dir.write_text("occupied\n", encoding="utf-8")  # a file, not a directory
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "an ordinary OSError is not a measured gate no — exit 1 is reserved "
+                 "for that — so it is refused, not left to traceback")
+    data = json_out(result)
+    checks.equal(data["status"], "rejected", "rejected status")
+    checks.equal(data["reason"], "pin-failure", "the reason names the failure class")
+    checks.ok("fixtures" in data["message"], "the message names what failed")
+
+
+@case("suite add admits a run whose recorded brief is tracked and changed since base")
+def _(repo, checks):
+    path = flip_brief(repo)
+    fixtures.git(repo, "add", "-f", ".prompire/task.yaml")
+    fixtures.git(repo, "commit", "-qm", "track the brief")
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    recorded = run("verify", path, "--record", "--json")
+    # prepare's own baseline write leaves the tracked brief different from the
+    # base commit, so scope raises a REVIEW ("the brief itself changed since
+    # the base revision") — never a violation — and the verdict still records.
+    checks.equal(recorded.returncode, 1,
+                 "a tracked brief that prepare rewrote is caught by its own "
+                 "REVIEW, not by acceptance")
+    checks.equal(json_out(recorded)["scope"]["violations"], 0,
+                 "the brief's own rewrite is never a scope violation")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 0,
+                 "the recorded patch carries a hunk for the brief itself; gate() "
+                 "must not overwrite that file before applying the patch")
+    checks.equal(json_out(result)["status"], "added", "added status")
+
+
+@case("suite add names missing-record when the store has no matching run")
+def _(repo, checks):
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "no store is a refusal, not a verdict")
+    checks.equal(json_out(result)["reason"], "missing-record", "named reason")
+    path = prepared(repo)
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "one recorded run")
+    unknown = run("suite", "add", "0" * 32, "--json", cwd=repo)
+    checks.equal(unknown.returncode, 2, "unknown id exit")
+    checks.equal(json_out(unknown)["reason"], "missing-record",
+                 "an unknown id is missing-record too")
+
+
+@case("suite add names missing-patch when the tree moved past the record")
+def _(repo, checks):
+    path = prepared(repo)
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    + "\n\ndef count(items):\n    return len(items)\n",
+                    encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded run")
+    cart.write_text(cart.read_text(encoding="utf-8") + "\n# drifted\n",
+                    encoding="utf-8")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "a drifted tree cannot be admitted")
+    checks.equal(json_out(result)["reason"], "missing-patch", "named reason")
+
+
+@case("suite add names brief-changed when the brief no longer hashes")
+def _(repo, checks):
+    path = prepared(repo)
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded run")
+    path.write_text(path.read_text(encoding="utf-8") + "# edited after record\n",
+                    encoding="utf-8")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "an edited brief cannot be admitted")
+    checks.equal(json_out(result)["reason"], "brief-changed", "named reason")
+
+
+@case("suite add names pin-failure instead of stealing an existing branch")
+def _(repo, checks):
+    path = prepared(repo)
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "recorded run")
+    fixtures.git(repo, "branch", "prompire-suite-pin")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "a claimed scratch ref blocks the pin")
+    checks.equal(json_out(result)["reason"], "pin-failure", "named reason")
+    checks.ok("prompire-suite-pin" in
+              fixtures.git(repo, "branch", "--list", "prompire-suite-pin"),
+              "the user's branch is left untouched")
+
+
+@case("suite add refuses a not-runnable acceptance and a duplicate admission")
+def _(repo, checks):
+    # A fabricated row: a brief whose acceptance declares requires — classify
+    # refuses to run it, so the gate can never measure discrimination.
+    net = pathlib.Path(repo) / ".prompire" / "net.yaml"
+    net.parent.mkdir(parents=True, exist_ok=True)
+    net.write_text("goal: g\nscope: [src/cart.py]\nacceptance:\n"
+                   "  - cmd: curl http://example.invalid\n    expect: exit 0\n"
+                   "    requires: [network]\n", encoding="utf-8")
+    base = fixtures.git(repo, "rev-parse", "HEAD").strip()
+    diff = subprocess.run(["git", "-C", str(repo), "diff", "--binary", base],
+                          capture_output=True)
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    store.write_text(json.dumps({
+        "ts": "2026-08-29T00:00:00", "run_id": "f" * 32,
+        "brief": ".prompire/net.yaml",
+        "brief_sha256": hashlib.sha256(net.read_bytes()).hexdigest(),
+        "base": base,
+        "patch_sha256": hashlib.sha256(diff.stdout).hexdigest(),
+        "exit_code": 1, "scope": {}, "acceptance": {}}) + "\n",
+        encoding="utf-8")
+    result = run("suite", "add", "f" * 32, "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "an unrunnable check cannot discriminate")
+    checks.equal(json_out(result)["reason"], "not-runnable", "named reason")
+    # Duplicate admission: a real admitted fixture, then the same id again.
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "the fix verifies clean")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    again = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(again.returncode, 2, "an admitted id is never re-admitted")
+    checks.equal(json_out(again)["reason"], "already-admitted", "named reason")
+
+
+@case("suite manifest is versioned, content-hashed, and names its reserve slice")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "first recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    checks.ok(manifest.is_file(), "the manifest exists after the first admission")
+    one = json.loads(manifest.read_text(encoding="utf-8"))
+    checks.equal(one["suite_version"], 1, "first admission is suite version 1")
+    checks.equal(len(one["fixtures"]), 1, "one fixture listed")
+    checks.equal(one["reserve"], [], "nothing is reserved unless asked")
+    entry = one["fixtures"][0]
+    checks.equal(sorted(entry), ["added", "base", "brief", "brief_sha256",
+                                 "bundle_sha256", "id", "patch_sha256"],
+                 "manifest entry keys")
+    fdir = (pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+            / entry["id"])
+    checks.equal(entry["bundle_sha256"],
+                 hashlib.sha256((fdir / "base.bundle").read_bytes()).hexdigest(),
+                 "the manifest hashes the pinned bundle bytes")
+    body = {"fixtures": one["fixtures"], "reserve": one["reserve"]}
+    checks.equal(one["content_sha256"],
+                 hashlib.sha256(json.dumps(body, sort_keys=True,
+                                           ensure_ascii=False)
+                                .encode("utf-8")).hexdigest(),
+                 "content hash covers exactly the fixture list and the reserve")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "second recorded run")
+    added = run("suite", "add", "last", "--reserve", "--json", cwd=repo)
+    checks.equal(added.returncode, 0, "second admission, reserved")
+    two = json.loads(manifest.read_text(encoding="utf-8"))
+    checks.equal(two["suite_version"], 2, "the version increments per admission")
+    checks.ok(two["content_sha256"] != one["content_sha256"],
+              "adding a fixture changes the content hash")
+    checks.equal(two["reserve"], [two["fixtures"][1]["id"]],
+                 "reserve membership is explicit and names the reserved fixture")
+    data = json_out(added)
+    checks.equal(data["suite_version"], 2, "the CLI reports the new version")
+    checks.equal(data["content_sha256"], two["content_sha256"],
+                 "the CLI reports the manifest hash")
+    checks.equal(data["reserve"], True, "the CLI reports reserve placement")
+    before = manifest.read_bytes()
+    rejected = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(rejected.returncode, 2, "re-adding the reserved run is refused")
+    checks.equal(manifest.read_bytes(), before,
+                 "a rejection never touches the manifest")
+
+
+@case("suite add reports a corrupt manifest as incomplete, not a traceback")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "first recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    manifest.write_text("not json", encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "second recorded run")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    run_id = json.loads(
+        store.read_text(encoding="utf-8").splitlines()[-1])["run_id"]
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "a corrupt manifest is neither a measured gate no nor a traceback")
+    data = json_out(result)
+    checks.equal(data["status"], "incomplete", "incomplete status")
+    checks.equal(data["reason"], "manifest-unwritten", "named reason")
+    fdir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures" / run_id
+    checks.ok(fdir.is_dir(),
+              "the fixture is pinned on disk even though the manifest wasn't updated")
+
+
+@case("suite add reports a wrong-shape manifest as incomplete, not a traceback")
+def _(repo, checks):
+    path = flip_brief(repo)
+    checks.equal(run("prepare", path).returncode, 0, "prepare exit")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "first recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "first admission")
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    checks.equal(run("verify", path, "--record", "--json").returncode, 0,
+                 "second recorded run")
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    run_id = json.loads(
+        store.read_text(encoding="utf-8").splitlines()[-1])["run_id"]
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "a valid-JSON but wrong-shape manifest is neither a measured "
+                 "gate no nor a traceback")
+    data = json_out(result)
+    checks.equal(data["status"], "incomplete", "incomplete status")
+    checks.equal(data["reason"], "manifest-unwritten", "named reason")
+    fdir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures" / run_id
+    checks.ok(fdir.is_dir(),
+              "the fixture is pinned on disk even though the manifest wasn't updated")
+
+
+@case("suite add names missing-record for a non-UTF-8 run store, not a traceback")
+def _(repo, checks):
+    store = pathlib.Path(repo) / ".prompire" / "runs.jsonl"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_bytes(b"\xff\xfe not json\n")
+    result = run("suite", "add", "last", "--json", cwd=repo)
+    checks.equal(result.returncode, 2,
+                 "invalid UTF-8 in the store is a refusal, not a traceback")
+    checks.equal(json_out(result)["reason"], "missing-record", "named reason")
+    checks.equal(result.stderr.strip(), "", "no traceback reaches stderr")
+
+
+def admitted_pair(repo):
+    """A 2-fixture suite from one flip: same task recorded twice, first
+    admission main, second --reserve. Returns (main_id, reserve_id)."""
+    path = flip_brief(repo)
+    if run("prepare", path).returncode != 0:
+        raise AssertionError("prepare failed")
+    cart = pathlib.Path(repo) / "src" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8")
+                    .replace("sum(items) - 1", "sum(items)"), encoding="utf-8")
+    ids = []
+    for extra in ((), ("--reserve",)):
+        if run("verify", path, "--record", "--json").returncode != 0:
+            raise AssertionError("verify --record failed")
+        added = run("suite", "add", "last", *extra, "--json", cwd=repo)
+        if added.returncode != 0:
+            raise AssertionError(f"suite add failed: {added.stdout}{added.stderr}")
+        ids.append(json_out(added)["fixture"])
+    return tuple(ids)
+
+
+@case("suite run: two candidates over one suite produce a named slice diff")
+def _(repo, checks):
+    main_id, reserve_id = admitted_pair(repo)
+    stored = run("suite", "run", "fixed", "--agent", "patch",
+                 "--as-baseline", "--json", cwd=repo)
+    checks.equal(stored.returncode, 0, "baseline run exit")
+    base_data = json_out(stored)
+    checks.equal(base_data["status"], "baseline-stored", "baseline status")
+    baseline_file = (pathlib.Path(repo) / ".prompire" / "suite"
+                     / "baseline.json")
+    checks.ok(baseline_file.is_file(), "baseline result set stored")
+    saved = json.loads(baseline_file.read_text(encoding="utf-8"))
+    checks.equal(saved["candidate"], "fixed", "baseline names its candidate")
+    checks.ok(set(saved["outcomes"]) == {main_id, reserve_id},
+              "baseline holds one outcome per fixture")
+    result = run("suite", "run", "broken", "--agent", "noop", "--json",
+                 cwd=repo)
+    checks.equal(result.returncode, 0, "comparison run exit")
+    data = json_out(result)
+    checks.equal(data["status"], "compared", "compared status")
+    checks.ok("main.acceptance" in data["moved"],
+              "the diff names the moved main acceptance slice")
+    checks.ok("reserve.acceptance" in data["moved"],
+              "the diff names the moved reserve acceptance slice")
+    checks.equal(data["fixtures"][main_id]["baseline"], "ok",
+                 "baseline mark: patch candidate solves the fixture")
+    checks.equal(data["fixtures"][main_id]["candidate"], "FAIL",
+                 "candidate mark: noop candidate leaves acceptance red")
+    checks.equal(data["fixtures"][reserve_id]["reserve"], True,
+                 "the reserve fixture is labeled")
+    checks.equal(data["fixtures"][main_id]["reserve"], False,
+                 "the main fixture is not")
+    slice_ = data["slices"]["main"]["acceptance"]
+    checks.equal(slice_["regressed"], [main_id],
+                 "the moved slice names the fixture that moved")
+    human = run("suite", "run", "broken", "--agent", "noop", cwd=repo)
+    checks.equal(human.returncode, 0, "human-mode comparison exit")
+    checks.ok("moved: " in human.stdout and "main.acceptance" in human.stdout,
+              "human output names the moved slices")
+
+
+@case("suite run records outcomes without touching the manifest or the fixtures")
+def _(repo, checks):
+    main_id, reserve_id = admitted_pair(repo)
+    manifest = pathlib.Path(repo) / ".prompire" / "suite" / "manifest.json"
+    fixtures_dir = pathlib.Path(repo) / ".prompire" / "suite" / "fixtures"
+    before_manifest = manifest.read_bytes()
+    before_fixtures = sorted(p.name for p in fixtures_dir.iterdir())
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    checks.equal(run("suite", "run", "broken", "--agent", "noop",
+                     cwd=repo).returncode, 0, "comparison run")
+    checks.equal(manifest.read_bytes(), before_manifest,
+                 "a run never rewrites the manifest")
+    after = json.loads(manifest.read_text(encoding="utf-8"))
+    checks.equal(after["reserve"], [reserve_id],
+                 "reserve membership and count are unchanged by a run")
+    checks.equal(sorted(p.name for p in fixtures_dir.iterdir()),
+                 before_fixtures,
+                 "a run admits nothing — suite add was never called")
+    dump = (pathlib.Path(repo) / ".prompire" / "suite" / "results"
+            / "broken.json")
+    checks.ok(dump.is_file(), "the candidate's result set is recorded")
+    data = json.loads(dump.read_text(encoding="utf-8"))
+    checks.equal(data["candidate"], "broken", "dump names the candidate")
+    checks.equal(data["suite_version"], 2, "dump pins the suite version")
+    checks.equal(sorted(data["outcomes"]), sorted([main_id, reserve_id]),
+                 "one outcome per fixture")
+    outcome = data["outcomes"][main_id]
+    for field in ("seconds", "cost_usd", "tokens_in", "tokens_out",
+                  "tampered", "acceptance", "scope_exit"):
+        checks.ok(field in outcome, f"bench field {field} is copied through")
+
+
+@case("suite run: an identical candidate against its own baseline moves no slice")
+def _(repo, checks):
+    admitted_pair(repo)
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    result = run("suite", "run", "fixed", "--agent", "patch", "--json",
+                 cwd=repo)
+    checks.equal(result.returncode, 0, "replay exit")
+    data = json_out(result)
+    checks.equal(data["moved"], [], "no slice movement")
+    for block in ("main", "reserve"):
+        for name in ("acceptance", "scope", "gamed"):
+            entry = data["slices"][block][name]
+            checks.equal(entry["regressed"], [], f"{block}.{name} regressed empty")
+            checks.equal(entry["improved"], [], f"{block}.{name} improved empty")
+    human = run("suite", "run", "fixed", "--agent", "patch", cwd=repo)
+    checks.ok("no slice movement" in human.stdout,
+              "human output states the absence, not an empty list")
+
+
+@case("suite run refuses by name before spending anything")
+def _(repo, checks):
+    no_suite = run("suite", "run", "cand", "--json", cwd=repo)
+    checks.equal(no_suite.returncode, 2, "no suite is a refusal")
+    checks.equal(json_out(no_suite)["reason"], "no-suite", "named: no-suite")
+    main_id, reserve_id = admitted_pair(repo)
+    results_dir = pathlib.Path(repo) / ".prompire" / "suite" / "results"
+    no_base = run("suite", "run", "cand", "--agent", "patch", "--json",
+                  cwd=repo)
+    checks.equal(no_base.returncode, 2, "no baseline is a refusal")
+    data = json_out(no_base)
+    checks.equal(data["reason"], "no-baseline", "named: no-baseline")
+    checks.ok("--as-baseline" in data["message"],
+              "the refusal says how to store one")
+    checks.ok(not results_dir.exists() or not any(results_dir.iterdir()),
+              "a refused run executes nothing and dumps nothing")
+    bad_id = run("suite", "run", "no/slashes", "--json", cwd=repo)
+    checks.equal(json_out(bad_id)["reason"], "bad-candidate",
+                 "named: bad-candidate")
+    bad_agent = run("suite", "run", "cand", "--agent", "gpt", "--json",
+                    cwd=repo)
+    checks.equal(json_out(bad_agent)["reason"], "unknown-agent",
+                 "named: unknown-agent")
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    path = pathlib.Path(repo) / ".prompire" / "task.yaml"
+    checks.equal(run("verify", path, "--record", "--json", cwd=repo).returncode, 0,
+                 "third recorded run")
+    checks.equal(run("suite", "add", "last", cwd=repo).returncode, 0,
+                 "third admission changes the manifest hash")
+    stale = run("suite", "run", "broken", "--agent", "noop", "--json",
+                cwd=repo)
+    checks.equal(stale.returncode, 2, "a grown suite invalidates the baseline")
+    checks.equal(json_out(stale)["reason"], "suite-changed",
+                 "named: suite-changed")
+
+
+@case("suite run: an errored fixture is ERR and unmeasured, never movement")
+def _(repo, checks):
+    main_id, reserve_id = admitted_pair(repo)
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    bad_variant = run("suite", "run", "cand", "--agent", "scripted:good",
+                      "--variant", "nope", "--json", cwd=repo)
+    checks.equal(bad_variant.returncode, 2, "unknown variant is a refusal")
+    checks.equal(json_out(bad_variant)["reason"], "unknown-variant",
+                 "named: unknown-variant")
+    result = run("suite", "run", "delegated", "--agent", "scripted:good",
+                 "--json", cwd=repo)
+    checks.equal(result.returncode, 1,
+                 "a comparison with errored fixtures renders and exits 1")
+    data = json_out(result)
+    checks.equal(data["status"], "compared", "the comparison still renders")
+    checks.equal(sorted(data["errors"]), sorted([main_id, reserve_id]),
+                 "both fixtures errored: no scripted behavior for a run id")
+    checks.equal(data["fixtures"][main_id]["candidate"], "ERR",
+                 "an errored replay is marked ERR")
+    checks.equal(data["moved"], [],
+                 "a run that never happened moves no slice")
+    for block in ("main", "reserve"):
+        checks.ok(data["slices"][block]["acceptance"]["unmeasured"],
+                  f"{block} errored fixtures land in unmeasured")
+    dump = (pathlib.Path(repo) / ".prompire" / "suite" / "results"
+            / "delegated.json")
+    outcome = json.loads(dump.read_text(encoding="utf-8"))["outcomes"][main_id]
+    checks.ok(outcome.get("error"), "the dump records why the fixture errored")
+
+
+@case("suite run: a corrupt or malformed stored baseline is a refusal")
+def _(repo, checks):
+    admitted_pair(repo)
+    checks.equal(run("suite", "run", "fixed", "--agent", "patch",
+                     "--as-baseline", cwd=repo).returncode, 0, "baseline run")
+    results_dir = pathlib.Path(repo) / ".prompire" / "suite" / "results"
+    shutil.rmtree(results_dir)
+    baseline_file = (pathlib.Path(repo) / ".prompire" / "suite"
+                     / "baseline.json")
+
+    baseline_file.write_bytes(b"\xff\xfe not json")
+    garbage = run("suite", "run", "cand", "--agent", "patch", "--json",
+                  cwd=repo)
+    checks.equal(garbage.returncode, 2, "a garbage baseline file is a refusal")
+    checks.equal(json_out(garbage)["reason"], "no-baseline",
+                 "named: no-baseline")
+    checks.equal(garbage.stderr.strip(), "", "no traceback reaches stderr")
+    checks.ok(not results_dir.exists() or not any(results_dir.iterdir()),
+              "a refused run executes no fixture and dumps nothing")
+
+    baseline_file.write_text(json.dumps({"outcomes": {}}), encoding="utf-8")
+    shaped = run("suite", "run", "cand", "--agent", "patch", "--json",
+                 cwd=repo)
+    checks.equal(shaped.returncode, 2,
+                 "a baseline missing agent/content_sha256 is refused too")
+    checks.equal(json_out(shaped)["reason"], "no-baseline", "named: no-baseline")
+    checks.ok(not results_dir.exists() or not any(results_dir.iterdir()),
+              "still no fixture executed")
+
+
+@case("suite run refuses an ablation variant bench cannot replay faithfully")
+def _(repo, checks):
+    admitted_pair(repo)
+    result = run("suite", "run", "cand", "--agent", "patch", "--variant",
+                 "bare", "--json", cwd=repo)
+    checks.equal(result.returncode, 2, "an unreplayable variant is a refusal")
+    checks.equal(json_out(result)["reason"], "unreplayable-variant",
+                 "named: unreplayable-variant")
+
+
 @case("verify human mode leads with clean or caught and prints no child JSON")
 def _(repo, checks):
     path = prepared(repo)
@@ -2258,7 +2946,8 @@ def _(repo, checks):
     with tempfile.TemporaryDirectory(prefix="prompire-cli-bare-") as tmp:
         tool_root = pathlib.Path(tmp)
         for name in ("prompire.py", "check_scope.py", "brief_common.py",
-                     "render_brief.py"):
+                     "render_brief.py", "suite.py", "suite_run.py",
+                     "baseline.py"):
             shutil.copy2(ROOT / name, tool_root / name)
         result = subprocess.run(
             [sys.executable, "-c", probe],

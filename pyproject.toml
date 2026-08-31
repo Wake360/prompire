@@ -41,6 +41,8 @@ py-modules = [
   "hook_antigravity_guard",
   "lint_brief",
   "render_brief",
+  "suite",
+  "suite_run",
   "verify_acceptance",
 ]
 

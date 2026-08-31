@@ -473,15 +473,16 @@ def _(tmp, c):
 @case("pull-request-event-uses-the-merge-base")
 def _(tmp, c):
     root, head = repo(tmp)
+    default = git(root, "branch", "--show-current").strip()  # init.defaultBranch varies
     git(root, "checkout", "-q", "-b", "feature")
     fixtures.write(root, "src/cart.py", "def total(items):\n    return sum(items)\n")
     commit(root, "fix on the branch")
     # main moves on after the branch was cut; the merge-base must not follow it
-    git(root, "checkout", "-q", "master")
+    git(root, "checkout", "-q", default)
     fixtures.write(root, "src/report.py", "# unrelated work on the base branch\n")
-    moved = commit(root, "unrelated work on master")
+    moved = commit(root, "unrelated work on the base branch")
     git(root, "checkout", "-q", "feature")
-    event = {"pull_request": {"base": {"ref": "master", "sha": moved}}}
+    event = {"pull_request": {"base": {"ref": default, "sha": moved}}}
     r = run(root, tmp, event=event, event_name="pull_request")
     c.ok(r.code == 0,
          f"the base branch moving must not turn its work into this PR's violations, "
